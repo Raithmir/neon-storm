@@ -1,24 +1,35 @@
 # Neon Storm β
 
-A vertical scrolling bullet hell shooter built with HTML5 Canvas and vanilla JavaScript.
+A vertical scrolling bullet hell shooter built with HTML5 Canvas, PixiJS, and vanilla JavaScript.
+
+## What's New in β
+
+Neon Storm β introduces a **PixiJS rendering pipeline** for the gameplay play area. All gameplay drawing still uses Canvas 2D (unchanged draw methods), but the output is piped through PixiJS as a GPU-rendered texture. This lays the foundation for bloom, post-processing filters, and shader effects in upcoming updates.
+
+- **Dual-canvas architecture:** PixiJS renders the play area (720×960), Canvas 2D overlay handles menus, HUD, and transitions
+- **Automatic fallback:** If PixiJS fails to load, the game runs on pure Canvas 2D (looks like the alpha, fully functional)
+- **Self-contained build:** `node build.js` downloads and bundles PixiJS inline — the output HTML works offline from `file://`
 
 ## Project Structure
 
 ```
 neon-storm/
-├── build.js                 — Build script (concatenates src → dist)
+├── build.js                 — Build script (downloads PixiJS, concatenates src → dist)
 ├── package.json             — Project metadata & scripts
+├── vendor/                  — Cached dependencies (auto-populated by build)
+│   └── pixi.min.js          — PixiJS v8 (downloaded on first build)
 ├── dist/                    — Built output (generated)
-│   ├── neon-storm-alpha.html  — Playable game (single file)
-│   └── neon-storm.js          — Combined JS (for debugging)
+│   ├── neon-storm-beta.html — Playable game (single file, works offline)
+│   └── neon-storm.js        — Combined JS (for debugging)
 ├── src/                     — Source modules
-│   ├── constants.js         — Canvas setup, screen layout, dimensions
+│   ├── constants.js         — Canvas setup, screen layout, dual-canvas sizing
+│   ├── renderer.js          — PixiJS pipeline + offscreen Canvas 2D bridge
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
 │   ├── audio.js             — Procedural SFX (Web Audio API)
 │   ├── storage.js           — Persistence, high scores, settings, NC, end-run bonuses
 │   ├── ui-systems.js        — Custom difficulty, hangar/shop, tutorial
-│   ├── particles.js         — Particle effects, screen shake
+│   ├── particles.js         — Particle effects, screen shake, transitions
 │   ├── bullets.js           — BulletPool class (player + enemy projectiles)
 │   ├── scoring.js           — Chain combo, graze, surge meter
 │   ├── enemies.js           — Enemy types, AI, patterns, power-ups
@@ -32,37 +43,43 @@ neon-storm/
 │   ├── game.js              — Main game state machine
 │   └── main.js              — Game loop & initialization
 └── docs/                    — Documentation
-    ├── neon-storm-gdd.md          — Game Design Document
     ├── neon-storm-dev-guide.md    — Developer Guide
-    ├── neon-storm-checklist.md    — Implementation Checklist
-    └── neon-storm-future-features.md — Future Features Roadmap
+    ├── neon-storm-checklist.md    — Remaining Work Checklist
+    └── neon-storm-gdd.md          — Game Design Document
 ```
 
 ## Quick Start
 
-### Play (single file)
+### Build (single file, works offline)
 ```bash
 node build.js
 ```
-Open `dist/neon-storm-alpha.html` in any browser. No server required.
+First build downloads PixiJS (~250KB) and caches it in `vendor/`. Output is `dist/neon-storm-beta.html` — double-click to play, no server required.
 
-### Play (web server)
-Serve the project root directory with any HTTP server:
+### Play (web server, for development)
 ```bash
 npx http-server . -p 8080 -c-1
 ```
-Then open `http://localhost:8080` — the `index.html` loads source files directly from `src/`.
+Open `http://localhost:8080` — `index.html` loads PixiJS from CDN and source files from `src/`.
 
 ### Development
-Edit files in `src/`, refresh the browser. No build step needed when using the web server approach.
-
-For the single-file build, run `node build.js` after changes.
+Edit files in `src/`, refresh the browser. No build step needed when using the web server approach. For the single-file build, run `node build.js` after changes.
 
 ## Architecture
 
-The game uses a **concatenation-based build** rather than ES modules. All source files use global scope — each file's objects, classes, and functions are available to files loaded after it. The build script concatenates them in dependency order.
+### Rendering Pipeline
 
-**Why not ES modules?** The codebase has extensive cross-references between systems (Player references Enemies, Scoring, Audio, etc.). Converting to ES modules would require rewriting hundreds of import statements. The concatenation approach preserves the simple global architecture while giving us the organizational benefit of separate files.
+The game uses a **dual-canvas architecture** introduced in beta:
+
+1. **Offscreen Canvas 2D** (720×960) — All gameplay `.draw(ctx)` methods draw here using standard Canvas 2D API. No draw code was changed from the alpha.
+2. **PixiJS Application** — Takes the offscreen canvas as a texture, renders it as a GPU sprite. This enables GPU filters (bloom, blur, distortion) to be applied to the entire play area.
+3. **Overlay Canvas 2D** (1920×1080) — Menus, HUD, transitions, and all non-gameplay UI draw here directly.
+
+The `Renderer` module (`renderer.js`) manages this pipeline. During gameplay, `Game.draw()` calls `Renderer.getPlayCtx()` to get the offscreen Canvas 2D context, passes it to all gameplay draw methods, then calls `Renderer.endFrame()` to upload and GPU-render. When PixiJS isn't available, the offscreen canvas is blitted directly onto the overlay canvas instead.
+
+### Module System
+
+The game uses a **concatenation-based build** rather than ES modules. All source files use global scope — each file's objects, classes, and functions are available to files loaded after it. The build script concatenates them in dependency order.
 
 **Dependency order matters.** The order in `build.js`'s `SOURCE_FILES` array is the load order. Files can reference globals from any file above them in the list but not below.
 
@@ -70,6 +87,7 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 
 | Object | File | Purpose |
 |--------|------|---------|
+| `Renderer` | renderer.js | PixiJS pipeline + offscreen canvas bridge |
 | `GameConfig` | config.js | Current difficulty settings (mutable) |
 | `Input` | input.js | Keyboard/gamepad state |
 | `Audio` | audio.js | Sound effects |
@@ -84,16 +102,15 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 
 ## Documentation
 
-See the `docs/` folder for detailed documentation:
+See the `docs/` folder:
 - **Developer Guide** — Architecture deep-dive, how to add enemies/levels/bosses/weapons
-- **Implementation Checklist** — What's done vs what's planned
-- **Future Features** — Roadmap with priority matrix
+- **Remaining Work Checklist** — Everything left to do, by category
 - **Game Design Document** — Original design spec
 
 ## Tech Stack
 
-- HTML5 Canvas 2D
-- Vanilla JavaScript (no frameworks)
-- Web Audio API (procedural SFX)
-- Google Fonts (Share Tech Mono)
-- localStorage / Artifact Storage API (persistence)
+- **Rendering:** PixiJS v8 (WebGPU/WebGL) for gameplay, HTML5 Canvas 2D for UI
+- **Language:** Vanilla JavaScript (no frameworks)
+- **Audio:** Web Audio API (procedural SFX)
+- **Fonts:** Google Fonts (Share Tech Mono)
+- **Persistence:** localStorage / Artifact Storage API

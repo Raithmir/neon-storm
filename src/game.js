@@ -904,8 +904,8 @@ const Game = {
                 // Thank you
                 ctx.fillStyle = '#667788';
                 ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b1', SCREEN_W / 2, 580);
-                ctx.fillText('This is an alpha build — more to come!', SCREEN_W / 2, 605);
+                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
+                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
 
                 // Menu options
                 const items = ['PLAY AGAIN', 'MAIN MENU'];
