@@ -1,0 +1,10 @@
+{
+  "name": "neon-storm",
+  "version": "0.1.0-alpha",
+  "description": "Neon Storm α — Vertical scrolling bullet hell shooter",
+  "scripts": {
+    "build": "node build.js",
+    "dev": "npx http-server dist -p 8080 -c-1"
+  },
+  "private": true
+}
