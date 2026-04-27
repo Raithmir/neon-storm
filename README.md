@@ -1,4 +1,4 @@
-# Neon Storm α
+# Neon Storm β
 
 A vertical scrolling bullet hell shooter built with HTML5 Canvas and vanilla JavaScript.
 
