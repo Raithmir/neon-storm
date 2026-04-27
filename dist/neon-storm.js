@@ -1,11 +1,8 @@
 
 // === constants.js ===
 // ============================================================
-//  NEON STORM — Core Engine
+//  NEON STORM — Core Constants & Canvas Setup
 // ============================================================
-
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 
 // --- Screen / Layout Constants ---
 const SCREEN_W = 1920;
@@ -18,19 +15,151 @@ const HUD_LEFT_W = PLAY_X;
 const HUD_RIGHT_X = PLAY_X + PLAY_W;
 const HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
 
+// Canvas 2D overlay — menus, HUD, transitions
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 canvas.width = SCREEN_W;
 canvas.height = SCREEN_H;
 
-// Scale canvas to fit window
+// Scale canvases to fit window
 function resizeCanvas() {
     const scaleX = window.innerWidth / SCREEN_W;
     const scaleY = window.innerHeight / SCREEN_H;
     const scale = Math.min(scaleX, scaleY);
     canvas.style.width = (SCREEN_W * scale) + 'px';
     canvas.style.height = (SCREEN_H * scale) + 'px';
+
+    // Position the Pixi canvas over the play area within the container
+    if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
+        Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
+    }
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+// Safe initial sizing (Renderer not yet available — just size the overlay canvas)
+(function() {
+    const scaleX = window.innerWidth / SCREEN_W;
+    const scaleY = window.innerHeight / SCREEN_H;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = (SCREEN_W * scale) + 'px';
+    canvas.style.height = (SCREEN_H * scale) + 'px';
+})();
+
+
+// === renderer.js ===
+// ============================================================
+//  RENDERER — PixiJS pipeline with offscreen Canvas 2D bridge
+//
+//  How it works:
+//    1. All gameplay .draw(ctx) methods draw to an offscreen
+//       Canvas 2D context (playCtx) — zero code changes needed
+//    2. That canvas is uploaded as a PIXI.Texture each frame
+//    3. PixiJS displays it as a Sprite, enabling GPU filters
+//       (bloom, blur, distortion) to be layered on top
+//    4. Menus / HUD / transitions draw to the overlay canvas
+//
+//  When PixiJS isn't available, playCtx IS the overlay ctx
+//  with standard clip + translate, and the game looks like alpha.
+// ============================================================
+const Renderer = {
+    app: null,
+    pixiCanvas: null,
+    ready: false,
+    usePixi: false,
+
+    // Offscreen canvas for gameplay drawing (Canvas 2D)
+    offCanvas: null,
+    offCtx: null,       // This is what .draw(ctx) methods receive
+
+    // PixiJS objects
+    gameTexture: null,
+    gameSprite: null,
+
+    async init() {
+        // Create the offscreen canvas for gameplay rendering
+        this.offCanvas = document.createElement('canvas');
+        this.offCanvas.width = PLAY_W;
+        this.offCanvas.height = PLAY_H;
+        this.offCtx = this.offCanvas.getContext('2d');
+
+        if (typeof PIXI === 'undefined') {
+            console.warn('[Renderer] PixiJS not loaded — Canvas 2D fallback');
+            this.ready = true;
+            return;
+        }
+
+        try {
+            this.app = new PIXI.Application();
+            await this.app.init({
+                width: PLAY_W,
+                height: PLAY_H,
+                backgroundAlpha: 0,
+                antialias: false,
+            });
+
+            this.pixiCanvas = this.app.canvas;
+            this.pixiCanvas.id = 'pixi-play';
+
+            // Insert Pixi canvas into DOM before the overlay
+            const container = document.getElementById('game-container');
+            if (container) {
+                container.insertBefore(this.pixiCanvas, canvas);
+            } else {
+                canvas.parentNode.insertBefore(this.pixiCanvas, canvas);
+            }
+
+            // Create texture from the offscreen canvas
+            this.gameTexture = PIXI.Texture.from(this.offCanvas);
+
+            // Create sprite that displays the offscreen canvas
+            this.gameSprite = new PIXI.Sprite(this.gameTexture);
+            this.app.stage.addChild(this.gameSprite);
+
+            this.usePixi = true;
+            this.ready = true;
+            console.log('[Renderer] PixiJS v' + PIXI.VERSION + ' (' + this.app.renderer.name + ')');
+        } catch (e) {
+            console.warn('[Renderer] PixiJS init failed:', e);
+            this.ready = true;
+        }
+    },
+
+    // Get the context that gameplay .draw() methods should use.
+    // Always returns a real Canvas 2D context.
+    getPlayCtx() {
+        return this.offCtx;
+    },
+
+    // Call before gameplay drawing each frame
+    beginFrame() {
+        // Clear the offscreen canvas
+        this.offCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+    },
+
+    // Call after gameplay drawing — uploads to GPU and renders
+    endFrame() {
+        if (!this.usePixi) return;
+        // Update the texture from the offscreen canvas
+        this.gameTexture.source.update();
+        // Render the PixiJS stage (sprite + any filters)
+        this.app.renderer.render(this.app.stage);
+    },
+
+    // Apply screen shake offset
+    setShake(x, y) {
+        if (this.usePixi && this.gameSprite) {
+            this.gameSprite.position.set(x, y);
+        }
+    },
+
+    // Position the Pixi canvas to match the play area
+    resize(scale, pixiLeft, pixiTop) {
+        if (!this.pixiCanvas) return;
+        this.pixiCanvas.style.width = (PLAY_W * scale) + 'px';
+        this.pixiCanvas.style.height = (PLAY_H * scale) + 'px';
+        this.pixiCanvas.style.left = pixiLeft + 'px';
+        this.pixiCanvas.style.top = pixiTop + 'px';
+    }
+};
 
 
 // === config.js ===
@@ -6286,7 +6415,7 @@ const HUD = {
         ctx.textAlign = 'center';
         ctx.shadowColor = '#00ffff';
         ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b1', leftCenter, leftY);
+        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
         ctx.shadowBlur = 0;
         leftY += 50;
 
@@ -7947,53 +8076,63 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Escort.draw(ctx);
-                PowerUps.draw(ctx);
-                Enemies.draw(ctx);
-                Player.draw(ctx);
-                if (Boss.active) Boss.draw(ctx);
-                Particles.draw(ctx);
-                Scoring.drawPopups(ctx);
-                ctx.restore();
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    // No PixiJS — blit offscreen canvas onto overlay
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Enemies.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
@@ -8109,12 +8248,15 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
-// Initialize and start
-Game.init().then(() => {
+// Initialize renderer, then game, then start
+(async function boot() {
+    await Renderer.init();
+    resizeCanvas(); // Re-run after Pixi canvas exists
+    await Game.init();
     requestAnimationFrame((timestamp) => {
         Game.lastTime = timestamp;
         gameLoop(timestamp);
     });
-});
+})();
 
 

@@ -50,30 +50,36 @@ function resizeCanvas() {
     canvas.style.width = (SCREEN_W * scale) + 'px';
     canvas.style.height = (SCREEN_H * scale) + 'px';
 
-    // Position the Pixi play-area canvas to align with the play area
-    if (Renderer && Renderer.pixiCanvas) {
-        const canvasRect = canvas.getBoundingClientRect();
-        const pixiLeft = canvasRect.left + PLAY_X * scale;
-        const pixiTop = canvasRect.top + PLAY_Y * scale;
-        Renderer.resize(scale, pixiLeft, pixiTop);
+    // Position the Pixi canvas over the play area within the container
+    if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
+        Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
     }
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+// Safe initial sizing (Renderer not yet available — just size the overlay canvas)
+(function() {
+    const scaleX = window.innerWidth / SCREEN_W;
+    const scaleY = window.innerHeight / SCREEN_H;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = (SCREEN_W * scale) + 'px';
+    canvas.style.height = (SCREEN_H * scale) + 'px';
+})();
 
 
 // === renderer.js ===
 // ============================================================
-//  RENDERER — PixiJS play-area renderer with Canvas 2D proxy
+//  RENDERER — PixiJS pipeline with offscreen Canvas 2D bridge
 //
-//  Architecture:
-//    - PixiJS Application renders the 720×960 play area
-//    - A Canvas2D-compatible proxy object (PlayCtx) intercepts
-//      all draw calls and translates them to PIXI.Graphics
-//    - Existing .draw(ctx) methods work with zero changes
-//    - Menus, HUD, transitions stay on the overlay Canvas 2D
-//    - When PixiJS isn't available, PlayCtx falls back to the
-//      real Canvas 2D context (basic look, still functional)
+//  How it works:
+//    1. All gameplay .draw(ctx) methods draw to an offscreen
+//       Canvas 2D context (playCtx) — zero code changes needed
+//    2. That canvas is uploaded as a PIXI.Texture each frame
+//    3. PixiJS displays it as a Sprite, enabling GPU filters
+//       (bloom, blur, distortion) to be layered on top
+//    4. Menus / HUD / transitions draw to the overlay canvas
+//
+//  When PixiJS isn't available, playCtx IS the overlay ctx
+//  with standard clip + translate, and the game looks like alpha.
 // ============================================================
 const Renderer = {
     app: null,
@@ -81,20 +87,21 @@ const Renderer = {
     ready: false,
     usePixi: false,
 
-    // Containers for z-ordering
-    bgContainer: null,     // Background layers
-    gameContainer: null,   // Gameplay objects (enemies, bullets, player, etc.)
-    fxContainer: null,     // Particles, shockwaves, overlays
+    // Offscreen canvas for gameplay drawing (Canvas 2D)
+    offCanvas: null,
+    offCtx: null,       // This is what .draw(ctx) methods receive
 
-    // Current frame's Graphics objects (one per container layer)
-    _bgGfx: null,
-    _gameGfx: null,
-    _fxGfx: null,
-
-    // Track which layer we're drawing to
-    _activeLayer: 'game',
+    // PixiJS objects
+    gameTexture: null,
+    gameSprite: null,
 
     async init() {
+        // Create the offscreen canvas for gameplay rendering
+        this.offCanvas = document.createElement('canvas');
+        this.offCanvas.width = PLAY_W;
+        this.offCanvas.height = PLAY_H;
+        this.offCtx = this.offCanvas.getContext('2d');
+
         if (typeof PIXI === 'undefined') {
             console.warn('[Renderer] PixiJS not loaded — Canvas 2D fallback');
             this.ready = true;
@@ -107,399 +114,73 @@ const Renderer = {
                 width: PLAY_W,
                 height: PLAY_H,
                 backgroundAlpha: 0,
-                antialias: true,
-                autoDensity: true,
+                antialias: false,
             });
 
             this.pixiCanvas = this.app.canvas;
             this.pixiCanvas.id = 'pixi-play';
 
-            // Insert Pixi canvas into DOM
+            // Insert Pixi canvas into DOM before the overlay
             const container = document.getElementById('game-container');
             if (container) {
                 container.insertBefore(this.pixiCanvas, canvas);
             } else {
-                // Fallback: insert before the overlay canvas
                 canvas.parentNode.insertBefore(this.pixiCanvas, canvas);
             }
 
-            // Create z-ordered containers
-            this.bgContainer = new PIXI.Container();
-            this.gameContainer = new PIXI.Container();
-            this.fxContainer = new PIXI.Container();
-            this.app.stage.addChild(this.bgContainer);
-            this.app.stage.addChild(this.gameContainer);
-            this.app.stage.addChild(this.fxContainer);
+            // Create texture from the offscreen canvas
+            this.gameTexture = PIXI.Texture.from(this.offCanvas);
+
+            // Create sprite that displays the offscreen canvas
+            this.gameSprite = new PIXI.Sprite(this.gameTexture);
+            this.app.stage.addChild(this.gameSprite);
 
             this.usePixi = true;
             this.ready = true;
-            console.log('[Renderer] PixiJS v' + PIXI.VERSION + ' — ' + this.app.renderer.name);
+            console.log('[Renderer] PixiJS v' + PIXI.VERSION + ' (' + this.app.renderer.name + ')');
         } catch (e) {
             console.warn('[Renderer] PixiJS init failed:', e);
             this.ready = true;
         }
     },
 
-    // Called each frame before gameplay drawing
-    beginFrame() {
-        if (!this.usePixi) return;
-
-        // Destroy previous frame's Graphics
-        this.bgContainer.removeChildren().forEach(c => c.destroy(true));
-        this.gameContainer.removeChildren().forEach(c => c.destroy(true));
-        this.fxContainer.removeChildren().forEach(c => c.destroy(true));
-
-        // Fresh Graphics for this frame
-        this._bgGfx = new PIXI.Graphics();
-        this._gameGfx = new PIXI.Graphics();
-        this._fxGfx = new PIXI.Graphics();
-        this.bgContainer.addChild(this._bgGfx);
-        this.gameContainer.addChild(this._gameGfx);
-        this.fxContainer.addChild(this._fxGfx);
-
-        this._activeLayer = 'game';
+    // Get the context that gameplay .draw() methods should use.
+    // Always returns a real Canvas 2D context.
+    getPlayCtx() {
+        return this.offCtx;
     },
 
-    // Called each frame after gameplay drawing
+    // Call before gameplay drawing each frame
+    beginFrame() {
+        // Clear the offscreen canvas
+        this.offCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+    },
+
+    // Call after gameplay drawing — uploads to GPU and renders
     endFrame() {
         if (!this.usePixi) return;
+        // Update the texture from the offscreen canvas
+        this.gameTexture.source.update();
+        // Render the PixiJS stage (sprite + any filters)
         this.app.renderer.render(this.app.stage);
     },
 
-    // Set screen shake offset on the stage
+    // Apply screen shake offset
     setShake(x, y) {
-        if (!this.usePixi) return;
-        this.app.stage.position.set(x, y);
-    },
-
-    // Switch which container layer receives draw commands
-    setLayer(name) {
-        this._activeLayer = name; // 'bg', 'game', 'fx'
-    },
-
-    // Get the active Graphics object
-    _getGfx() {
-        switch (this._activeLayer) {
-            case 'bg': return this._bgGfx;
-            case 'fx': return this._fxGfx;
-            default: return this._gameGfx;
+        if (this.usePixi && this.gameSprite) {
+            this.gameSprite.position.set(x, y);
         }
     },
 
     // Position the Pixi canvas to match the play area
-    resize(scale, offsetX, offsetY) {
+    resize(scale, pixiLeft, pixiTop) {
         if (!this.pixiCanvas) return;
         this.pixiCanvas.style.width = (PLAY_W * scale) + 'px';
         this.pixiCanvas.style.height = (PLAY_H * scale) + 'px';
-        this.pixiCanvas.style.left = offsetX + 'px';
-        this.pixiCanvas.style.top = offsetY + 'px';
+        this.pixiCanvas.style.left = pixiLeft + 'px';
+        this.pixiCanvas.style.top = pixiTop + 'px';
     }
 };
-
-
-// ============================================================
-//  PlayCtx — Canvas 2D API proxy for PixiJS
-//
-//  This object mimics CanvasRenderingContext2D so that existing
-//  .draw(ctx) methods can be passed PlayCtx instead of the real
-//  ctx. Draws are translated to PIXI.Graphics commands.
-//
-//  When PixiJS is unavailable, this falls back to the real ctx
-//  with appropriate clipping + translation.
-// ============================================================
-const PlayCtx = {
-    // --- Canvas 2D state properties (writable) ---
-    fillStyle: '#ffffff',
-    strokeStyle: '#ffffff',
-    globalAlpha: 1,
-    globalCompositeOperation: 'source-over',
-    lineWidth: 1,
-    shadowBlur: 0,   // Ignored (no fake glow on PixiJS)
-    shadowColor: '',  // Ignored
-    font: '16px Share Tech Mono, Consolas, monospace',
-    textAlign: 'center',
-
-    // Transform stack
-    _transformStack: [],
-    _currentGfx: null,       // Child Graphics for save/restore transforms
-    _gfxStack: [],
-
-    // Get the active Graphics to draw into
-    _gfx() {
-        return this._currentGfx || Renderer._getGfx();
-    },
-
-    // --- Color conversion ---
-    _parseColor(css) {
-        if (typeof css === 'number') return { color: css, alpha: 1 };
-
-        // Fast path for common hex colors
-        if (css.charAt(0) === '#') {
-            if (css.length === 4) {
-                const r = css[1], g = css[2], b = css[3];
-                return { color: parseInt(r + r + g + g + b + b, 16), alpha: 1 };
-            }
-            return { color: parseInt(css.slice(1, 7), 16), alpha: 1 };
-        }
-
-        // rgba(r, g, b, a)
-        if (css.charAt(0) === 'r') {
-            const m = css.match(/([\d.]+)/g);
-            if (m) {
-                const r = parseInt(m[0]), g = parseInt(m[1]), b = parseInt(m[2]);
-                const a = m.length >= 4 ? parseFloat(m[3]) : 1;
-                return { color: (r << 16) | (g << 8) | b, alpha: a };
-            }
-        }
-
-        // hsla(h, s%, l%, a)  or hsl(h, s%, l%)
-        if (css.charAt(0) === 'h') {
-            const m = css.match(/([\d.]+)/g);
-            if (m) {
-                const rgb = _hslToRgb(parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2]));
-                const a = m.length >= 4 ? parseFloat(m[3]) : 1;
-                return { color: (rgb[0] << 16) | (rgb[1] << 8) | rgb[2], alpha: a };
-            }
-        }
-
-        return { color: 0xffffff, alpha: 1 };
-    },
-
-    _fillColorAlpha() {
-        const c = this._parseColor(this.fillStyle);
-        return { color: c.color, alpha: c.alpha * this.globalAlpha };
-    },
-
-    _strokeColorAlpha() {
-        const c = this._parseColor(this.strokeStyle);
-        return { color: c.color, alpha: c.alpha * this.globalAlpha };
-    },
-
-    // --- Path building ---
-    // PixiJS v8 Graphics uses moveTo/lineTo/arc directly,
-    // then fill()/stroke() to commit. We track the "current path"
-    // and commit on fill/stroke.
-
-    beginPath() {
-        // In PixiJS v8, we don't need explicit beginPath —
-        // each shape call (rect, circle, moveTo/lineTo) starts a new sub-path.
-        // We just need to track that we're building a path.
-        this._pathStarted = true;
-    },
-
-    moveTo(x, y) {
-        this._gfx().moveTo(x, y);
-    },
-
-    lineTo(x, y) {
-        this._gfx().lineTo(x, y);
-    },
-
-    closePath() {
-        this._gfx().closePath();
-    },
-
-    arc(x, y, r, startAngle, endAngle, ccw) {
-        if (r <= 0) return;
-        this._gfx().arc(x, y, r, startAngle, endAngle, ccw);
-    },
-
-    ellipse(x, y, rx, ry, rotation, startAngle, endAngle) {
-        if (rx <= 0 || ry <= 0) return;
-        this._gfx().ellipse(x, y, rx, ry);
-    },
-
-    rect(x, y, w, h) {
-        this._gfx().rect(x, y, w, h);
-    },
-
-    fill() {
-        const c = this._fillColorAlpha();
-        this._gfx().fill({ color: c.color, alpha: c.alpha });
-    },
-
-    stroke() {
-        const c = this._strokeColorAlpha();
-        const gfx = this._gfx();
-        gfx.stroke({ color: c.color, alpha: c.alpha, width: this.lineWidth });
-    },
-
-    // --- Convenience methods (used frequently in the codebase) ---
-
-    fillRect(x, y, w, h) {
-        const c = this._fillColorAlpha();
-        this._gfx().rect(x, y, w, h);
-        this._gfx().fill({ color: c.color, alpha: c.alpha });
-    },
-
-    strokeRect(x, y, w, h) {
-        // Not used much but included for completeness
-        // Not implemented yet — strokeRect isn't commonly used
-    },
-
-    fillText(text, x, y) {
-        // For in-play-area text (score popups, labels, etc.)
-        // Use a temporary PIXI.Text added to the current container
-        const c = this._fillColorAlpha();
-        const container = this._currentGfx ? this._currentGfx.parent || Renderer.gameContainer : Renderer._getGfx().parent || Renderer.gameContainer;
-
-        // Parse font size from this.font
-        const sizeMatch = this.font.match(/(\d+)px/);
-        const fontSize = sizeMatch ? parseInt(sizeMatch[1]) : 16;
-        const isBold = this.font.includes('bold');
-
-        const t = new PIXI.Text({
-            text: String(text),
-            style: {
-                fontFamily: 'Share Tech Mono, Consolas, monospace',
-                fontSize: fontSize,
-                fontWeight: isBold ? 'bold' : 'normal',
-                fill: c.color,
-                align: this.textAlign === 'right' ? 'right' : this.textAlign === 'left' ? 'left' : 'center',
-            }
-        });
-        t.alpha = c.alpha;
-        t.anchor.set(
-            this.textAlign === 'right' ? 1 : this.textAlign === 'left' ? 0 : 0.5,
-            0.5
-        );
-
-        // If we're inside a save/translate, position relative to the child container
-        if (this._currentGfx) {
-            t.position.set(x, y);
-            this._currentGfx.parent.addChild(t);
-        } else {
-            t.position.set(x, y);
-            const parentContainer = Renderer._activeLayer === 'bg' ? Renderer.bgContainer :
-                                     Renderer._activeLayer === 'fx' ? Renderer.fxContainer :
-                                     Renderer.gameContainer;
-            parentContainer.addChild(t);
-        }
-    },
-
-    // --- Transform ---
-
-    save() {
-        this._transformStack.push({
-            fillStyle: this.fillStyle,
-            strokeStyle: this.strokeStyle,
-            globalAlpha: this.globalAlpha,
-            globalCompositeOperation: this.globalCompositeOperation,
-            lineWidth: this.lineWidth,
-            font: this.font,
-            textAlign: this.textAlign,
-        });
-
-        // Create a child container for transforms
-        const container = new PIXI.Container();
-        const gfx = new PIXI.Graphics();
-
-        // Inherit blend mode
-        if (this.globalCompositeOperation === 'lighter') {
-            gfx.blendMode = 'add';
-        }
-
-        container.addChild(gfx);
-
-        // Add to the appropriate layer
-        const parentContainer = Renderer._activeLayer === 'bg' ? Renderer.bgContainer :
-                                 Renderer._activeLayer === 'fx' ? Renderer.fxContainer :
-                                 Renderer.gameContainer;
-        parentContainer.addChild(container);
-
-        this._gfxStack.push(this._currentGfx);
-        this._currentGfx = gfx;
-        // Store the container so translate/rotate work on it
-        this._currentContainer = container;
-    },
-
-    restore() {
-        const prev = this._transformStack.pop();
-        if (prev) {
-            this.fillStyle = prev.fillStyle;
-            this.strokeStyle = prev.strokeStyle;
-            this.globalAlpha = prev.globalAlpha;
-            this.globalCompositeOperation = prev.globalCompositeOperation;
-            this.lineWidth = prev.lineWidth;
-            this.font = prev.font;
-            this.textAlign = prev.textAlign;
-        }
-        this._currentGfx = this._gfxStack.pop() || null;
-        this._currentContainer = null;
-    },
-
-    translate(x, y) {
-        if (this._currentContainer) {
-            this._currentContainer.position.set(x, y);
-        }
-    },
-
-    rotate(angle) {
-        if (this._currentContainer) {
-            this._currentContainer.rotation = angle;
-        }
-    },
-
-    scale(sx, sy) {
-        if (this._currentContainer) {
-            this._currentContainer.scale.set(sx, sy === undefined ? sx : sy);
-        }
-    },
-
-    // Clipping — not supported in PixiJS Graphics the same way.
-    // For the play area, the Pixi canvas is already sized to PLAY_W×PLAY_H
-    // so nothing renders outside the play area. This is a no-op.
-    clip() {},
-
-    // --- Gradient stubs ---
-    // The background uses createLinearGradient / createRadialGradient.
-    // For Phase 1, we approximate gradients with a few solid fills.
-    createLinearGradient(x0, y0, x1, y1) {
-        return new _GradientStub('linear', x0, y0, x1, y1);
-    },
-
-    createRadialGradient(x0, y0, r0, x1, y1, r1) {
-        return new _GradientStub('radial', x0, y0, x1, y1, r0, r1);
-    },
-};
-
-// Gradient stub — stores color stops and resolves to a single representative color
-class _GradientStub {
-    constructor(type, x0, y0, x1, y1, r0, r1) {
-        this.type = type;
-        this.stops = [];
-        this.x0 = x0; this.y0 = y0;
-        this.x1 = x1; this.y1 = y1;
-        this.r0 = r0; this.r1 = r1;
-    }
-    addColorStop(offset, color) {
-        this.stops.push({ offset, color });
-    }
-    // When used as fillStyle, PixiJS will call _parseColor which expects a string.
-    // We return a string representation of the mid-point color.
-    toString() {
-        if (this.stops.length === 0) return '#000000';
-        // Use the middle color stop as representative
-        const mid = this.stops[Math.floor(this.stops.length / 2)];
-        return mid.color;
-    }
-}
-
-// HSL to RGB helper (shared)
-function _hslToRgb(h, s, l) {
-    s /= 100; l /= 100;
-    const c = (1 - Math.abs(2 * l - 1)) * s;
-    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
-    const m = l - c / 2;
-    let r, g, b;
-    if (h < 60) { r = c; g = x; b = 0; }
-    else if (h < 120) { r = x; g = c; b = 0; }
-    else if (h < 180) { r = 0; g = c; b = x; }
-    else if (h < 240) { r = 0; g = x; b = c; }
-    else if (h < 300) { r = x; g = 0; b = c; }
-    else { r = c; g = 0; b = x; }
-    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
-}
 
 
 // === config.js ===
@@ -6755,7 +6436,7 @@ const HUD = {
         ctx.textAlign = 'center';
         ctx.shadowColor = '#00ffff';
         ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b1', leftCenter, leftY);
+        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
         ctx.shadowBlur = 0;
         leftY += 50;
 
@@ -8416,96 +8097,63 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
                 if (Renderer.usePixi) {
-                    // --- PixiJS play area ---
-                    Renderer.beginFrame();
-                    Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
-                    Renderer.setLayer('bg');
-                    Background.draw(PlayCtx);
-                    Renderer.setLayer('game');
-                    Asteroids.draw(PlayCtx);
-                    Escort.draw(PlayCtx);
-                    PowerUps.draw(PlayCtx);
-                    Enemies.draw(PlayCtx);
-                    Player.draw(PlayCtx);
-                    if (Boss.active) Boss.draw(PlayCtx);
-                    Renderer.setLayer('fx');
-                    Particles.draw(PlayCtx);
-                    Scoring.drawPopups(PlayCtx);
                     Renderer.endFrame();
                 } else {
-                    // --- Canvas 2D fallback ---
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                    ctx.clip();
-                    ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                    Background.draw(ctx);
-                    Asteroids.draw(ctx);
-                    Escort.draw(ctx);
-                    PowerUps.draw(ctx);
-                    Enemies.draw(ctx);
-                    Player.draw(ctx);
-                    if (Boss.active) Boss.draw(ctx);
-                    Particles.draw(ctx);
-                    Scoring.drawPopups(ctx);
-                    ctx.restore();
+                    // No PixiJS — blit offscreen canvas onto overlay
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
                 }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
                 if (Renderer.usePixi) {
-                    Renderer.beginFrame();
-                    Renderer.setShake(0, 0);
-                    Renderer.setLayer('bg');
-                    Background.draw(PlayCtx);
-                    Renderer.setLayer('game');
-                    Asteroids.draw(PlayCtx);
-                    Enemies.draw(PlayCtx);
-                    Renderer.setLayer('fx');
-                    Particles.draw(PlayCtx);
                     Renderer.endFrame();
                 } else {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                    ctx.clip();
-                    ctx.translate(PLAY_X, PLAY_Y);
-                    Background.draw(ctx);
-                    Asteroids.draw(ctx);
-                    Enemies.draw(ctx);
-                    Particles.draw(ctx);
-                    ctx.restore();
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
                 }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
                 if (Renderer.usePixi) {
-                    Renderer.beginFrame();
-                    Renderer.setShake(0, 0);
-                    Renderer.setLayer('bg');
-                    Background.draw(PlayCtx);
-                    Renderer.setLayer('fx');
-                    Particles.draw(PlayCtx);
                     Renderer.endFrame();
                 } else {
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                    ctx.clip();
-                    ctx.translate(PLAY_X, PLAY_Y);
-                    Background.draw(ctx);
-                    Particles.draw(ctx);
-                    ctx.restore();
+                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
                 }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
