@@ -2461,19 +2461,19 @@ const Enemies = {
     types: {
         scout_drone: {
             hp: 1, speed: 150, radius: 12, score: 100, color: '#ff8c00', accent: '#ffcc44', bulletColor: '#ff6600',
-            fireRate: 2.0, bulletSpeed: 180, dropChance: 0.04
+            fireRate: 2.0, bulletSpeed: 180, dropChance: 0.08
         },
         gunship: {
             hp: 3, speed: 80, radius: 18, score: 300, color: '#ff6600', accent: '#ffaa00', bulletColor: '#ff3300',
-            fireRate: 1.5, bulletSpeed: 170, dropChance: 0.12
+            fireRate: 1.5, bulletSpeed: 170, dropChance: 0.18
         },
         missile_turret: {
             hp: 5, speed: 30, radius: 22, score: 500, color: '#ff4400', accent: '#ff8844', bulletColor: '#ff2200',
-            fireRate: 2.8, bulletSpeed: 130, dropChance: 0.2, cancelBullets: true
+            fireRate: 2.8, bulletSpeed: 130, dropChance: 0.25, cancelBullets: true
         },
         phase_shifter: {
             hp: 4, speed: 100, radius: 15, score: 600, color: '#ff00ff', accent: '#ff88ff', bulletColor: '#cc00ff',
-            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.15, cancelBullets: true
+            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.2, cancelBullets: true
         },
         shielded_cruiser: {
             hp: 8, shieldHp: 3, speed: 40, radius: 28, score: 1000, color: '#8b00ff', accent: '#aa44ff', bulletColor: '#6600cc',
@@ -2481,11 +2481,11 @@ const Enemies = {
         },
         bomber: {
             hp: 6, speed: 50, radius: 24, score: 700, color: '#ff4400', accent: '#ff6622', bulletColor: '#ff2200',
-            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.25, cancelBullets: true
+            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.3, cancelBullets: true
         },
         sniper: {
             hp: 2, speed: 20, radius: 14, score: 400, color: '#ffff00', accent: '#ffffaa', bulletColor: '#ffcc00',
-            fireRate: 3.5, bulletSpeed: 500, dropChance: 0.1
+            fireRate: 3.5, bulletSpeed: 500, dropChance: 0.15
         },
         carrier: {
             hp: 10, speed: 25, radius: 30, score: 1200, color: '#cc6600', accent: '#ff8800', bulletColor: '#ff6600',
@@ -2493,7 +2493,7 @@ const Enemies = {
         },
         shield_wall: {
             hp: 3, speed: 60, radius: 16, score: 250, color: '#4488ff', accent: '#66aaff', bulletColor: '#2266dd',
-            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.06
+            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.1
         }
     },
 
