@@ -807,8 +807,8 @@ const Game = {
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
-                    // No PixiJS — blit offscreen canvas onto overlay
-                    ctx.drawImage(Renderer.offCanvas, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                    Renderer.endFrame(); // Still composites glow + game
+                    Renderer.blitToOverlay(ctx, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
                 }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
@@ -826,7 +826,8 @@ const Game = {
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
-                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
                 }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
@@ -842,7 +843,8 @@ const Game = {
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
-                    ctx.drawImage(Renderer.offCanvas, PLAY_X, PLAY_Y);
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
                 }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);

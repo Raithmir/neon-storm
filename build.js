@@ -13,8 +13,6 @@ const DIST = path.join(__dirname, 'dist');
 const VENDOR = path.join(__dirname, 'vendor');
 const PIXI_URL = 'https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js';
 const PIXI_CACHE = path.join(VENDOR, 'pixi.min.js');
-const PIXI_FILTERS_URL = 'https://cdn.jsdelivr.net/npm/pixi-filters@latest/dist/browser/pixi-filters.min.js';
-const PIXI_FILTERS_CACHE = path.join(VENDOR, 'pixi-filters.min.js');
 
 const SOURCE_FILES = [
     'constants.js',
@@ -89,26 +87,6 @@ async function build() {
         }
     }
 
-    // Get pixi-filters (for bloom)
-    let filtersJS = '';
-    let filtersMode = 'cdn';
-    if (fs.existsSync(PIXI_FILTERS_CACHE)) {
-        filtersJS = fs.readFileSync(PIXI_FILTERS_CACHE, 'utf8');
-        filtersMode = 'inline';
-        console.log('  \u2713 pixi-filters.min.js (cached, ' + Math.round(filtersJS.length / 1024) + ' KB)');
-    } else {
-        try {
-            console.log('  \u21bb Downloading pixi-filters.min.js...');
-            await downloadFile(PIXI_FILTERS_URL, PIXI_FILTERS_CACHE);
-            filtersJS = fs.readFileSync(PIXI_FILTERS_CACHE, 'utf8');
-            filtersMode = 'inline';
-            console.log('  \u2713 pixi-filters.min.js (downloaded, ' + Math.round(filtersJS.length / 1024) + ' KB)');
-        } catch (e) {
-            console.log('  \u26a0 Could not download pixi-filters: ' + e.message);
-            console.log('    Bloom will be disabled (glow layer still works)');
-        }
-    }
-
     // Concatenate source modules
     let combinedJS = '';
     let totalLines = 0;
@@ -130,10 +108,6 @@ async function build() {
         ? '<script>\n' + pixiJS + '\n<\/script>'
         : '<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"><\/script>';
 
-    const filtersTag = filtersMode === 'inline'
-        ? '<script>\n' + filtersJS + '\n<\/script>'
-        : '<script src="https://cdn.jsdelivr.net/npm/pixi-filters@latest/dist/browser/pixi-filters.min.js"><\/script>';
-
     const html = '<!DOCTYPE html>\n'
         + '<html lang="en">\n<head>\n'
         + '<meta charset="UTF-8">\n'
@@ -149,7 +123,6 @@ async function build() {
         + '</style>\n</head>\n<body>\n'
         + '<div id="game-container">\n<canvas id="game"></canvas>\n</div>\n'
         + pixiTag + '\n'
-        + filtersTag + '\n'
         + '<script>\n'
         + combinedJS
         + '\n</script>\n</body>\n</html>';
