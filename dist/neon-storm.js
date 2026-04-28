@@ -4357,7 +4357,12 @@ const Boss = {
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + Math.PI) * bs * 0.7, Math.sin(a + Math.PI) * bs * 0.7, { color: '#4488ff', radius: 3 });
                         }
                         this.attackTimer = 0.8; break;
-                    case 1: this._leviathanAttack(angle, bs, density); break; // recurse tentacle
+                    case 1: // Tentacle sweep (reuse phase 1 pattern)
+                        for (let j = 0; j < Math.floor(12 * density); j++) {
+                            const a = angle - 0.6 + (1.2 / 12) * j;
+                            Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#00ffaa', radius: 3 });
+                        }
+                        this.attackTimer = 1.0; break;
                     case 2: // Ring burst
                         const count = Math.floor(20 * density);
                         for (let j = 0; j < count; j++) {
