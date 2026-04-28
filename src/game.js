@@ -74,6 +74,21 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
+        // Tune bloom per level theme — darker themes bloom harder
+        const bloomPresets = {
+            synthwave: { bloomScale: 0.7, threshold: 0.4 },
+            ocean: { bloomScale: 0.8, threshold: 0.35 },
+            volcanic: { bloomScale: 1.0, threshold: 0.3 },
+            storm: { bloomScale: 0.9, threshold: 0.35 },
+            frozen: { bloomScale: 0.7, threshold: 0.4 },
+            void: { bloomScale: 1.2, threshold: 0.25 }, // Glitch level — strongest bloom
+        };
+        const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
+        Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Level 6 glitch atmosphere — persistent chromatic aberration
+        Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
+
         // Activate level-specific systems
         if (levelData.hasAsteroids) Asteroids.activate();
         if (levelData.hasEscort) Escort.activate();
@@ -404,6 +419,7 @@ const Game = {
                 Particles.update(dt);
                 Scoring.update(dt);
                 ScreenShake.update(dt);
+                Renderer.updateEffects(dt);
                 WaveSystem.update(dt);
                 Asteroids.update(dt);
                 Escort.update(dt);

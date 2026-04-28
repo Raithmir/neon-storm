@@ -4,7 +4,7 @@
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
-    maxParticles: 400,
+    maxParticles: 1500,
 
     spawn(x, y, count, opts = {}) {
         // Apply particle density setting
@@ -62,13 +62,17 @@ const Particles = {
     draw(ctx) {
         const prevComposite = ctx.globalCompositeOperation;
         ctx.globalCompositeOperation = 'lighter';
-        ctx.shadowBlur = 0; // No shadowBlur in hot loop
 
         for (const p of this.particles) {
             const t = p.life / p.maxLife; // 1→0 over lifetime
             const currentSize = p.size * (0.3 + t * 0.7);
 
-            // Soft outer glow (replaces shadowBlur)
+            // GPU glow halo for bright/fresh particles
+            if (t > 0.4 && p.size >= 1.5) {
+                Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 5, t * 0.25);
+            }
+
+            // Soft outer glow
             ctx.globalAlpha = t * 0.2;
             ctx.fillStyle = p.color;
             ctx.beginPath();
@@ -93,9 +97,12 @@ const Particles = {
 
         ctx.globalCompositeOperation = prevComposite;
 
-        // Shockwave rings — these are few in number so shadowBlur is acceptable
+        // Shockwave rings
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
+            // GPU glow at shockwave centre
+            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 1.5, (1 - t) * 0.5);
+
             ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
             ctx.lineWidth = 2 * (1 - t) + 0.5;

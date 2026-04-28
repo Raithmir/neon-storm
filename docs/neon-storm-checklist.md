@@ -10,11 +10,11 @@
 
 The PixiJS pipeline is in place (Phase 1 complete). These are the visual upgrade phases — see `neon-storm-beta-roadmap.md` for full details.
 
-- [ ] Phase 2: Bloom & Blending — bloom post-processing filter, additive blend particles (raise cap from 400 to 2000+), bullet glow sprites
-- [ ] Phase 3: Enhanced Backgrounds — deep star field layer, nebula/atmosphere layer with displacement, near foreground speed layer, horizon parallax refinement
-- [ ] Phase 4: Weapons & Combat VFX — weapon shot trails, multi-phase explosions, impact/hit effects, bomb visual upgrade with shockwave distortion
-- [ ] Phase 5: Screen-Space Effects — chromatic aberration on damage, CRT distortion on bomb/boss death, Level 6 glitch atmosphere, optional CRT filter toggle
-- [ ] Phase 6: Dynamic Lighting — light layer from bullets/explosions/player, performance-budgeted light sprite pool
+- [x] Phase 2: Bloom & Blending — AdvancedBloomFilter with per-level intensity tuning, additive glow layer with 200-sprite GPU pool, bullet/particle/explosion glow halos, particle cap raised to 1500
+- [x] Phase 3: Enhanced Backgrounds — deep star field with alpha twinkle (100 stars), nebula/atmosphere layer with per-theme colours and drift, near foreground speed streaks (25 particles), horizon silhouette gradient fade and horizontal drift on city themes
+- [x] Phase 4: Weapons & Combat VFX — enemy hit spark bursts with GPU glow flash, enhanced death explosions with white-hot flash particles and glow burst, bomb visual upgrade with centre glow + white-hot core + secondary ring, shield hit ripple shockwave with glow
+- [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
+- [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
 
 ---
 

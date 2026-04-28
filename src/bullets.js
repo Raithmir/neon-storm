@@ -1,5 +1,5 @@
 // ============================================================
-//  BULLET POOL — optimised: no shadowBlur, hand-drawn glow
+//  BULLET POOL — optimised with hand-drawn glow
 // ============================================================
 class BulletPool {
     constructor(maxSize = 500) {
@@ -79,6 +79,9 @@ class BulletPool {
     }
 
     _drawNormal(ctx, b) {
+        // GPU glow halo behind bullet
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 4, 0.3);
+
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
@@ -94,7 +97,7 @@ class BulletPool {
             ctx.fill();
         }
 
-        // Soft outer glow (replaces shadowBlur)
+        // Soft outer glow
         ctx.globalAlpha = 0.2;
         ctx.fillStyle = b.color;
         ctx.beginPath();
@@ -116,6 +119,9 @@ class BulletPool {
     }
 
     _drawHoming(ctx, b) {
+        // GPU glow halo
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.25);
+
         const angle = Math.atan2(b.vy, b.vx);
 
         // Exhaust trail
@@ -153,6 +159,9 @@ class BulletPool {
     }
 
     _drawLaser(ctx, b) {
+        // GPU glow halo (elongated by using wider size)
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.3);
+
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 
         // Wide outer glow

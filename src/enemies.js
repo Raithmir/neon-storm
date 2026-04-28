@@ -273,6 +273,7 @@ const Enemies = {
         if (enemy.shieldHp > 0) {
             enemy.shieldHp -= damage;
             enemy.flashTimer = 0.08;
+            Particles.spawn(enemy.x, enemy.y, 3, { color: enemy.bulletColor, speed: 60, life: 0.15, size: 1.5 });
             if (enemy.shieldHp <= 0) {
                 Particles.spawn(enemy.x, enemy.y, 12, { color: enemy.bulletColor, speed: 120, life: 0.4 });
             }
@@ -280,6 +281,10 @@ const Enemies = {
         }
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
+        // Impact spark burst at hit point
+        Particles.spawn(enemy.x, enemy.y, 3, { color: '#ffffff', speed: 80, life: 0.12, size: 1.5 });
+        // GPU glow flash
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 2, 0.5);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -289,12 +294,16 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        // Explosion particles — apply equipped explosion cosmetic
         const particleCount = enemy.radius > 20 ? 30 : 15;
         const explColor = Hangar.explosionColor;
+        // Bright white-hot flash particles (brief, large)
+        Particles.spawn(enemy.x, enemy.y, 4, { color: '#ffffff', speed: 60, life: 0.15, size: 4 });
+        // Main explosion burst
         Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
         Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
         Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
+        // GPU glow burst at death position
+        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 5, 0.7);
         // Shockwave ring for medium+ enemies
         if (enemy.radius > 15) {
             Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
@@ -346,12 +355,9 @@ const Enemies = {
             const glitchFlash = isGlitchLevel && Math.random() < 0.02;
             if (e.flashTimer > 0 || glitchFlash) {
                 ctx.fillStyle = glitchFlash ? '#ff00ff' : '#ffffff';
-                ctx.shadowColor = glitchFlash ? '#ff00ff' : '#ffffff';
             } else {
                 ctx.fillStyle = e.color;
-                ctx.shadowColor = e.color;
             }
-            ctx.shadowBlur = 0; // No shadowBlur in gameplay — use hand-drawn glow for performance
 
             // Draw based on type
             const r = e.radius;
@@ -687,12 +693,14 @@ const PowerUps = {
             const pulse = 0.7 + Math.sin(p.bobTimer * 1.5) * 0.3;
             const rot = p.bobTimer * 0.8;
 
+            // Dynamic light — pulsing glow around power-ups
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 4, 0.15 + pulse * 0.2);
+
             ctx.save();
             ctx.translate(p.x, p.y + bob);
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;
-            ctx.shadowColor = p.color;
             
             ctx.lineWidth = 1.5;
             ctx.globalAlpha = 0.3 + Math.sin(p.bobTimer * 2) * 0.15;
@@ -703,7 +711,6 @@ const PowerUps = {
             // Inner filled hexagon background
             ctx.globalAlpha = 0.5 * pulse;
             ctx.fillStyle = p.color;
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             for (let j = 0; j < 6; j++) {
                 const a = (Math.PI * 2 / 6) * j + rot * 0.3;
@@ -716,7 +723,6 @@ const PowerUps = {
             // Weapon icon — drawn in white over the colored background
             ctx.globalAlpha = 1;
             
-            ctx.shadowColor = '#ffffff';
 
             switch (p.type) {
                 case 'spread':
