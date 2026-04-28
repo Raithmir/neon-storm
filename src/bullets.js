@@ -80,13 +80,13 @@ class BulletPool {
 
     _drawNormal(ctx, b) {
         // GPU glow halo behind bullet
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 4, 0.3);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
 
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
         if (trailLen > 2) {
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = b.color;
             ctx.beginPath();
             ctx.moveTo(b.x + b.radius * 0.5, b.y);
@@ -98,10 +98,10 @@ class BulletPool {
         }
 
         // Soft outer glow
-        ctx.globalAlpha = 0.2;
+        ctx.globalAlpha = 0.35;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 2.2, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, b.radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Main bullet body
@@ -120,7 +120,7 @@ class BulletPool {
 
     _drawHoming(ctx, b) {
         // GPU glow halo
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.25);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.45);
 
         const angle = Math.atan2(b.vy, b.vx);
 
@@ -160,7 +160,7 @@ class BulletPool {
 
     _drawLaser(ctx, b) {
         // GPU glow halo (elongated by using wider size)
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.3);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.5);
 
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 

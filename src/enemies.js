@@ -282,9 +282,9 @@ const Enemies = {
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
         // Impact spark burst at hit point
-        Particles.spawn(enemy.x, enemy.y, 3, { color: '#ffffff', speed: 80, life: 0.12, size: 1.5 });
+        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
         // GPU glow flash
-        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 2, 0.5);
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -294,20 +294,21 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        const particleCount = enemy.radius > 20 ? 30 : 15;
+        const isBig = enemy.radius > 20;
+        const particleCount = isBig ? 50 : 25;
         const explColor = Hangar.explosionColor;
-        // Bright white-hot flash particles (brief, large)
-        Particles.spawn(enemy.x, enemy.y, 4, { color: '#ffffff', speed: 60, life: 0.15, size: 4 });
-        // Main explosion burst
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
-        Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
-        // GPU glow burst at death position
-        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 5, 0.7);
-        // Shockwave ring for medium+ enemies
-        if (enemy.radius > 15) {
-            Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
-        }
+        // White-hot flash particles (brief, large)
+        Particles.spawn(enemy.x, enemy.y, 8, { color: '#ffffff', speed: 80, life: 0.2, size: 5 });
+        // Main explosion burst — big and dense
+        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 200, life: 0.6, size: 3 });
+        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.5), { color: enemy.accent || explColor, speed: 160, life: 0.5, size: 3.5 });
+        Particles.spawn(enemy.x, enemy.y, 10, { color: '#ffffff', speed: 100, life: 0.4, size: 3.5 });
+        // Big GPU glow burst
+        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 8, 0.9);
+        // Shockwave ring for all enemies, bigger for big ones
+        Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * (isBig ? 5 : 3), isBig ? 0.5 : 0.35);
+        // Screen shake on bigger enemies
+        if (isBig) ScreenShake.trigger(5, 0.2);
 
         // Bullet cancel
         if (enemy.cancelBullets) {
@@ -694,7 +695,7 @@ const PowerUps = {
             const rot = p.bobTimer * 0.8;
 
             // Dynamic light — pulsing glow around power-ups
-            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 4, 0.15 + pulse * 0.2);
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 6, 0.3 + pulse * 0.4);
 
             ctx.save();
             ctx.translate(p.x, p.y + bob);

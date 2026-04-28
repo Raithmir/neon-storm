@@ -153,9 +153,9 @@ const Boss = {
                 if (this.defeatTimer - dt < 2.5) {
                     // One-time big boom at start of stage 3
                     Audio.playExplosionLarge();
-                    ScreenShake.trigger(15, 0.8);
-                    Renderer.triggerFlash(0xffffff, 0.5);
-                    Renderer.triggerChroma(0.015, 0.6);
+                    ScreenShake.trigger(20, 1.0);
+                    Renderer.triggerFlash(0xffffff, 0.7);
+                    Renderer.triggerChroma(0.025, 0.8);
 
                     // Boss-specific final burst
                     switch (this.bossType) {
@@ -766,9 +766,11 @@ const Boss = {
         this.patternIndex = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
         Enemies.enemyBullets.clear();
-        ScreenShake.trigger(8, 0.5);
-        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 180, life: 0.6, size: 3 });
-        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 80, 0.5);
+        ScreenShake.trigger(12, 0.6);
+        Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
+        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 120, 0.6);
+        Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
+        Renderer.triggerFlash(0xffffff, 0.2);
         Audio.playExplosionLarge();
         Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
@@ -803,7 +805,7 @@ const Boss = {
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
         // Dynamic light — boss core glow (brighter during flash)
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 3 : 2), flash ? 0.5 : 0.2);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
 
         // Core body
         ctx.fillStyle = mainColor;

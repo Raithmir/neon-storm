@@ -388,8 +388,8 @@ const Player = {
         this.bombTimer = 1.5;
         this.invincible = true;
         this.invincibleTimer = 1.5;
-        Renderer.triggerChroma(0.008, 0.4);
-        Renderer.triggerFlash(0x00ffff, 0.15);
+        Renderer.triggerChroma(0.015, 0.6);
+        Renderer.triggerFlash(0x00ffff, 0.3);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();
@@ -436,11 +436,11 @@ const Player = {
             this.shieldFlashTimer = 0.3;
             this.invincible = true;
             this.invincibleTimer = 0.8;
-            Particles.spawn(this.x, this.y, 15, { color: '#4488ff', speed: 120, life: 0.3, size: 2 });
-            Particles.spawnShockwave(this.x, this.y, '#4488ff', 40, 0.25);
-            Renderer.addGlow(this.x, this.y, 0x4488ff, 60, 0.6);
-            Renderer.triggerChroma(0.005, 0.2);
-            ScreenShake.trigger(4, 0.2);
+            Particles.spawn(this.x, this.y, 20, { color: '#4488ff', speed: 150, life: 0.4, size: 2.5 });
+            Particles.spawnShockwave(this.x, this.y, '#4488ff', 60, 0.35);
+            Renderer.addGlow(this.x, this.y, 0x4488ff, 100, 0.8);
+            Renderer.triggerChroma(0.008, 0.3);
+            ScreenShake.trigger(6, 0.3);
             Audio.playShieldHit();
             return;
         }
@@ -485,11 +485,11 @@ const Player = {
             });
         }
 
-        Particles.spawn(this.x, this.y, 30, { color: skinColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(this.x, this.y, 20, { color: '#ffffff', speed: 150, life: 0.4, size: 2 });
-        Renderer.triggerChroma(0.012, 0.5);
-        Renderer.triggerFlash(0xffffff, 0.25);
-        ScreenShake.trigger(10, 0.5);
+        Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
+        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
+        Renderer.triggerChroma(0.02, 0.7);
+        Renderer.triggerFlash(0xffffff, 0.4);
+        ScreenShake.trigger(15, 0.6);
         Audio.playPlayerDeath();
 
         if (this.lives > 0) {
@@ -611,9 +611,9 @@ const Player = {
         ctx.translate(this.x, this.y);
 
         // GPU glow behind player — engine glow + surge glow
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 2.5, 0.25);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
         if (Scoring.surgeActive) {
-            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 4, 0.3);
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
         }
 
         // Surge glow
@@ -751,7 +751,7 @@ const Player = {
         if (this.bombActive && !Settings.values.flashReduction) {
             const bombAlpha = this.bombTimer / 1.5;
             // GPU glow at bomb centre
-            Renderer.addGlow(this.x, this.y, 0x00ffff, 300 * bombAlpha, bombAlpha * 0.4);
+            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
             // Screen-filling flash
             ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
             ctx.fillRect(0, 0, PLAY_W, PLAY_H);

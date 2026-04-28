@@ -2309,7 +2309,7 @@ const Tutorial = {
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
-    maxParticles: 1500,
+    maxParticles: 3000,
 
     spawn(x, y, count, opts = {}) {
         // Apply particle density setting
@@ -2374,7 +2374,7 @@ const Particles = {
 
             // GPU glow halo for bright/fresh particles
             if (t > 0.4 && p.size >= 1.5) {
-                Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 5, t * 0.25);
+                Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 8, t * 0.5);
             }
 
             // Soft outer glow
@@ -2406,7 +2406,7 @@ const Particles = {
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
             // GPU glow at shockwave centre
-            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 1.5, (1 - t) * 0.5);
+            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 2.5, (1 - t) * 0.8);
 
             ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
@@ -2596,13 +2596,13 @@ class BulletPool {
 
     _drawNormal(ctx, b) {
         // GPU glow halo behind bullet
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 4, 0.3);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
 
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
         if (trailLen > 2) {
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = b.color;
             ctx.beginPath();
             ctx.moveTo(b.x + b.radius * 0.5, b.y);
@@ -2614,10 +2614,10 @@ class BulletPool {
         }
 
         // Soft outer glow
-        ctx.globalAlpha = 0.2;
+        ctx.globalAlpha = 0.35;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 2.2, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, b.radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Main bullet body
@@ -2636,7 +2636,7 @@ class BulletPool {
 
     _drawHoming(ctx, b) {
         // GPU glow halo
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.25);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.45);
 
         const angle = Math.atan2(b.vy, b.vx);
 
@@ -2676,7 +2676,7 @@ class BulletPool {
 
     _drawLaser(ctx, b) {
         // GPU glow halo (elongated by using wider size)
-        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 5, 0.3);
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.5);
 
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 
@@ -3192,9 +3192,9 @@ const Enemies = {
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
         // Impact spark burst at hit point
-        Particles.spawn(enemy.x, enemy.y, 3, { color: '#ffffff', speed: 80, life: 0.12, size: 1.5 });
+        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
         // GPU glow flash
-        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 2, 0.5);
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -3204,20 +3204,21 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        const particleCount = enemy.radius > 20 ? 30 : 15;
+        const isBig = enemy.radius > 20;
+        const particleCount = isBig ? 50 : 25;
         const explColor = Hangar.explosionColor;
-        // Bright white-hot flash particles (brief, large)
-        Particles.spawn(enemy.x, enemy.y, 4, { color: '#ffffff', speed: 60, life: 0.15, size: 4 });
-        // Main explosion burst
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
-        Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
-        // GPU glow burst at death position
-        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 5, 0.7);
-        // Shockwave ring for medium+ enemies
-        if (enemy.radius > 15) {
-            Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
-        }
+        // White-hot flash particles (brief, large)
+        Particles.spawn(enemy.x, enemy.y, 8, { color: '#ffffff', speed: 80, life: 0.2, size: 5 });
+        // Main explosion burst — big and dense
+        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 200, life: 0.6, size: 3 });
+        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.5), { color: enemy.accent || explColor, speed: 160, life: 0.5, size: 3.5 });
+        Particles.spawn(enemy.x, enemy.y, 10, { color: '#ffffff', speed: 100, life: 0.4, size: 3.5 });
+        // Big GPU glow burst
+        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 8, 0.9);
+        // Shockwave ring for all enemies, bigger for big ones
+        Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * (isBig ? 5 : 3), isBig ? 0.5 : 0.35);
+        // Screen shake on bigger enemies
+        if (isBig) ScreenShake.trigger(5, 0.2);
 
         // Bullet cancel
         if (enemy.cancelBullets) {
@@ -3604,7 +3605,7 @@ const PowerUps = {
             const rot = p.bobTimer * 0.8;
 
             // Dynamic light — pulsing glow around power-ups
-            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 4, 0.15 + pulse * 0.2);
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 6, 0.3 + pulse * 0.4);
 
             ctx.save();
             ctx.translate(p.x, p.y + bob);
@@ -4516,9 +4517,9 @@ const Boss = {
                 if (this.defeatTimer - dt < 2.5) {
                     // One-time big boom at start of stage 3
                     Audio.playExplosionLarge();
-                    ScreenShake.trigger(15, 0.8);
-                    Renderer.triggerFlash(0xffffff, 0.5);
-                    Renderer.triggerChroma(0.015, 0.6);
+                    ScreenShake.trigger(20, 1.0);
+                    Renderer.triggerFlash(0xffffff, 0.7);
+                    Renderer.triggerChroma(0.025, 0.8);
 
                     // Boss-specific final burst
                     switch (this.bossType) {
@@ -5129,9 +5130,11 @@ const Boss = {
         this.patternIndex = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
         Enemies.enemyBullets.clear();
-        ScreenShake.trigger(8, 0.5);
-        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 180, life: 0.6, size: 3 });
-        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 80, 0.5);
+        ScreenShake.trigger(12, 0.6);
+        Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
+        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 120, 0.6);
+        Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
+        Renderer.triggerFlash(0xffffff, 0.2);
         Audio.playExplosionLarge();
         Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
@@ -5166,7 +5169,7 @@ const Boss = {
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
         // Dynamic light — boss core glow (brighter during flash)
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 3 : 2), flash ? 0.5 : 0.2);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
 
         // Core body
         ctx.fillStyle = mainColor;
@@ -5896,8 +5899,8 @@ const Player = {
         this.bombTimer = 1.5;
         this.invincible = true;
         this.invincibleTimer = 1.5;
-        Renderer.triggerChroma(0.008, 0.4);
-        Renderer.triggerFlash(0x00ffff, 0.15);
+        Renderer.triggerChroma(0.015, 0.6);
+        Renderer.triggerFlash(0x00ffff, 0.3);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();
@@ -5944,11 +5947,11 @@ const Player = {
             this.shieldFlashTimer = 0.3;
             this.invincible = true;
             this.invincibleTimer = 0.8;
-            Particles.spawn(this.x, this.y, 15, { color: '#4488ff', speed: 120, life: 0.3, size: 2 });
-            Particles.spawnShockwave(this.x, this.y, '#4488ff', 40, 0.25);
-            Renderer.addGlow(this.x, this.y, 0x4488ff, 60, 0.6);
-            Renderer.triggerChroma(0.005, 0.2);
-            ScreenShake.trigger(4, 0.2);
+            Particles.spawn(this.x, this.y, 20, { color: '#4488ff', speed: 150, life: 0.4, size: 2.5 });
+            Particles.spawnShockwave(this.x, this.y, '#4488ff', 60, 0.35);
+            Renderer.addGlow(this.x, this.y, 0x4488ff, 100, 0.8);
+            Renderer.triggerChroma(0.008, 0.3);
+            ScreenShake.trigger(6, 0.3);
             Audio.playShieldHit();
             return;
         }
@@ -5993,11 +5996,11 @@ const Player = {
             });
         }
 
-        Particles.spawn(this.x, this.y, 30, { color: skinColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(this.x, this.y, 20, { color: '#ffffff', speed: 150, life: 0.4, size: 2 });
-        Renderer.triggerChroma(0.012, 0.5);
-        Renderer.triggerFlash(0xffffff, 0.25);
-        ScreenShake.trigger(10, 0.5);
+        Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
+        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
+        Renderer.triggerChroma(0.02, 0.7);
+        Renderer.triggerFlash(0xffffff, 0.4);
+        ScreenShake.trigger(15, 0.6);
         Audio.playPlayerDeath();
 
         if (this.lives > 0) {
@@ -6119,9 +6122,9 @@ const Player = {
         ctx.translate(this.x, this.y);
 
         // GPU glow behind player — engine glow + surge glow
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 2.5, 0.25);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
         if (Scoring.surgeActive) {
-            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 4, 0.3);
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
         }
 
         // Surge glow
@@ -6259,7 +6262,7 @@ const Player = {
         if (this.bombActive && !Settings.values.flashReduction) {
             const bombAlpha = this.bombTimer / 1.5;
             // GPU glow at bomb centre
-            Renderer.addGlow(this.x, this.y, 0x00ffff, 300 * bombAlpha, bombAlpha * 0.4);
+            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
             // Screen-filling flash
             ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
             ctx.fillRect(0, 0, PLAY_W, PLAY_H);

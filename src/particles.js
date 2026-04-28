@@ -4,7 +4,7 @@
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
-    maxParticles: 1500,
+    maxParticles: 3000,
 
     spawn(x, y, count, opts = {}) {
         // Apply particle density setting
@@ -69,7 +69,7 @@ const Particles = {
 
             // GPU glow halo for bright/fresh particles
             if (t > 0.4 && p.size >= 1.5) {
-                Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 5, t * 0.25);
+                Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 8, t * 0.5);
             }
 
             // Soft outer glow
@@ -101,7 +101,7 @@ const Particles = {
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
             // GPU glow at shockwave centre
-            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 1.5, (1 - t) * 0.5);
+            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 2.5, (1 - t) * 0.8);
 
             ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
