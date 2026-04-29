@@ -65,6 +65,9 @@ const Scoring = {
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
 
+        // Each kill contributes surge charge; grazes are faster (5 each)
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 3);
+
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
             this.spawnPopup(pointBlankLabel, pointBlankMult >= 3 ? '#ff00ff' : '#ffaa00', pointBlankMult >= 3 ? 22 : 16);

@@ -134,6 +134,15 @@ const Player = {
             this.fireTimer = rates[this.primaryWeapon] || 0.12;
         }
 
+        // Laser beam MeshRope — show while firing, hide otherwise
+        if (this.primaryWeapon === 'laser' && this.alive) {
+            const laserColor = Hangar.equipped.bullet === 'neon' ? '#4488ff' : Hangar.bulletColor;
+            const isLaserFiring = shouldFire && !this.dashing;
+            Renderer.updateLaserBeam(this.x, this.y - this.radius, laserColor, isLaserFiring);
+        } else {
+            Renderer.updateLaserBeam(0, 0, null, false);
+        }
+
         // Dash input
         if (Input.isPressed('dash') && GameConfig.dash.enabled && this.dashCooldown <= 0 && !this.dashing) {
             this._startDash();
@@ -169,8 +178,15 @@ const Player = {
                 Scoring.activateSurge();
                 Achievements.onSurge();
                 Audio.playSurgeActivate();
-                ScreenShake.trigger(6, 0.3);
-                Particles.spawn(this.x, this.y, 25, { color: '#ffffff', speed: 150, life: 0.5, size: 3 });
+                ScreenShake.trigger(12, 0.5);
+                Renderer.triggerFlash(0xffffff, 0.35);
+                Renderer.triggerChroma(0.025, 0.7);
+                Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
+                Particles.spawn(this.x, this.y, 80, { color: '#ffffff', speed: 300, life: 0.7, size: 4 });
+                Particles.spawn(this.x, this.y, 40, { color: '#00ffff', speed: 200, life: 1.0, size: 2.5 });
+                Particles.spawnShockwave(this.x, this.y, '#00ffff', 150, 0.45);
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 150, 0.95);
+                Renderer.spawnExplosionSprite(this.x, this.y, 5, 0x00ffff, 0.5);
             }
         }
 
@@ -305,8 +321,8 @@ const Player = {
             case 'homing': {
                 const lvl = this.primaryLevel;
                 const count = lvl >= 5 ? 5 : lvl >= 4 ? 4 : lvl >= 3 ? 3 : lvl >= 2 ? 2 : 1;
-                const dmg = 0.3; // Low damage — convenience weapon, not a damage dealer
-                const spd = lvl >= 4 ? 0.7 : 0.6;
+                const dmg = 0.5;
+                const spd = lvl >= 4 ? 0.7 : lvl >= 2 ? 0.65 : 0.6;
                 for (let j = 0; j < count; j++) {
                     const ox = (j - (count - 1) / 2) * 14;
                     this.bullets.spawn(this.x + ox, this.y - this.radius,
@@ -317,7 +333,7 @@ const Player = {
             }
             case 'laser': {
                 const lvl = this.primaryLevel;
-                const beamDamage = lvl >= 5 ? 5 : lvl >= 4 ? 4.5 : lvl >= 3 ? 4 : lvl >= 2 ? 3 : 2;
+                const beamDamage = lvl >= 5 ? 4 : lvl >= 4 ? 3.5 : lvl >= 3 ? 3 : lvl >= 2 ? 2.5 : 1.5;
                 const beamWidth = lvl >= 5 ? 8 : lvl >= 4 ? 7 : lvl >= 3 ? 6 : lvl >= 2 ? 5 : 4;
                 this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed * 1.5,
                     { color: laserColor, radius: beamWidth, damage: beamDamage, type: 'laser' });
@@ -345,7 +361,7 @@ const Player = {
         // Drone firing — Lv1-2: contact only, Lv3: 4 drones fire, Lv4: 5 drones fire faster, Lv5: 6 drones + stronger
         if (this.droneLevel >= 3) {
             const droneCount = this.droneLevel >= 5 ? 6 : this.droneLevel >= 4 ? 5 : 4;
-            const droneDmg = 0.5; // Same damage per shot at all levels — more drones = more coverage, not more burst
+            const droneDmg = 0.35; // Same damage per shot at all levels — more drones = more coverage, not more burst
             for (let d = 0; d < droneCount; d++) {
                 const a = (Math.PI * 2 / droneCount) * d + this.engineFlicker * 0.15;
                 const dx = this.x + Math.cos(a) * 30;
@@ -390,6 +406,7 @@ const Player = {
         this.invincibleTimer = 1.5;
         Renderer.triggerChroma(0.015, 0.6);
         Renderer.triggerFlash(0x00ffff, 0.3);
+        Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();

@@ -295,20 +295,18 @@ const Enemies = {
     _onDeath(enemy, playerDist) {
         enemy.active = false;
         const isBig = enemy.radius > 20;
-        const particleCount = isBig ? 50 : 25;
         const explColor = Hangar.explosionColor;
-        // White-hot flash particles (brief, large)
-        Particles.spawn(enemy.x, enemy.y, 8, { color: '#ffffff', speed: 80, life: 0.2, size: 5 });
-        // Main explosion burst — big and dense
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.5), { color: enemy.accent || explColor, speed: 160, life: 0.5, size: 3.5 });
-        Particles.spawn(enemy.x, enemy.y, 10, { color: '#ffffff', speed: 100, life: 0.4, size: 3.5 });
-        // Big GPU glow burst
-        Renderer.addGlow(enemy.x, enemy.y, Renderer.colorToHex(explColor), enemy.radius * 8, 0.9);
-        // Shockwave ring for all enemies, bigger for big ones
-        Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * (isBig ? 5 : 3), isBig ? 0.5 : 0.35);
-        // Screen shake on bigger enemies
-        if (isBig) ScreenShake.trigger(5, 0.2);
+        const accent = enemy.accent || explColor;
+
+        // Layered explosion: use spawnExplosion for the main burst
+        Particles.spawnExplosion(enemy.x, enemy.y, {
+            style: isBig ? 'large' : 'medium',
+            color: explColor,
+            color2: '#ffffff',
+        });
+        // Extra accent-coloured sparks for visual variety
+        Particles.spawn(enemy.x, enemy.y, isBig ? 20 : 10, { color: accent, speed: 180, life: 0.7, size: 3 });
+        if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
         if (enemy.cancelBullets) {

@@ -74,17 +74,29 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
-        // Tune bloom per level theme — darker themes bloom harder
+        // Bloom intensity per level theme
         const bloomPresets = {
-            synthwave: { bloomScale: 0.7, threshold: 0.4 },
-            ocean: { bloomScale: 0.8, threshold: 0.35 },
-            volcanic: { bloomScale: 1.0, threshold: 0.3 },
-            storm: { bloomScale: 0.9, threshold: 0.35 },
-            frozen: { bloomScale: 0.7, threshold: 0.4 },
-            void: { bloomScale: 1.2, threshold: 0.25 }, // Glitch level — strongest bloom
+            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
+            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
+            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
+            storm:     { bloomScale: 1.1,  threshold: 0.32 },
+            frozen:    { bloomScale: 0.85, threshold: 0.4  },
+            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
         };
         const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
         Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Per-level colour grade for distinct mood
+        const colorGradePresets = {
+            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
+            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
+            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
+            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
+            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+        };
+        const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
+        Renderer.setColorGrade(cg);
 
         // Level 6 glitch atmosphere — persistent chromatic aberration
         Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
