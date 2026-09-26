@@ -14,7 +14,14 @@ node build.js
 # Output: dist/neon-storm-beta.html (offline-capable), dist/neon-storm.js (debug)
 ```
 
-There are no tests, no lint, and no transpilation — vanilla JS only.
+There are no unit tests, no lint, and no transpilation — vanilla JS only.
+
+```bash
+# Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
+npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
+```
+
+See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-through tools.
 
 ## Architecture
 

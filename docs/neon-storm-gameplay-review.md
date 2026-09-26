@@ -229,7 +229,7 @@ These changes stay within the current feature set and should make the six levels
 
 ### Method
 
-The beta build (`node build.js` → `dist/neon-storm-beta.html`) was loaded in headless Chromium through Playwright, with a fake clock so that `requestAnimationFrame` and `setTimeout` advance on the same virtual 60 fps timeline. For speed, rendering was stubbed out (`Game.draw` and the PixiJS ticker). Game logic, collision, spawning and timers run unmodified. Input goes through the real `Input.keys` map, the same path as keyboard events. Three kinds of test were run:
+The beta build (`node build.js` → `dist/neon-storm-beta.html`) was loaded in headless Chromium through Playwright, with a fake clock so that `requestAnimationFrame` and `setTimeout` advance on the same virtual 60 fps timeline. For speed, rendering was stubbed out (`Game.draw` and the PixiJS ticker). Game logic, collision, spawning and timers run unmodified. Input goes through the real `Input.keys` map, the same path as keyboard events. The scripts are in `tools/sim/` (see its README). The bug reproductions are kept as regression checks in `tools/sim/checks.js`, and `npm run sim:checks` re-runs them. Three kinds of test were run:
 
 1. **Scripted reproductions:** set up the exact situation (e.g. bomb, then dash), then read the game state.
 2. **Measurement rigs:** hold fire at a stationary dummy (DPS), or an invincible autopilot that tracks the boss (time-to-kill).
