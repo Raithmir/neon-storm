@@ -3,36 +3,43 @@
 // ============================================================
 const BossTypes = {
     architect: {
-        name: 'THE ARCHITECT', phases: 3, phaseHps: [80, 120, 160],
-        hasArmor: true, armorCount: 4, armorHp: 20,
+        name: 'THE ARCHITECT', phases: 3, phaseHps: [250, 300, 350],
+        hasArmor: true, armorCount: 4, armorHp: 50,
         colors: ['#ff4444', '#ff00ff', '#ff0040']
     },
     furnace: {
-        name: 'THE FURNACE', phases: 2, phaseHps: [150, 200],
+        name: 'THE FURNACE', phases: 2, phaseHps: [550, 650],
         hasArmor: false,
         colors: ['#ff6600', '#ff2200']
     },
     leviathan: {
-        name: 'THE LEVIATHAN', phases: 3, phaseHps: [120, 160, 140],
+        name: 'THE LEVIATHAN', phases: 3, phaseHps: [400, 450, 450],
         hasArmor: false,
         colors: ['#4488ff', '#00ffaa', '#ff44ff']
     },
     interceptor_duo: {
-        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [140, 220],
+        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [650, 800],
         hasArmor: false,
         colors: ['#ffaa00', '#ff4400']
     },
     nexus: {
-        name: 'THE NEXUS', phases: 3, phaseHps: [160, 200, 280],
-        hasArmor: true, armorCount: 6, armorHp: 15,
+        name: 'THE NEXUS', phases: 3, phaseHps: [360, 450, 550],
+        hasArmor: true, armorCount: 6, armorHp: 40,
         colors: ['#cc44ff', '#ff00ff', '#ffffff']
     },
     echo: {
-        name: 'THE ECHO', phases: 3, phaseHps: [180, 220, 300],
+        name: 'THE ECHO', phases: 3, phaseHps: [500, 580, 670],
         hasArmor: false,
         colors: ['#00ffff', '#ff00ff', '#ffffff']
     }
 };
+
+
+// Boss tuning (all bosses)
+const BOSS_PHASE_TIME_LIMIT = 45;   // seconds; phase ends without its bonus (Touhou-style timeout)
+const BOSS_ARMOR_ORBIT = 40;        // armor segments orbit the core at this radius
+const BOSS_ARMOR_RADIUS = 16;
+const BOSS_ARMORED_CORE_DAMAGE = 0.25; // core damage multiplier while armor is up
 
 
 // ============================================================
@@ -62,6 +69,11 @@ const Boss = {
     totalPhases: 3,
     colors: ['#ff4444', '#ff00ff', '#ff0040'],
 
+    // Bullet count for a pattern at the current density (never fewer than 3)
+    _n(base, density) {
+        return Math.max(3, Math.round(base * density));
+    },
+
     init(bossType) {
         bossType = bossType || 'architect';
         const def = BossTypes[bossType] || BossTypes.architect;
@@ -84,6 +96,9 @@ const Boss = {
         this.patternIndex = 0;
         this.flashTimer = 0;
         this.warningTimer = 3;
+        this.phaseTime = 0;
+        this.phaseTransitionTimer = 0;
+        this.timedOut = false;
         // Armor segments
         this.armor = [];
         if (def.hasArmor) {
@@ -201,7 +216,7 @@ const Boss = {
             // Final cleanup
             if (this.defeatTimer > 3.5) {
                 this.active = false;
-                Scoring.score += Math.floor(25000 * GameConfig.scoreMultiplier);
+                if (!this.timedOut) Scoring.score += Math.floor(25000 * GameConfig.scoreMultiplier);
                 Enemies.enemyBullets.clear();
                 Scoring.spawnPopup('BOSS DEFEATED!', '#ffff00', 30);
             }
@@ -216,6 +231,13 @@ const Boss = {
             this.flashTimer = 0.1;
             this._updateMovement(dt, playerX);
             return; // Skip attacks during transition
+        }
+
+        // Phase timeout: the phase ends without its bonus, so fights can't stall
+        this.phaseTime += dt;
+        if (this.phaseTime >= BOSS_PHASE_TIME_LIMIT) {
+            this._phaseTimeout();
+            return;
         }
         this.attackTimer -= dt;
 
@@ -373,8 +395,9 @@ const Boss = {
         if (this.phase === 1) {
             switch (pattern) {
                 case 0: // Wide horizontal barrage
-                    for (let j = 0; j < Math.floor(15 * density); j++) {
-                        const x = (PLAY_W / 15) * j + 10;
+                    const wallN = this._n(15, density);
+                    for (let j = 0; j < wallN; j++) {
+                        const x = 10 + ((PLAY_W - 20) / (wallN - 1)) * j; // always spans the screen
                         Enemies.enemyBullets.spawn(x, this.y + 40, 0, bs * 0.7, { color: '#ff6600', radius: 3 });
                     }
                     this.attackTimer = 1.2; break;
@@ -385,8 +408,9 @@ const Boss = {
                     }
                     this.attackTimer = 0.8; break;
                 case 2: // Flame spread (wide cone downward)
-                    for (let j = 0; j < Math.floor(10 * density); j++) {
-                        const a = Math.PI / 2 + (j - 5) * 0.12;
+                    const flameN = this._n(10, density);
+                    for (let j = 0; j < flameN; j++) {
+                        const a = Math.PI / 2 + (j / (flameN - 1) - 0.5) * 1.1; // centred cone
                         Enemies.enemyBullets.spawn(this.x, this.y + this.radius * 0.9, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#ff2200', radius: 3, life: 2 });
                     }
                     this.attackTimer = 1.5; break;
@@ -394,8 +418,8 @@ const Boss = {
         } else {
             switch (pattern) {
                 case 0: // Charge slam — bullet burst
-                    for (let j = 0; j < Math.floor(20 * density); j++) {
-                        const a = (Math.PI * 2 / 20) * j;
+                    for (let j = 0; j < this._n(20, density); j++) {
+                        const a = (Math.PI * 2 / this._n(20, density)) * j;
                         Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff4400', radius: 4 });
                     }
                     this.attackTimer = 0.9; break;
@@ -427,8 +451,8 @@ const Boss = {
             case 1: // Hidden among debris
                 switch (pattern) {
                     case 0: // Tentacle sweep (arc of bullets)
-                        for (let j = 0; j < Math.floor(12 * density); j++) {
-                            const a = angle - 0.6 + (1.2 / 12) * j;
+                        for (let j = 0, tn = this._n(12, density); j < tn; j++) {
+                            const a = angle - 0.6 + (1.2 / (tn - 1)) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#00ffaa', radius: 3 });
                         }
                         this.attackTimer = 1.3; break;
@@ -450,20 +474,20 @@ const Boss = {
             case 2: // Revealed — spiral + tentacles
                 switch (pattern) {
                     case 0: // Double spiral
-                        for (let j = 0; j < Math.floor(16 * density); j++) {
-                            const a = (Math.PI * 2 / 16) * j + this.moveTimer * 2;
+                        for (let j = 0; j < this._n(16, density); j++) {
+                            const a = (Math.PI * 2 / this._n(16, density)) * j + this.moveTimer * 2;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#00ffaa', radius: 3 });
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + Math.PI) * bs * 0.7, Math.sin(a + Math.PI) * bs * 0.7, { color: '#4488ff', radius: 3 });
                         }
                         this.attackTimer = 0.8; break;
                     case 1: // Tentacle sweep (reuse phase 1 pattern)
-                        for (let j = 0; j < Math.floor(12 * density); j++) {
-                            const a = angle - 0.6 + (1.2 / 12) * j;
+                        for (let j = 0, tn = this._n(12, density); j < tn; j++) {
+                            const a = angle - 0.6 + (1.2 / (tn - 1)) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#00ffaa', radius: 3 });
                         }
                         this.attackTimer = 1.0; break;
                     case 2: // Ring burst
-                        const count = Math.floor(20 * density);
+                        const count = this._n(20, density);
                         for (let j = 0; j < count; j++) {
                             const a = (Math.PI * 2 / count) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.6, Math.sin(a) * bs * 0.6, { color: '#00ffaa', radius: 4 });
@@ -473,9 +497,9 @@ const Boss = {
                 break;
             case 3: // Charging — fast and aggressive
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(24 * density); j++) { const a = (Math.PI * 2 / 24) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.5; break;
+                    case 0: for (let j = 0; j < this._n(24, density); j++) { const a = (Math.PI * 2 / this._n(24, density)) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.5; break;
                     case 1: for (let j = -4; j <= 4; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.12) * bs * 1.3, Math.sin(angle + j * 0.12) * bs * 1.3, { color: '#4488ff', radius: 4 }); } this.attackTimer = 0.6; break;
-                    case 2: for (let j = 0; j < Math.floor(12 * density); j++) { const a = Math.random() * Math.PI * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * (80 + Math.random() * bs), Math.sin(a) * (80 + Math.random() * bs), { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.7; break;
+                    case 2: for (let j = 0; j < this._n(12, density); j++) { const a = Math.random() * Math.PI * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * (80 + Math.random() * bs), Math.sin(a) * (80 + Math.random() * bs), { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.7; break;
                 }
                 break;
         }
@@ -501,14 +525,14 @@ const Boss = {
                     }
                     this.attackTimer = 1.2; break;
                 case 3: // Ring from center
-                    const c = Math.floor(12 * density);
+                    const c = this._n(12, density);
                     for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#ff6600', radius: 3 }); }
                     this.attackTimer = 1.5; break;
             }
         } else { // Combined form — overlapping patterns
             switch (pattern) {
                 case 0: // Double spiral
-                    for (let j = 0; j < Math.floor(20 * density); j++) { const a = (Math.PI * 2 / 20) * j + this.moveTimer * 2.5; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ffaa00', radius: 3 }); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + 0.3) * bs * 0.8, Math.sin(a + 0.3) * bs * 0.8, { color: '#ff4400', radius: 3 }); }
+                    for (let j = 0; j < this._n(20, density); j++) { const a = (Math.PI * 2 / this._n(20, density)) * j + this.moveTimer * 2.5; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ffaa00', radius: 3 }); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + 0.3) * bs * 0.8, Math.sin(a + 0.3) * bs * 0.8, { color: '#ff4400', radius: 3 }); }
                     this.attackTimer = 0.7; break;
                 case 1: // Wide shotgun
                     for (let j = -5; j <= 5; j++) { const a = angle + j * 0.1; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.2, Math.sin(a) * bs * 1.2, { color: '#ff6600', radius: 4 }); }
@@ -517,7 +541,7 @@ const Boss = {
                     for (let j = 0; j < 4; j++) Enemies.spawn('scout_drone', this.x + (j - 1.5) * 30, this.y + 20, 'straight_down');
                     this.attackTimer = 2.5; break;
                 case 3: // Burst rings
-                    for (let ring = 0; ring < 2; ring++) { const c = Math.floor((14 + ring * 6) * density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j + ring * 0.15; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * (0.6 + ring * 0.3), Math.sin(a) * bs * (0.6 + ring * 0.3), { color: ring === 0 ? '#ffaa00' : '#ff4400', radius: 3 }); } }
+                    for (let ring = 0; ring < 2; ring++) { const c = this._n(14 + ring * 6, density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j + ring * 0.15; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * (0.6 + ring * 0.3), Math.sin(a) * bs * (0.6 + ring * 0.3), { color: ring === 0 ? '#ffaa00' : '#ff4400', radius: 3 }); } }
                     this.attackTimer = 1.0; break;
             }
         }
@@ -529,11 +553,11 @@ const Boss = {
         switch (this.phase) {
             case 1: // Shielded — controlled patterns
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(16 * density); j++) { const a = (Math.PI * 2 / 16) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#cc44ff', radius: 4 }); } this.attackTimer = 1.2; break;
+                    case 0: for (let j = 0; j < this._n(16, density); j++) { const a = (Math.PI * 2 / this._n(16, density)) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#cc44ff', radius: 4 }); } this.attackTimer = 1.2; break;
                     case 1: for (let j = -3; j <= 3; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.15) * bs * 1.1, Math.sin(angle + j * 0.15) * bs * 1.1, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.8; break;
                     case 2: Enemies.spawn('phase_shifter', this.x, this.y + 30, 'hover'); this.attackTimer = 3.0; break;
                     case 3: // Horizontal wall with gaps
-                        for (let j = 0; j < Math.floor(18 * density); j++) { if (j % 4 === Math.floor(this.moveTimer) % 4) continue; const x = (PLAY_W / 18) * j; Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.5, { color: '#cc44ff', radius: 3 }); }
+                        for (let j = 0, wn = this._n(18, density); j < wn; j++) { if (j % 4 === Math.floor(this.moveTimer) % 4) continue; const x = 10 + ((PLAY_W - 20) / (wn - 1)) * j; Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.5, { color: '#cc44ff', radius: 3 }); }
                         this.attackTimer = 1.0; break;
                 }
                 break;
@@ -542,18 +566,18 @@ const Boss = {
                     case 0: this._furnaceAttack(angle, bs * 0.9, density); break;
                     case 1: this._leviathanAttack(angle, bs * 0.9, density); break;
                     case 2: this._duoAttack(angle, bs * 0.9, density); break;
-                    case 3: for (let j = 0; j < Math.floor(20 * density); j++) { const a = (Math.PI * 2 / 20) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.6; break;
+                    case 3: for (let j = 0; j < this._n(20, density); j++) { const a = (Math.PI * 2 / this._n(20, density)) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.6; break;
                 }
                 break;
             case 3: // Endurance — everything at max
                 switch (pattern) {
                     case 0: // Triple spiral
-                        for (let s = 0; s < 3; s++) { for (let j = 0; j < Math.floor(10 * density); j++) { const a = (Math.PI * 2 / 10) * j + this.moveTimer * 3 + s * (Math.PI * 2 / 3); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: ['#ff00ff', '#cc44ff', '#ffffff'][s], radius: 3 }); } }
+                        for (let s = 0; s < 3; s++) { for (let j = 0; j < this._n(10, density); j++) { const a = (Math.PI * 2 / this._n(10, density)) * j + this.moveTimer * 3 + s * (Math.PI * 2 / 3); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: ['#ff00ff', '#cc44ff', '#ffffff'][s], radius: 3 }); } }
                         this.attackTimer = 0.4; break;
                     case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.3, Math.sin(angle + j * 0.1) * bs * 1.3, { color: '#ffffff', radius: 4 }); } this.attackTimer = 0.5; break;
                     case 2: for (let j = 0; j < 3; j++) Enemies.spawn('phase_shifter', this.x + (j - 1) * 50, this.y + 30, 'hover'); this.attackTimer = 3.0; break;
                     case 3: // Cross beams
-                        for (let arm = 0; arm < 4; arm++) { const ba = this.moveTimer * 1.5 + arm * (Math.PI / 2); for (let j = 0; j < 10; j++) { const bx = this.x + Math.cos(ba) * j * 18; const by = this.y + Math.sin(ba) * j * 18; if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff00ff', radius: 4, life: 0.6 }); } }
+                        for (let arm = 0; arm < 4; arm++) { const ba = this.moveTimer * 1.5 + arm * (Math.PI / 2); for (let j = 0; j < 10; j++) { const bx = this.x + Math.cos(ba) * j * 18; const by = this.y + Math.sin(ba) * j * 18; if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff00ff', radius: 4, life: 0.95, harmless: 0.35 }); } }
                         this.attackTimer = 0.5; break;
                 }
                 break;
@@ -570,20 +594,20 @@ const Boss = {
                         for (let j = -3; j <= 3; j++) { const a = angle + j * 0.15; Enemies.enemyBullets.spawn(this.x, this.y + this.radius * 0.8, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#00ffff', radius: 3 }); }
                         this.attackTimer = 0.5; break;
                     case 1: // Homing (slow tracking bullets)
-                        for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j - 1) * 20, this.y, Math.cos(angle) * bs * 0.5, Math.sin(angle) * bs * 0.5, { color: '#00ff88', radius: 3, type: 'homing', life: 4 }); }
+                        for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j - 1) * 20, this.y, Math.cos(angle) * bs * 0.5, Math.sin(angle) * bs * 0.5, { color: '#00ff88', radius: 3, type: 'homing', life: 4, turnRate: 1.5 }); }
                         this.attackTimer = 1.0; break;
                     case 2: // Ring
-                        const c = Math.floor(14 * density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#00ffff', radius: 3 }); }
+                        const c = this._n(14, density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#00ffff', radius: 3 }); }
                         this.attackTimer = 1.2; break;
                 }
                 break;
             case 2: // Mirrors laser + adds own patterns
                 switch (pattern) {
                     case 0: // Laser beams (vertical lines)
-                        for (let j = -1; j <= 1; j++) { for (let k = 0; k < 8; k++) { Enemies.enemyBullets.spawn(this.x + j * 15, this.y + k * 15, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.5 }); } }
+                        for (let j = -1; j <= 1; j++) { for (let k = 0; k < 8; k++) { Enemies.enemyBullets.spawn(this.x + j * 15, this.y + k * 15, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.75, harmless: 0.25 }); } }
                         this.attackTimer = 0.4; break;
                     case 1: // Mirror movement burst
-                        for (let j = 0; j < Math.floor(16 * density); j++) { const a = (Math.PI * 2 / 16) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); }
+                        for (let j = 0; j < this._n(16, density); j++) { const a = (Math.PI * 2 / this._n(16, density)) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); }
                         this.attackTimer = 0.7; break;
                     case 2: // Aimed fan
                         for (let j = -4; j <= 4; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.12) * bs * 1.2, Math.sin(angle + j * 0.12) * bs * 1.2, { color: '#00ffff', radius: 3 }); }
@@ -592,9 +616,9 @@ const Boss = {
                 break;
             case 3: // All patterns combined, faster
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(24 * density); j++) { const a = (Math.PI * 2 / 24) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#ffffff', radius: 3 }); } this.attackTimer = 0.4; break;
-                    case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.4, Math.sin(angle + j * 0.1) * bs * 1.4, { color: '#00ffff', radius: 4 }); } for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j-1)*20, this.y, Math.cos(angle)*bs*0.5, Math.sin(angle)*bs*0.5, { color:'#00ff88', radius:3, type:'homing', life:3 }); } this.attackTimer = 0.5; break;
-                    case 2: for (let j = -1; j <= 1; j++) { for (let k = 0; k < 10; k++) Enemies.enemyBullets.spawn(this.x + j * 20, this.y + k * 12, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.4 }); } this.attackTimer = 0.3; break;
+                    case 0: for (let j = 0; j < this._n(24, density); j++) { const a = (Math.PI * 2 / this._n(24, density)) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#ffffff', radius: 3 }); } this.attackTimer = 0.4; break;
+                    case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.4, Math.sin(angle + j * 0.1) * bs * 1.4, { color: '#00ffff', radius: 4 }); } for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j-1)*20, this.y, Math.cos(angle)*bs*0.5, Math.sin(angle)*bs*0.5, { color:'#00ff88', radius:3, type:'homing', life:3, turnRate:1.5 }); } this.attackTimer = 0.5; break;
+                    case 2: for (let j = -1; j <= 1; j++) { for (let k = 0; k < 10; k++) Enemies.enemyBullets.spawn(this.x + j * 20, this.y + k * 12, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.65, harmless: 0.25 }); } this.attackTimer = 0.3; break;
                 }
                 break;
         }
@@ -606,8 +630,8 @@ const Boss = {
             case 0: // Aimed spread from armor
                 for (const seg of this.armor) {
                     if (!seg.alive) continue;
-                    const sx = this.x + Math.cos(seg.angle + this.moveTimer) * 40;
-                    const sy = this.y + Math.sin(seg.angle + this.moveTimer) * 40;
+                    const sx = this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
+                    const sy = this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                     for (let j = -2; j <= 2; j++) {
                         const a = angle + j * 0.2;
                         Enemies.enemyBullets.spawn(sx, sy, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff1493', radius: 3 });
@@ -616,14 +640,15 @@ const Boss = {
                 this.attackTimer = 1.5;
                 break;
             case 1: // Horizontal sweep
-                for (let i = 0; i < Math.floor(12 * density); i++) {
-                    const x = (PLAY_W / (12 * density)) * i + 10;
-                    Enemies.enemyBullets.spawn(this.x, this.y + 30, 0, bs * 0.8, { color: '#ff4040', radius: 3 });
+                const sweepN = this._n(12, density);
+                for (let i = 0; i < sweepN; i++) {
+                    const x = 10 + ((PLAY_W - 20) / (sweepN - 1)) * i;
+                    Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.8, { color: '#ff4040', radius: 3 });
                 }
                 this.attackTimer = 2.0;
                 break;
             case 2: // Ring burst
-                const count = Math.floor(16 * density);
+                const count = this._n(16, density);
                 for (let j = 0; j < count; j++) {
                     const a = (Math.PI * 2 / count) * j;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#ff1493', radius: 3 });
@@ -645,7 +670,7 @@ const Boss = {
                 break;
             case 1: // Double ring
                 for (let ring = 0; ring < 2; ring++) {
-                    const count = Math.floor((12 + ring * 4) * density);
+                    const count = this._n(12 + ring * 4, density);
                     const offset = ring * 0.15;
                     for (let j = 0; j < count; j++) {
                         const a = (Math.PI * 2 / count) * j + offset;
@@ -669,7 +694,7 @@ const Boss = {
                         const bx = this.x + Math.cos(baseA) * dist;
                         const by = this.y + Math.sin(baseA) * dist;
                         if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) {
-                            Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff4488', radius: 4, life: 0.8 });
+                            Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff4488', radius: 4, life: 1.15, harmless: 0.35 });
                         }
                     }
                 }
@@ -682,7 +707,7 @@ const Boss = {
         const pattern = this.patternIndex % 3;
         switch (pattern) {
             case 0: // Spiral
-                const spiralCount = Math.floor(24 * density);
+                const spiralCount = this._n(24, density);
                 for (let j = 0; j < spiralCount; j++) {
                     const a = (Math.PI * 2 / spiralCount) * j + this.moveTimer * 3;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 });
@@ -694,7 +719,7 @@ const Boss = {
                     const a = angle + j * 0.15;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.3, Math.sin(a) * bs * 1.3, { color: '#ff4040', radius: 4 });
                 }
-                const ringCount = Math.floor(10 * density);
+                const ringCount = this._n(10, density);
                 for (let j = 0; j < ringCount; j++) {
                     const a = (Math.PI * 2 / ringCount) * j;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.5, Math.sin(a) * bs * 0.5, { color: '#ff1493', radius: 3 });
@@ -705,7 +730,7 @@ const Boss = {
                 // Telegraph line
                 Particles.spawn(this.x, this.y, 5, { color: '#ff0000', speed: 20, life: 0.5, size: 4 });
                 // Bullet burst after charge
-                for (let j = 0; j < Math.floor(20 * density); j++) {
+                for (let j = 0; j < this._n(20, density); j++) {
                     const a = Math.random() * Math.PI * 2;
                     const spd = 80 + Math.random() * bs;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * spd, Math.sin(a) * spd, { color: '#ff1493', radius: 3 });
@@ -715,57 +740,104 @@ const Boss = {
         }
     },
 
-    hit(damage) {
-        if (!this.active || !this.entered || this.defeated) return;
+    // Armor segment positions (they orbit the core)
+    armorPositions() {
+        return this.armor.map(seg => ({
+            seg,
+            x: this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+            y: this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+        }));
+    },
 
-        // Phase 1: Damage armor first
-        if (this.phase === 1) {
-            for (const seg of this.armor) {
-                if (seg.alive) {
-                    seg.hp -= damage;
-                    this.flashTimer = 0.06;
-                    if (seg.hp <= 0) {
-                        seg.alive = false;
-                        Particles.spawn(
-                            this.x + Math.cos(seg.angle) * 40,
-                            this.y + Math.sin(seg.angle) * 40,
-                            20, { color: '#ff8800', speed: 150, life: 0.5 }
-                        );
-                        Scoring.score += Math.floor(1500 * GameConfig.scoreMultiplier);
-                        Audio.playExplosionSmall();
-                        ScreenShake.trigger(6, 0.3);
-                    }
-                    // Check if all armor destroyed
-                    if (this.armor.every(s => !s.alive)) {
-                        this._nextPhase();
-                    }
-                    return;
+    // Player bullet vs boss. Armor segments are real hit zones: a bullet that touches an
+    // intact segment damages it; one that reaches the core while armor is up does reduced damage.
+    // Returns true if the bullet was absorbed.
+    hitTest(b) {
+        if (this.phase === 1 && this.armor.some(seg => seg.alive)) {
+            for (const p of this.armorPositions()) {
+                if (!p.seg.alive) continue;
+                const dx = b.x - p.x, dy = b.y - p.y;
+                const r = b.radius + BOSS_ARMOR_RADIUS;
+                if (dx * dx + dy * dy < r * r) {
+                    this._damageArmor(p.seg, b.damage);
+                    return true;
                 }
             }
         }
+        const dx = b.x - this.x, dy = b.y - this.y;
+        if (dx * dx + dy * dy < (b.radius + this.radius) * (b.radius + this.radius)) {
+            this.hit(b.damage);
+            return true;
+        }
+        return false;
+    },
 
-        // Phase transition invulnerability
-        if (this.phaseTransitionTimer > 0) return;
+    _damageArmor(seg, damage) {
+        seg.hp -= damage;
+        this.flashTimer = 0.06;
+        if (seg.hp <= 0 && seg.alive) {
+            seg.alive = false;
+            Particles.spawn(
+                this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+                this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+                20, { color: '#ff8800', speed: 150, life: 0.5 }
+            );
+            Scoring.score += Math.floor(1500 * GameConfig.scoreMultiplier);
+            Audio.playExplosionSmall();
+            ScreenShake.trigger(6, 0.3);
+            if (this.armor.every(s => !s.alive)) Scoring.spawnPopup('ARMOR BROKEN', '#ff8800', 20);
+        }
+    },
 
+    // Bomb: damages the core and every intact armor segment
+    bombHit(damage) {
+        if (!this.active || !this.entered || this.defeated) return;
+        if (this.phase === 1) {
+            for (const seg of this.armor) if (seg.alive) this._damageArmor(seg, damage);
+        }
+        this.hit(damage, true);
+    },
+
+    // Core damage. While armor is intact (phase 1) the core only takes a fraction.
+    hit(damage, ignoreArmor) {
+        if (!this.active || !this.entered || this.defeated) return;
+        if (this.phaseTransitionTimer > 0) return; // phase transition invulnerability
+
+        if (!ignoreArmor && this.phase === 1 && this.armor.some(seg => seg.alive)) {
+            damage *= BOSS_ARMORED_CORE_DAMAGE;
+        }
         this.hp -= damage;
         this.flashTimer = 0.06;
 
         if (this.hp <= 0) {
             if (this.phase < this.totalPhases) {
-                this._nextPhase();
+                this._nextPhase(true);
             } else {
                 this._onDefeat();
             }
         }
     },
 
-    _nextPhase() {
+    _phaseTimeout() {
+        Scoring.spawnPopup('TIME OUT', '#888888', 22);
+        for (const seg of this.armor) seg.alive = false;
+        if (this.phase < this.totalPhases) {
+            this._nextPhase(false);
+        } else {
+            this.timedOut = true;
+            this._onDefeat();
+        }
+    },
+
+    _nextPhase(awardBonus) {
         this.phase++;
         this.hp = this.phaseHps[this.phase - 1];
         this.maxHp = this.phaseHps[this.phase - 1];
         this.attackTimer = 2.0;
         this.patternIndex = 0;
+        this.phaseTime = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
+        for (const seg of this.armor) seg.alive = false;
         Enemies.enemyBullets.clear();
         ScreenShake.trigger(12, 0.6);
         Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
@@ -774,7 +846,7 @@ const Boss = {
         Renderer.triggerFlash(0xffffff, 0.2);
         Renderer.triggerGlitch(0.55);
         Audio.playExplosionLarge();
-        Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
+        if (awardBonus) Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
     },
 
@@ -1097,11 +1169,12 @@ const Boss = {
         if (this.armor.length > 0 && this.phase === 1) {
             for (const seg of this.armor) {
                 if (!seg.alive) continue;
-                const ax = Math.cos(seg.angle + this.moveTimer * 0.5) * 45;
-                const ay = Math.sin(seg.angle + this.moveTimer * 0.5) * 45;
+                // Same orbit as the hit zones and the armor's own guns (armorPositions)
+                const ax = Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
+                const ay = Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                 ctx.fillStyle = '#ff6644';
                 ctx.beginPath();
-                ctx.arc(ax, ay, 12, 0, Math.PI * 2);
+                ctx.arc(ax, ay, BOSS_ARMOR_RADIUS - 2, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.strokeStyle = '#ffaa88';
                 ctx.lineWidth = 1.5;
@@ -1141,6 +1214,11 @@ const Boss = {
             ctx.font = '12px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
             ctx.fillText(`${this.bossName} — PHASE ${this.phase}`, PLAY_W / 2, barY + barH + 12);
+            // Phase timer (turns red in the last 10 s)
+            const timeLeft = Math.max(0, BOSS_PHASE_TIME_LIMIT - this.phaseTime);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = timeLeft <= 10 ? '#ff4444' : '#aaaaaa';
+            ctx.fillText(Math.ceil(timeLeft).toString(), barX + barW + 34, barY + barH);
         }
     }
 };

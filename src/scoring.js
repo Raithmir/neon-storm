@@ -21,9 +21,18 @@ const Scoring = {
     bombCount: 0,
     isPerfect: true,  // No deaths AND no bombs this level
 
-    // Graze thresholds for bonus popups
+    // Graze thresholds for bonus popups (per level)
     grazeThresholds: [25, 50, 100, 200, 500],
     nextGrazeThreshold: 0,
+
+    // Per-level counters (end-of-level bonuses and level records use these)
+    levelStartScore: 0,
+    levelGrazes: 0,
+    levelMaxChain: 0,
+
+    // Extra lives at score milestones (normal-difficulty points; scaled by the score multiplier)
+    extendThresholds: [300000, 1000000, 2000000, 4000000],
+    nextExtend: 0,
 
     // Floating popup text system
     popups: [],
@@ -48,6 +57,7 @@ const Scoring = {
         this.chain++;
         this.chainTimer = this.chainTimerMax / GameConfig.chainTimerSpeed;
         if (this.chain > this.maxChain) this.maxChain = this.chain;
+        if (this.chain > this.levelMaxChain) this.levelMaxChain = this.chain;
         this._updateMultiplier();
 
         // Point-blank bonus: 3x within 60px, 2x within 120px, 1.5x within 200px
@@ -87,13 +97,14 @@ const Scoring = {
 
     addGraze() {
         this.grazeCount++;
+        this.levelGrazes++;
         const reward = 5 * (GameConfig.graze.rewardMultiplier || 1);
         this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + reward);
         this.score += Math.floor(10 * GameConfig.scoreMultiplier);
 
         // Graze threshold milestones
         if (this.nextGrazeThreshold < this.grazeThresholds.length &&
-            this.grazeCount >= this.grazeThresholds[this.nextGrazeThreshold]) {
+            this.levelGrazes >= this.grazeThresholds[this.nextGrazeThreshold]) {
             const count = this.grazeThresholds[this.nextGrazeThreshold];
             const bonusScore = count * 10;
             this.score += Math.floor(bonusScore * GameConfig.scoreMultiplier);
@@ -102,13 +113,51 @@ const Scoring = {
         }
     },
 
+    // A player shot connected: keeps the chain timer topped up while you keep
+    // hitting (DoDonPachi-style), so skilled players can bridge wave gaps on tough enemies
+    onHit() {
+        if (this.chain > 0 && this.chainTimer > 0) {
+            const max = this.chainTimerMax / GameConfig.chainTimerSpeed;
+            this.chainTimer = Math.min(max, this.chainTimer + 0.08);
+        }
+    },
+
+    // Start-of-level bookkeeping (level score, per-level bonus counters, milestones)
+    beginLevel() {
+        this.levelStartScore = this.score;
+        this.levelGrazes = 0;
+        this.levelMaxChain = 0;
+        this.levelDeaths = 0;
+        this.levelBombs = 0;
+        this.nextGrazeThreshold = 0;
+    },
+
+    get levelScore() {
+        return this.score - this.levelStartScore;
+    },
+
+    _checkExtends() {
+        const mult = GameConfig.scoreMultiplier || 1;
+        while (this.nextExtend < this.extendThresholds.length &&
+               this.score >= this.extendThresholds[this.nextExtend] * mult) {
+            this.nextExtend++;
+            if (Player.lives < 9) {
+                Player.lives++;
+                this.spawnPopup('EXTEND! 1UP', '#00ff88', 28);
+                Audio.playPowerUp();
+            }
+        }
+    },
+
     recordDeath() {
         this.deathCount++;
+        this.levelDeaths++;
         this.isPerfect = false;
     },
 
     recordBomb() {
         this.bombCount++;
+        this.levelBombs++;
         this.isPerfect = false;
     },
 
@@ -132,6 +181,7 @@ const Scoring = {
     },
 
     update(dt) {
+        this._checkExtends();
         if (this.chainTimer > 0) {
             this.chainTimer -= dt;
             if (this.chainTimer <= 0) {
@@ -185,8 +235,9 @@ const Scoring = {
         this.surgeActive = false;
         this.surgeDuration = 0;
         this.nextGrazeThreshold = 0;
-        // Keep: score, maxChain, grazeCount, deathCount, bombCount, isPerfect
+        // Keep: score, maxChain, grazeCount, deathCount, bombCount, isPerfect, nextExtend
         this.popups = [];
+        this.beginLevel();
     },
 
     reset() {
@@ -203,6 +254,8 @@ const Scoring = {
         this.bombCount = 0;
         this.isPerfect = true;
         this.nextGrazeThreshold = 0;
+        this.nextExtend = 0;
         this.popups = [];
+        this.beginLevel();
     }
 };

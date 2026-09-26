@@ -240,12 +240,14 @@ const checks = {
 
     async endBonusesPerLevel(g) {
         const r = await g.ev(() => {
+            // Level 1: lots of grazes and a long chain
             Game.startLevel(0, 'normal', false);
-            Scoring.grazeCount = 300; Scoring.maxChain = 60;
-            EndRunBonus.calculate(true, 3, Scoring.maxChain, Scoring.grazeCount, 150);
-            Scoring.softReset();
-            // Level 2 with no new grazes and no new chain
-            EndRunBonus.calculate(true, 3, Scoring.maxChain, Scoring.grazeCount, 150);
+            for (let i = 0; i < 300; i++) Scoring.addGraze();
+            Scoring.maxChain = 60;
+            // Continue to level 2 and finish it with no new grazes or chain, via the real end-of-level path
+            Game.startLevel(1, 'normal', true);
+            Game._processEndRun(true);
+            HighScores.enteringInitials = false;
             const b = label => (EndRunBonus.bonuses.find(x => x.label === label) || { value: 0 }).value;
             return { level2GrazeBonus: b('GRAZE BONUS'), level2ChainBonus: b('CHAIN BONUS') };
         });

@@ -1,4 +1,35 @@
 // ============================================================
+//  SCHEDULER (game-time delayed actions)
+// ============================================================
+// Delayed spawns and state changes run on game time, not wall-clock time, so
+// they pause with the game and are discarded when a level restarts.
+const Scheduler = {
+    time: 0,
+    queue: [],
+
+    after(seconds, fn) {
+        this.queue.push({ at: this.time + Math.max(0, seconds), fn });
+    },
+
+    update(dt) {
+        this.time += dt;
+        // Run due items in order; items scheduled while running wait for the next update
+        const due = this.queue.filter(item => item.at <= this.time).sort((a, b) => a.at - b.at);
+        if (due.length === 0) return;
+        this.queue = this.queue.filter(item => item.at > this.time);
+        for (const item of due) item.fn();
+    },
+
+    get pending() { return this.queue.length; },
+
+    clear() {
+        this.time = 0;
+        this.queue = [];
+    }
+};
+
+
+// ============================================================
 //  WAVE SYSTEM (Data-driven level sequencer)
 // ============================================================
 const WaveSystem = {
@@ -59,18 +90,21 @@ const WaveSystem = {
                         y = -20;
                 }
 
-                // Delayed spawn
-                setTimeout(() => {
-                    if (Game.state === 'playing') {
-                        Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
-                    }
-                }, (group.delay || 0) + i * (group.stagger || 200));
+                // Delayed spawn (game time — pauses with the game)
+                Scheduler.after(((group.delay || 0) + i * (group.stagger || 200)) / 1000, () => {
+                    Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                });
             }
         }
     },
 
+    // All waves dispatched and every delayed spawn has happened
+    allWavesSpawned() {
+        return this.currentWaveIndex >= this.waves.length && Scheduler.pending === 0;
+    },
+
     isComplete() {
-        return this.currentWaveIndex >= this.waves.length && Enemies.list.length === 0 && !this.bossActive;
+        return this.allWavesSpawned() && Enemies.list.length === 0 && !this.bossActive;
     }
 };
 
@@ -346,7 +380,7 @@ const EndlessMode = {
 
         // Power-up drop every 3 waves
         if (wave % 3 === 2) {
-            setTimeout(() => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); }, 2000);
+            Scheduler.after(2, () => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); });
         }
 
         // Spawn via WaveSystem-style spawning
@@ -361,11 +395,9 @@ const EndlessMode = {
                     default: x = 40 + Math.random() * (PLAY_W - 80); y = -20 - Math.random() * 60; break;
                 }
                 const delay = (group.delay || 0) + i * (group.stagger || 200);
-                setTimeout(() => {
-                    if (EndlessMode.active) {
-                        Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
-                    }
-                }, delay);
+                Scheduler.after(delay / 1000, () => {
+                    Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                });
             }
         }
     }

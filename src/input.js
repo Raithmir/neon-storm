@@ -19,6 +19,7 @@ const Input = {
         focus: ['ShiftLeft', 'ShiftRight', 'KeyX'],
         dash: ['KeyC', 'KeyV'],
         bomb: ['KeyB', 'KeyN'],
+        surge: ['KeyF', 'KeyM'],
         pause: ['Escape', 'KeyP'],
         confirm: ['Enter', 'Space'],
         back: ['Escape', 'Backspace']
@@ -30,6 +31,7 @@ const Input = {
         focus: [6],          // Left trigger
         dash: [5],           // Right bumper
         bomb: [4],           // Left bumper
+        surge: [7, 3],       // Right trigger, Y
         pause: [9],          // Start
         confirm: [0],        // A
         back: [1]            // B
@@ -40,7 +42,7 @@ const Input = {
     gpBindings: {},
 
     // Actions that can be rebound by the player (excludes menu-only actions)
-    rebindableActions: ['up', 'down', 'left', 'right', 'fire', 'focus', 'dash', 'bomb', 'pause'],
+    rebindableActions: ['up', 'down', 'left', 'right', 'fire', 'focus', 'dash', 'bomb', 'surge', 'pause'],
 
     // Human-readable names for key codes
     keyDisplayNames: {

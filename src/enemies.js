@@ -45,11 +45,25 @@ const Enemies = {
         }
     },
 
+    // Enemies whose patterns scale bullet COUNT with density; all others scale fire frequency
+    COUNT_SCALED: { phase_shifter: true, bomber: true },
+    // Seconds an enemy on these paths stays before retreating (genre convention: nothing waits forever)
+    LIFETIMES: { hover: 14, strafe: 16 },
+    CARRIER_MAX_LAUNCHES: 6,
+    NO_FIRE_RADIUS: 110,          // no point-blank shots at the player
+    FIRE_CEILING: PLAY_H * 0.75,  // enemies below this line stop firing
+
     spawn(type, x, y, movePath) {
         const def = this.types[type];
         if (!def) return;
         const hpScale = GameConfig._levelHpScale || 1;
         const spdScale = GameConfig._levelSpeedScale || 1;
+        const rateScale = GameConfig._levelFireRateScale || 1;
+        const density = GameConfig.bulletDensity || 1;
+        const densityRate = this.COUNT_SCALED[type] ? 1 : density;
+        const fireRate = def.fireRate / (rateScale * densityRate);
+        // Spawned beside the play area (e.g. "sides" formation): fly in before following the path
+        const entryX = x < 0 ? 70 : x > PLAY_W ? PLAY_W - 70 : null;
         const enemy = {
             type, x, y,
             hp: Math.ceil(def.hp * hpScale),
@@ -62,17 +76,22 @@ const Enemies = {
             color: def.color,
             accent: def.accent || def.color,
             bulletColor: def.bulletColor || '#ff1493',
-            fireRate: def.fireRate / spdScale,
-            fireTimer: def.fireRate * Math.random(),
+            fireRate,
+            fireTimer: fireRate * Math.random(),
             bulletSpeed: def.bulletSpeed * spdScale,
             dropChance: def.dropChance,
             cancelBullets: def.cancelBullets || false,
             movePath: movePath || 'straight_down',
             moveTimer: 0,
+            entryX,
+            retreating: false,
+            launches: 0,
             active: true,
             flashTimer: 0,
             // Phase shifter specific
             teleportTimer: type === 'phase_shifter' ? 3.0 : 0,
+            warpTimer: 0,
+            warpTo: null,
             // Shielded cruiser specific
             shieldAngle: 0,
             // Sniper specific
@@ -114,26 +133,40 @@ const Enemies = {
             e.prevX = oldX;
             e.prevY = oldY;
 
-            // Firing
+            // Firing — only on screen, above the fire ceiling, and not point-blank on the player
             e.fireTimer -= dt;
-            if (e.fireTimer <= 0 && e.y > 0 && e.y < PLAY_H - 50) {
-                this._firePattern(e, playerX, playerY);
+            if (e.fireTimer <= 0) {
+                const onScreen = e.x > 0 && e.x < PLAY_W && e.y > 0 && e.y < this.FIRE_CEILING;
+                const pdx = playerX - e.x, pdy = playerY - e.y;
+                const tooClose = pdx * pdx + pdy * pdy < this.NO_FIRE_RADIUS * this.NO_FIRE_RADIUS;
+                if (onScreen && !tooClose && e.warpTimer <= 0 && !e.retreating) {
+                    this._firePattern(e, playerX, playerY);
+                }
                 e.fireTimer = e.fireRate;
             }
 
-            // Phase shifter teleport
-            if (e.type === 'phase_shifter') {
-                e.teleportTimer -= dt;
-                if (e.teleportTimer <= 0) {
-                    e.x = 40 + Math.random() * (PLAY_W - 80);
-                    e.y = 40 + Math.random() * (PLAY_H * 0.4);
-                    e.teleportTimer = 2.5 + Math.random();
-                    Particles.spawn(e.x, e.y, 8, { color: e.bulletColor, speed: 80, life: 0.3 });
+            // Phase shifter teleport — telegraphed: a marker appears at the destination first
+            if (e.type === 'phase_shifter' && !e.retreating) {
+                if (e.warpTimer > 0) {
+                    e.warpTimer -= dt;
+                    if (e.warpTimer <= 0) {
+                        e.x = e.warpTo.x;
+                        e.y = e.warpTo.y;
+                        e.fireTimer = Math.max(e.fireTimer, 0.8); // no instant shot after arriving
+                        Particles.spawn(e.x, e.y, 8, { color: e.bulletColor, speed: 80, life: 0.3 });
+                    }
+                } else {
+                    e.teleportTimer -= dt;
+                    if (e.teleportTimer <= 0) {
+                        e.warpTo = { x: 40 + Math.random() * (PLAY_W - 80), y: 40 + Math.random() * (PLAY_H * 0.4) };
+                        e.warpTimer = 0.45;
+                        e.teleportTimer = 2.5 + Math.random();
+                    }
                 }
             }
 
-            // Sniper aim tracking
-            if (e.type === 'sniper') {
+            // Sniper aim tracking — locks 0.3 s before the shot so the laser sight is honest
+            if (e.type === 'sniper' && e.fireTimer > 0.3) {
                 e.aimAngle = Math.atan2(playerY - e.y, playerX - e.x);
             }
 
@@ -142,16 +175,36 @@ const Enemies = {
                 e.shieldAngle += dt * 1.5;
             }
 
-            // Remove if off screen
-            if (e.y > PLAY_H + 60 || e.x < -60 || e.x > PLAY_W + 60) {
+            // Remove if off screen (retreating enemies leave through the top)
+            if (e.y > PLAY_H + 60 || e.x < -60 || e.x > PLAY_W + 60 || (e.retreating && e.y < -60)) {
                 this.list.splice(i, 1);
             }
         }
 
-        this.enemyBullets.update(dt);
+        // Enemy homing bullets track the player
+        this.enemyBullets.update(dt, Player.alive ? [{ x: playerX, y: playerY }] : null);
+    },
+
+    // Every remaining enemy leaves the screen (used when the boss arrives)
+    retreatAll() {
+        for (const e of this.list) e.retreating = true;
     },
 
     _updateMovement(e, dt) {
+        // Fly in from beside the play area first
+        if (e.entryX !== null) {
+            const step = Math.max(80, e.speed) * 1.5 * dt;
+            e.x += Math.max(-step, Math.min(step, e.entryX - e.x));
+            if (Math.abs(e.x - e.entryX) < 1) { e.entryX = null; e.moveTimer = 0; }
+            return;
+        }
+        // Retreat: leave upwards after the path's lifetime (or when told to)
+        const lifetime = this.LIFETIMES[e.movePath];
+        if (lifetime && e.moveTimer > lifetime) e.retreating = true;
+        if (e.retreating) {
+            e.y -= Math.max(90, e.speed * 1.5) * dt;
+            return;
+        }
         switch (e.movePath) {
             case 'straight_down':
                 e.y += e.speed * dt;
@@ -203,10 +256,10 @@ const Enemies = {
                 }
                 break;
             case 'missile_turret':
-                // Fires from barrel tip
+                // Slow homing missile from the barrel tip — gentle turn rate, easy to out-turn
                 this.enemyBullets.spawn(e.x, e.y + e.radius * 0.85,
                     Math.cos(angle) * bs * 0.8, Math.sin(angle) * bs * 0.8,
-                    { color: e.bulletColor, radius: 4, life: 4 });
+                    { color: e.bulletColor, radius: 4, life: 4, type: 'homing', turnRate: 1.0 });
                 break;
             case 'phase_shifter': {
                 // Radial burst from energy core (centre is fine)
@@ -247,15 +300,16 @@ const Enemies = {
                 break;
             }
             case 'sniper': {
-                // Fires from barrel end
+                // Fires from barrel end along the locked aim (matches the laser sight)
                 this.enemyBullets.spawn(e.x, e.y + e.radius * 0.9,
-                    Math.cos(angle) * bs, Math.sin(angle) * bs,
+                    Math.cos(e.aimAngle) * bs, Math.sin(e.aimAngle) * bs,
                     { color: e.bulletColor, radius: 4, life: 3 });
                 break;
             }
             case 'carrier':
                 // Drones launch from hangar bay
-                if (Enemies.list.length < 30) {
+                if (Enemies.list.length < 30 && e.launches < this.CARRIER_MAX_LAUNCHES) {
+                    e.launches++;
                     Enemies.spawn('scout_drone', e.x + (Math.random() - 0.5) * 15, e.y + e.radius * 0.6, 'straight_down');
                 }
                 break;
@@ -338,6 +392,18 @@ const Enemies = {
 
     draw(ctx) {
         const isGlitchLevel = Background.bgType === 'void';
+        // Phase shifter warp-in markers (teleport telegraph)
+        for (const e of this.list) {
+            if (e.type !== 'phase_shifter' || !(e.warpTimer > 0) || !e.warpTo) continue;
+            const t = 1 - e.warpTimer / 0.45;
+            ctx.strokeStyle = e.color;
+            ctx.globalAlpha = 0.3 + 0.5 * t;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(e.warpTo.x, e.warpTo.y, e.radius * (2 - t), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
         for (const e of this.list) {
             ctx.save();
             // Glitch jitter for Level 6
@@ -660,13 +726,21 @@ const PowerUps = {
     list: [],
     types: ['spread', 'homing', 'laser', 'drone'],
 
+    colors: { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' },
+    WEAPON_CYCLE: ['spread', 'homing', 'laser'],
+    CYCLE_SECONDS: 1.5,
+
+    // Weapon pickups cycle colour (Raiden-style) so the player picks the weapon by timing
+    // the grab; drone pickups are a separate slot and never cycle.
     spawn(x, y, forceType) {
         const type = forceType || this.types[Math.floor(Math.random() * this.types.length)];
-        const colors = { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' };
+        const cycles = !forceType && type !== 'drone';
         this.list.push({
             x, y,
             type,
-            color: colors[type],
+            color: this.colors[type],
+            cycles,
+            cycleTimer: this.CYCLE_SECONDS,
             vy: 50,
             life: 999,
             radius: 10,
@@ -677,6 +751,15 @@ const PowerUps = {
     update(dt) {
         for (let i = this.list.length - 1; i >= 0; i--) {
             const p = this.list[i];
+            if (p.cycles) {
+                p.cycleTimer -= dt;
+                if (p.cycleTimer <= 0) {
+                    p.cycleTimer = this.CYCLE_SECONDS;
+                    const next = (this.WEAPON_CYCLE.indexOf(p.type) + 1) % this.WEAPON_CYCLE.length;
+                    p.type = this.WEAPON_CYCLE[next];
+                    p.color = this.colors[p.type];
+                }
+            }
             p.y += p.vy * dt;
             p.life -= dt;
             p.bobTimer += dt * 4;
