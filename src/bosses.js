@@ -3,32 +3,32 @@
 // ============================================================
 const BossTypes = {
     architect: {
-        name: 'THE ARCHITECT', phases: 3, phaseHps: [250, 300, 350],
-        hasArmor: true, armorCount: 4, armorHp: 50,
+        name: 'THE ARCHITECT', phases: 3, phaseHps: [200, 260, 300],
+        hasArmor: true, armorCount: 4, armorHp: 40,
         colors: ['#ff4444', '#ff00ff', '#ff0040']
     },
     furnace: {
-        name: 'THE FURNACE', phases: 2, phaseHps: [550, 650],
+        name: 'THE FURNACE', phases: 2, phaseHps: [460, 540],
         hasArmor: false,
         colors: ['#ff6600', '#ff2200']
     },
     leviathan: {
-        name: 'THE LEVIATHAN', phases: 3, phaseHps: [400, 450, 450],
+        name: 'THE LEVIATHAN', phases: 3, phaseHps: [340, 380, 380],
         hasArmor: false,
         colors: ['#4488ff', '#00ffaa', '#ff44ff']
     },
     interceptor_duo: {
-        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [650, 800],
+        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [300, 400], // fast-moving (low uptime): lower HP
         hasArmor: false,
         colors: ['#ffaa00', '#ff4400']
     },
     nexus: {
-        name: 'THE NEXUS', phases: 3, phaseHps: [360, 450, 550],
-        hasArmor: true, armorCount: 6, armorHp: 40,
+        name: 'THE NEXUS', phases: 3, phaseHps: [300, 380, 460],
+        hasArmor: true, armorCount: 6, armorHp: 32,
         colors: ['#cc44ff', '#ff00ff', '#ffffff']
     },
     echo: {
-        name: 'THE ECHO', phases: 3, phaseHps: [500, 580, 670],
+        name: 'THE ECHO', phases: 3, phaseHps: [420, 490, 560],
         hasArmor: false,
         colors: ['#00ffff', '#ff00ff', '#ffffff']
     }
@@ -39,7 +39,7 @@ const BossTypes = {
 const BOSS_PHASE_TIME_LIMIT = 45;   // seconds; phase ends without its bonus (Touhou-style timeout)
 const BOSS_ARMOR_ORBIT = 40;        // armor segments orbit the core at this radius
 const BOSS_ARMOR_RADIUS = 16;
-const BOSS_ARMORED_CORE_DAMAGE = 0.25; // core damage multiplier while armor is up
+const BOSS_ARMORED_CORE_DAMAGE = 0.5;  // core damage multiplier while armor is up
 
 
 // ============================================================

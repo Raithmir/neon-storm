@@ -25,6 +25,8 @@ Reference points used: **DoDonPachi / Cave shooters** (chain gauge, shot/laser s
 
 Detail for each follows, grouped by system.
 
+> **Update — fix pass complete.** Every issue in this review has been addressed in the code, and all 26 regression checks in `tools/sim/checks.js` pass. §12 lists what changed, the genre targets used, and before/after measurements.
+
 ---
 
 ## 2. Player weapons
@@ -282,3 +284,94 @@ Peak density roughly triples from L1 to L6 on every difficulty. L2 and L4 are *l
 - **Feel-based claims** (§9 movement speed, §4.1 readability of fast bullets, power-up frustration in §2.2): these need human play-testing.
 - **Low-frame-rate tunnelling (§8):** analytical only. The simulation ran at a fixed 60 fps.
 - **Armor replacing phase 1 (§3.2):** from code reading. The time-to-kill runs are consistent with it but don't isolate it.
+
+---
+
+## 12. Fix pass and re-measured balance
+
+### Targets used (from the genre)
+
+| Area | Reference (Cave / Touhou / Raiden) | Target chosen |
+|---|---|---|
+| Stage length | ~3–5 min including the boss | ~2.5–3.5 min (existing wave content unchanged) |
+| Boss fight | 45–120 s real time, per-phase timeouts (Touhou spell timers) | ~35–65 s at 100% uptime with Lv3–Lv5, 45 s phase timeout |
+| Power curve | Lv1 → max ≈ 2.5–4× | ≈ 2.3× for every weapon, all within ~20% of each other |
+| Level scaling | Density and patterns escalate; bullet speed stays readable | Density ×1.75, HP ×1.9, bullet speed capped ×1.2 at Level 6 |
+| Lives | Persist between stages, with score extends | Persist; extends at 300k / 1M / 2M / 4M (× difficulty score multiplier) |
+
+### What changed
+
+- **Timing and state (§7, §8):** a game-time `Scheduler` replaces every `setTimeout`. The boss waits for the final wave to spawn, and stragglers retreat after 8 s. Only "next level" continues a run. Dash keeps existing invulnerability. A Lv1 death removes the weapon. Custom difficulty no longer compounds density on each restart (a bug found during the fix).
+- **Weapons (§2):**
+  - The base shot has its own timer.
+  - Spread fans are strict supersets level to level, and focus tightens the fan.
+  - Laser pierces, and its side beams stay inside a scout's hitbox.
+  - Homing fires every 0.26 s with one more missile per level.
+  - Drones get contact damage, a shield pulse (Lv2+) and boss targeting.
+  - Weapon pickups cycle colour, and every weapon pickup adds a level.
+- **Surge and graze (§5.1, §5.2):**
+  - Surge doubles the fire rate and player shots cancel bullets, activated with a dedicated SURGE input (F/M, RT/Y).
+  - Half the meter is kept on death.
+  - No grazing while invulnerable, except when dashing.
+- **Bosses (§3):**
+  - HP retuned, with a 45 s phase timeout and an on-screen timer.
+  - Positional armor: the core takes 50% while armor is up, and bombs hit every segment.
+  - Density no longer creates gaps, duplicates or off-screen bullets.
+  - The Architect sweep is fixed, stationary beams telegraph for 0.35 s, and Echo's and the turret's homing shots actually home (gently).
+- **Enemies and levels (§4, §6):**
+  - Density now applies to every enemy.
+  - Enemies don't fire off-screen, below 75% of the screen height, or within 110 px of the player.
+  - Sniper aim locks 0.3 s before the shot, and the phase shifter's teleport is telegraphed.
+  - Hover/strafe enemies retreat after 14–16 s, carriers are capped at 6 launches, and side-formation gunships fly in.
+  - Asteroid spawns are per second, not per frame.
+  - The escort gets 40 HP with regeneration and stays in the lower screen.
+- **Difficulty (§4.2):** Casual has 60% density with auto-fire. Hardcore keeps Focus. Death-bomb window: Casual 0.25 s, Normal 0.15 s.
+- **Scoring and progression (§5, §7):**
+  - Per-level bonuses, milestones and level records.
+  - The chain timer refills on hits.
+  - Lives, bombs and weapons persist between levels, with score extends.
+  - A retry after game over gives a Lv2 minimum loadout.
+- **Collision (§8):** swept bullet-vs-hitbox test, so fast bullets can't tunnel through.
+
+### Before → after (measured on the beta build with `tools/sim`)
+
+| Measurement | Before | After |
+|---|---|---|
+| Regression checks passing | 0 / 24 | **26 / 26** (two checks added: upgrade monotonicity, escort position) |
+| Laser DPS Lv1 → Lv5 (boss target) | 13.3 → 78.3 (5.9×) | 16.3 → 38.1 (2.3×) |
+| Homing Lv1 vs unarmed (7.9) | 7.2 (below unarmed) | 14.6 |
+| Spread upgrade regressions | Lv2, Lv4 (boss); Lv4, Lv5 (scout) | none; each level is a superset of the last |
+| Laser Lv5 vs scout | 36.0 (below Lv4's 53.6) | 34.7 (above Lv4's 30.4) |
+| Boss TTK, Laser Lv5 | 7–18 s | 34–55 s |
+| Boss TTK, Lv3 weapons | 11–83 s | 49–83 s |
+| Boss TTK, unarmed | 80 s to over 145 s (no timeout) | 91–138 s (bounded by the 45 s phase timeout) |
+| Level 4 escort survives a no-hit run (Normal) | 0 of 3 runs | yes, on all three difficulties |
+| Levels 4–6 stalling (Normal/Hardcore bot runs) | 7 of 13 | 0 of 9 |
+| Stage length (Normal bot, waves + boss) | L1 ≈ 2.5 min; boss 7–145 s depending on weapon | 2.8–3.3 min on every level |
+| Peak enemy bullets, Normal L1 → L6 | 81 → 216 | 78 → 172 |
+
+Boss TTK after the fix (invincible autopilot that stays under the boss and focuses once lined up):
+
+| Boss | Unarmed | Spread L3 | Spread L5 | Homing L5 | Laser L3 | Laser L5 |
+|---|---|---|---|---|---|---|
+| Architect (L1) | 127 s | 58 s | 40 s | 42 s | 51 s | 36 s |
+| Furnace (L2) | 92 s | 65 s | 47 s | 40 s | 49 s | 34 s |
+| Leviathan (L3) | 136 s | 66 s | 45 s | 43 s | 49 s | 35 s |
+| Interceptor Duo (L4) | 92 s | 83 s | 64 s | 32 s | 75 s | 55 s |
+| Nexus (L5) | 138 s | 73 s | 57 s | 56 s | 65 s | 49 s |
+| Echo (L6) | 138 s | 57 s | 45 s | 52 s | 57 s | 41 s |
+
+### Second pass: issues found and fixed
+
+The first round of measurements after the fixes exposed five further problems, all fixed and re-measured:
+
+1. **Boss HP overshot.** Fights ran up to the timeout for most loadouts, so boss HP was cut ~20%, and the core takes 50% (not 25%) while armored.
+2. **The Interceptor Duo timed out with most weapons.** It strafes faster than a focused ship can follow (~40% uptime), so its HP was reduced to 300 / 400.
+3. **Homing was the strongest practical weapon,** because it never misses. Its interval went from 0.22 s to 0.26 s.
+4. **Spread still regressed against small targets at range** (Lv2/Lv3 below Lv1). The fans were redesigned as strict supersets, and `weaponUpgradesNeverWeaker` now guards this.
+5. **The escort still died in every Level 4 run.** It drifted up the screen into the boss's point-blank range after ~100 s. It is now held in the lower 38% of the screen, and `escortStaysOutOfBossRange` guards this.
+
+### Still open
+
+- **Human play-testing.** The bot dodges with perfect information, so it can't judge feel: movement speed (§9), the readability of fast patterns, or whether the new boss lengths feel right.
+- **The GDD** (`docs/neon-storm-gdd.md`) still describes some superseded values, such as Surge activation, weapon levels and Casual density. It should be updated once the tuning above is accepted.

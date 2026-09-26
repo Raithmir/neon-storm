@@ -33,8 +33,8 @@ Results are written to `tools/sim/out/` (git-ignored) as JSON.
 
 ## Regression checks
 
-Each check asserts the **correct** behaviour. On the original beta (`ec6cad4`) all 24 failed; after the fix
-pass they all pass, so a failure now means a regression. Checks that
+Each check asserts the **correct** behaviour. On the original beta (`ec6cad4`) all of the first 24 failed; after the fix
+pass every check passes, so a failure now means a regression. Checks that
 encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNotTriggeredByFocusedFire`,
 `hoverEnemiesLeave`) should be edited or removed if the design goes a different way.
 
@@ -46,6 +46,8 @@ encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNot
 | `autofireWhileFocusing` | 9 |
 | `casualPresetAutofire` | 4.2 |
 | `dronesLv2DealDamage`, `dronesTargetBoss`, `laserPierces` | 2.1 |
+| `weaponUpgradesNeverWeaker` | 2.1 |
+| `escortStaysOutOfBossRange` | 6 |
 | `surgeNotTriggeredByFocusedFire`, `surgeEffects` | 5.1 |
 | `noGrazeWhileInvulnerable`, `grazeMilestonesOncePerLevel` | 5.2 |
 | `endBonusesPerLevel` | 5.4 |

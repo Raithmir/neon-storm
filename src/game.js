@@ -235,7 +235,7 @@ const Game = {
         }
     },
 
-    BOSS_GRACE_SECONDS: 20,
+    BOSS_GRACE_SECONDS: 8,
     _lastWaveClearTimer: null,
     _continuing: false,
     _retryLoadout: null,

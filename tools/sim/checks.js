@@ -11,6 +11,7 @@
 const { launch, writeResult } = require('./harness');
 
 const PLAY_WIDTH = 720; // matches PLAY_W in src/constants.js
+const PLAY_H_CHECK = 960; // matches PLAY_H
 
 // Start a level with no waves or asteroids and (by default) an invulnerable player
 async function startQuiet(g, opts = {}) {
@@ -175,6 +176,52 @@ const checks = {
         const r = await g.ev(() => ({ frontDamage: Math.round(1e6 - window.__front.hp), backDamage: Math.round(1e6 - window.__back.hp) }));
         return { section: '§2.1', expect: 'Lv5 laser pierces (as the GDD and code comments state)',
             pass: r.backDamage > 0, evidence: r };
+    },
+
+    async weaponUpgradesNeverWeaker(g) {
+        // DPS at 250 px against a boss-sized and a scout-sized target, for every weapon level
+        const measure = async (weapon, level, radius) => {
+            await g.ev(([weapon, level, radius]) => {
+                Game.startLevel(0, 'normal', false);
+                WaveSystem.waves = []; Asteroids.clear();
+                Player.primaryWeapon = weapon; Player.primaryLevel = level; Player.droneLevel = 0;
+                Player.x = 360; Player.y = 800; Player.invincible = true; Player.invincibleTimer = 999;
+                GameConfig.fireMode = 'manual';
+                const d = Enemies.spawn('carrier', 360, 550, 'static');
+                d.hp = d.maxHp = 1e9; d.radius = radius; d.fireTimer = d.fireRate = 1e9; d.dropChance = 0;
+                window.__dummy = d; Input.keys['Space'] = true;
+            }, [weapon, level, radius]);
+            await g.run(200);
+            const start = await g.ev(() => window.__dummy.hp);
+            await g.run(3000);
+            const dps = (start - await g.ev(() => window.__dummy.hp)) / 3;
+            await g.key('Space', false);
+            return +dps.toFixed(1);
+        };
+        const regressions = [], table = {};
+        for (const weapon of ['spread', 'homing', 'laser']) {
+            for (const radius of [50, 12]) {
+                const row = [];
+                for (let level = 1; level <= 5; level++) row.push(await measure(weapon, level, radius));
+                table[weapon + '@r' + radius] = row;
+                for (let i = 1; i < row.length; i++) {
+                    if (row[i] < row[i - 1] * 0.97) regressions.push(`${weapon} r${radius} L${i + 1} < L${i}`);
+                }
+            }
+        }
+        return { section: '§2.1', expect: 'No weapon upgrade does less damage than the level below it',
+            pass: regressions.length === 0, evidence: { regressions, dps: table } };
+    },
+
+    async escortStaysOutOfBossRange(g) {
+        const r = await g.ev(() => {
+            Game.startLevel(3, 'normal', false);
+            let minY = Escort.y;
+            for (let i = 0; i < 60 * 200; i++) { WaveSystem.levelTimer += 1 / 60; Escort.update(1 / 60); minY = Math.min(minY, Escort.y); }
+            return { minY: Math.round(minY), bossZoneBottom: Math.round(PLAY_H * 0.4) };
+        });
+        return { section: '§6', expect: 'The escort never drifts up into the boss zone (200 s)',
+            pass: r.minY > PLAY_H_CHECK * 0.5, evidence: r };
     },
 
     // --- Surge / graze / scoring --------------------------------------------

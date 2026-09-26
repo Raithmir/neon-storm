@@ -1,8 +1,8 @@
 // ============================================================
 //  NEON STORM — Boss time-to-kill measurement
 // ============================================================
-// An invincible autopilot moves under the boss at normal ship speed and holds
-// fire from boss entry to defeat. Times include phase-transition invulnerability
+// An invincible autopilot moves under the boss and holds fire from boss entry to
+// defeat, holding Focus once lined up (as a player would). Times include phase-transition invulnerability
 // and any minions the boss spawns.
 //
 // Usage: node tools/sim/boss-ttk.js [levelIndex,...]   (default: all 6 bosses)
@@ -27,7 +27,10 @@ async function measure(levelIndex, weapon, level) {
         Game.update = (dt) => {
             Player.invincible = true; Player.invincibleTimer = 99;
             if (Boss.active) {
-                const step = Player.speed * dt;
+                // Like a player: hold Focus once lined up under the boss (tightens spread)
+                const lined = Math.abs(Boss.x - Player.x) < 40;
+                Input.keys['ShiftLeft'] = lined;
+                const step = Player.speed * (lined ? GameConfig.focus.speedMultiplier : 1) * dt;
                 Player.x += Math.max(-step, Math.min(step, Boss.x - Player.x));
                 Player.y += Math.max(-step, Math.min(step, 780 - Player.y));
             }

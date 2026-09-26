@@ -85,18 +85,19 @@ const Player = {
     // Lv1 ≈ 17-18 DPS, Lv3 ≈ 26-31, Lv5 ≈ 36-45 — a ~2.5× power curve like
     // Raiden/Touhou, with every weapon within ~20% of the others.
     BASE_SHOT_INTERVAL: 0.12,
-    WEAPON_INTERVALS: { spread: 0.22, homing: 0.22, laser: 0.1 },
+    WEAPON_INTERVALS: { spread: 0.25, homing: 0.26, laser: 0.1 }, // homing never misses, so it fires slower
     DRONE_SHOT_INTERVAL: 0.5,
     DRONE_CONTACT_INTERVAL: 0.15,
     FOCUS_SPREAD_FACTOR: 0.35,
-    // Spread fans grow from the inside out, so an upgrade never lands fewer shots on a target
+    // Spread fans: each level is a strict superset of the previous one (pellets are only
+    // ever added), so an upgrade can never land fewer shots on a target at any range
     SPREAD_ANGLES: [
         null,
-        [-0.1, 0.1],
-        [-0.1, 0, 0.1],
-        [-0.28, -0.1, 0, 0.1, 0.28],
-        [-0.32, -0.14, -0.05, 0.05, 0.14, 0.32],
-        [-0.4, -0.26, -0.14, -0.05, 0.05, 0.14, 0.26, 0.4],
+        [-0.05, 0.05],
+        [-0.05, 0, 0.05],
+        [-0.2, -0.05, 0, 0.05, 0.2],
+        [-0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2],
+        [-0.34, -0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2, 0.34],
     ],
 
     droneCount() {

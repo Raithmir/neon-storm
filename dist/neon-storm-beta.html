@@ -7295,6 +7295,7 @@ const Escort = {
     hp: 40,
     maxHp: 40,
     HIT_RADIUS: 28,
+    MIN_Y: PLAY_H * 0.62,
     REGEN_PER_SECOND: 0.3,
     alive: true,
     flashTimer: 0,
@@ -7311,8 +7312,9 @@ const Escort = {
         if (!this.active || !this.alive) return;
         this.flashTimer = Math.max(0, this.flashTimer - dt);
         this.hp = Math.min(this.maxHp, this.hp + this.REGEN_PER_SECOND * dt); // damage control repairs
-        // Slowly move upward
-        this.y -= 5 * dt;
+        // Slowly move upward, but stay in the lower part of the screen — drifting into the
+        // boss's point-blank range made the escort mission unwinnable
+        this.y = Math.max(this.MIN_Y, this.y - 5 * dt);
         this.x += Math.sin(WaveSystem.levelTimer * 0.3) * 15 * dt;
         this.x = Math.max(60, Math.min(PLAY_W - 60, this.x));
 
@@ -7451,32 +7453,32 @@ const Campaign = {
 // ============================================================
 const BossTypes = {
     architect: {
-        name: 'THE ARCHITECT', phases: 3, phaseHps: [250, 300, 350],
-        hasArmor: true, armorCount: 4, armorHp: 50,
+        name: 'THE ARCHITECT', phases: 3, phaseHps: [200, 260, 300],
+        hasArmor: true, armorCount: 4, armorHp: 40,
         colors: ['#ff4444', '#ff00ff', '#ff0040']
     },
     furnace: {
-        name: 'THE FURNACE', phases: 2, phaseHps: [550, 650],
+        name: 'THE FURNACE', phases: 2, phaseHps: [460, 540],
         hasArmor: false,
         colors: ['#ff6600', '#ff2200']
     },
     leviathan: {
-        name: 'THE LEVIATHAN', phases: 3, phaseHps: [400, 450, 450],
+        name: 'THE LEVIATHAN', phases: 3, phaseHps: [340, 380, 380],
         hasArmor: false,
         colors: ['#4488ff', '#00ffaa', '#ff44ff']
     },
     interceptor_duo: {
-        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [650, 800],
+        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [300, 400], // fast-moving (low uptime): lower HP
         hasArmor: false,
         colors: ['#ffaa00', '#ff4400']
     },
     nexus: {
-        name: 'THE NEXUS', phases: 3, phaseHps: [360, 450, 550],
-        hasArmor: true, armorCount: 6, armorHp: 40,
+        name: 'THE NEXUS', phases: 3, phaseHps: [300, 380, 460],
+        hasArmor: true, armorCount: 6, armorHp: 32,
         colors: ['#cc44ff', '#ff00ff', '#ffffff']
     },
     echo: {
-        name: 'THE ECHO', phases: 3, phaseHps: [500, 580, 670],
+        name: 'THE ECHO', phases: 3, phaseHps: [420, 490, 560],
         hasArmor: false,
         colors: ['#00ffff', '#ff00ff', '#ffffff']
     }
@@ -7487,7 +7489,7 @@ const BossTypes = {
 const BOSS_PHASE_TIME_LIMIT = 45;   // seconds; phase ends without its bonus (Touhou-style timeout)
 const BOSS_ARMOR_ORBIT = 40;        // armor segments orbit the core at this radius
 const BOSS_ARMOR_RADIUS = 16;
-const BOSS_ARMORED_CORE_DAMAGE = 0.25; // core damage multiplier while armor is up
+const BOSS_ARMORED_CORE_DAMAGE = 0.5;  // core damage multiplier while armor is up
 
 
 // ============================================================
@@ -8760,18 +8762,19 @@ const Player = {
     // Lv1 ≈ 17-18 DPS, Lv3 ≈ 26-31, Lv5 ≈ 36-45 — a ~2.5× power curve like
     // Raiden/Touhou, with every weapon within ~20% of the others.
     BASE_SHOT_INTERVAL: 0.12,
-    WEAPON_INTERVALS: { spread: 0.22, homing: 0.22, laser: 0.1 },
+    WEAPON_INTERVALS: { spread: 0.25, homing: 0.26, laser: 0.1 }, // homing never misses, so it fires slower
     DRONE_SHOT_INTERVAL: 0.5,
     DRONE_CONTACT_INTERVAL: 0.15,
     FOCUS_SPREAD_FACTOR: 0.35,
-    // Spread fans grow from the inside out, so an upgrade never lands fewer shots on a target
+    // Spread fans: each level is a strict superset of the previous one (pellets are only
+    // ever added), so an upgrade can never land fewer shots on a target at any range
     SPREAD_ANGLES: [
         null,
-        [-0.1, 0.1],
-        [-0.1, 0, 0.1],
-        [-0.28, -0.1, 0, 0.1, 0.28],
-        [-0.32, -0.14, -0.05, 0.05, 0.14, 0.32],
-        [-0.4, -0.26, -0.14, -0.05, 0.05, 0.14, 0.26, 0.4],
+        [-0.05, 0.05],
+        [-0.05, 0, 0.05],
+        [-0.2, -0.05, 0, 0.05, 0.2],
+        [-0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2],
+        [-0.34, -0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2, 0.34],
     ],
 
     droneCount() {
@@ -11750,7 +11753,7 @@ const Game = {
         }
     },
 
-    BOSS_GRACE_SECONDS: 20,
+    BOSS_GRACE_SECONDS: 8,
     _lastWaveClearTimer: null,
     _continuing: false,
     _retryLoadout: null,

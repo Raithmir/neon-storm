@@ -95,6 +95,7 @@ const Escort = {
     hp: 40,
     maxHp: 40,
     HIT_RADIUS: 28,
+    MIN_Y: PLAY_H * 0.62,
     REGEN_PER_SECOND: 0.3,
     alive: true,
     flashTimer: 0,
@@ -111,8 +112,9 @@ const Escort = {
         if (!this.active || !this.alive) return;
         this.flashTimer = Math.max(0, this.flashTimer - dt);
         this.hp = Math.min(this.maxHp, this.hp + this.REGEN_PER_SECOND * dt); // damage control repairs
-        // Slowly move upward
-        this.y -= 5 * dt;
+        // Slowly move upward, but stay in the lower part of the screen — drifting into the
+        // boss's point-blank range made the escort mission unwinnable
+        this.y = Math.max(this.MIN_Y, this.y - 5 * dt);
         this.x += Math.sin(WaveSystem.levelTimer * 0.3) * 15 * dt;
         this.x = Math.max(60, Math.min(PLAY_W - 60, this.x));
 
