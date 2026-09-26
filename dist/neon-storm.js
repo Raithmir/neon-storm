@@ -1,11 +1,8 @@
 
 // === constants.js ===
 // ============================================================
-//  NEON STORM — Core Engine
+//  NEON STORM — Core Constants & Canvas Setup
 // ============================================================
-
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 
 // --- Screen / Layout Constants ---
 const SCREEN_W = 1920;
@@ -18,19 +15,885 @@ const HUD_LEFT_W = PLAY_X;
 const HUD_RIGHT_X = PLAY_X + PLAY_W;
 const HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
 
+// Canvas 2D overlay — menus, HUD, transitions
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 canvas.width = SCREEN_W;
 canvas.height = SCREEN_H;
 
-// Scale canvas to fit window
+// Scale canvases to fit window
 function resizeCanvas() {
     const scaleX = window.innerWidth / SCREEN_W;
     const scaleY = window.innerHeight / SCREEN_H;
     const scale = Math.min(scaleX, scaleY);
     canvas.style.width = (SCREEN_W * scale) + 'px';
     canvas.style.height = (SCREEN_H * scale) + 'px';
+
+    // Position the Pixi canvas over the play area within the container
+    if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
+        Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
+    }
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+// Safe initial sizing (Renderer not yet available — just size the overlay canvas)
+(function() {
+    const scaleX = window.innerWidth / SCREEN_W;
+    const scaleY = window.innerHeight / SCREEN_H;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = (SCREEN_W * scale) + 'px';
+    canvas.style.height = (SCREEN_H * scale) + 'px';
+})();
+
+
+// === renderer.js ===
+// ============================================================
+//  RENDERER — Canvas 2D glow + PixiJS GPU pipeline
+//
+//  Pixi path architecture:
+//    1. Gameplay draws to offCanvas (720×960) via Canvas 2D
+//    2. Glow halos draw to glowCanvas via addGlow()
+//    3. offCanvas  → gameSprite  (game content)
+//    4. _starSlowLayer / _starFastLayer: TilingSprite GPU star fields
+//    5. glowCanvas → _glowSprite + BlurFilter = real GPU bloom
+//    6. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
+//    7. _explosionLayer: fireball PIXI.Sprites for big hits
+//    8. _laserBeamMesh: MeshRope for laser beam visual
+//    9. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
+//   10. _flashSprite sits on app.stage (above colour grade + bloom)
+//   11. app.stage carries chroma + CRT + glitch filters (screen-space)
+//
+//  Canvas 2D fallback: glowCanvas composited additively into
+//  compCanvas, then blitted onto overlay — identical to alpha build.
+// ============================================================
+const Renderer = {
+    app: null,
+    pixiCanvas: null,
+    ready: false,
+    usePixi: false,
+
+    // Offscreen canvases
+    offCanvas: null,     // Gameplay drawing (Canvas 2D)
+    offCtx: null,
+    glowCanvas: null,    // Glow halos → drives GPU bloom in Pixi mode
+    glowCtx: null,
+    compCanvas: null,    // Used only in Canvas 2D fallback
+    compCtx: null,
+
+    // PixiJS container hierarchy
+    gameLayer: null,         // Container: all gameplay Pixi objects
+    bulletLayer: null,       // ParticleContainer (additive) — bullet particles
+    particleLayer: null,     // ParticleContainer (additive) — effect particles
+    _explosionLayer: null,   // Container — fireball sprites for big explosions
+    _explosionSprites: [],
+
+    // Main game canvas sprite
+    gameTexture: null,
+    _canvasSource: null,
+    gameSprite: null,
+
+    // GPU star field — TilingSprites, added additively above gameSprite
+    _starSlowLayer: null,
+    _starFastLayer: null,
+    _starScrollSlow: 0,
+    _starScrollFast: 0,
+
+    // Bloom: glowCanvas uploaded with BlurFilter
+    _glowCanvasSource: null,
+    _glowSprite: null,
+    _blurFilter: null,
+
+    // Laser beam — MeshRope driven from player position
+    _laserBeamMesh: null,
+    _laserBeamPoints: null,
+    _laserBeamTime: 0,
+    _laserBeamTex: null,
+
+    // Per-level colour grade
+    _colorGrade: null,
+
+    // Shared glow radial gradient texture for Pixi particles
+    glowTex: null,
+
+    // Screen flash (on stage, above bloom)
+    _flashSprite: null,
+    _flashTimer: 0,
+    _flashDuration: 0,
+    _flashColor: 0xffffff,
+
+    // Chromatic aberration
+    _chromaFilter: null,
+    _chromaTimer: 0,
+    _chromaDuration: 0,
+    _chromaIntensity: 0,
+    _chromaPersist: false,
+
+    // CRT scanline filter
+    _crtFilter: null,
+    _crtEnabled: false,
+
+    // Shockwave (bomb / surge) — pixi-filters ShockwaveFilter on gameLayer
+    _shockwaveFilter: null,
+    _shockwaveActive: false,
+    _shockwaveTimer: 0,
+
+    // God-ray (boss entrance) — pixi-filters GodrayFilter on gameLayer
+    _godrayFilter: null,
+    _godrayTimer: 0,
+    _godrayDuration: 0,
+
+    // Glitch (boss phase change) — pixi-filters GlitchFilter on app.stage
+    _glitchFilter: null,
+    _glitchTimer: 0,
+
+    // Canvas 2D glow image (used by addGlow fallback)
+    _glowImg: null,
+
+    async init() {
+        this.offCanvas = document.createElement('canvas');
+        this.offCanvas.width = PLAY_W;
+        this.offCanvas.height = PLAY_H;
+        this.offCtx = this.offCanvas.getContext('2d');
+
+        this.glowCanvas = document.createElement('canvas');
+        this.glowCanvas.width = PLAY_W;
+        this.glowCanvas.height = PLAY_H;
+        this.glowCtx = this.glowCanvas.getContext('2d');
+
+        this.compCanvas = document.createElement('canvas');
+        this.compCanvas.width = PLAY_W;
+        this.compCanvas.height = PLAY_H;
+        this.compCtx = this.compCanvas.getContext('2d');
+
+        this._glowImg = this._createGlowImage(64);
+
+        if (typeof PIXI === 'undefined') {
+            console.warn('[Renderer] PixiJS not loaded — Canvas 2D only');
+            this.ready = true;
+            return;
+        }
+
+        try {
+            this.app = new PIXI.Application();
+            await this.app.init({
+                width: PLAY_W,
+                height: PLAY_H,
+                backgroundAlpha: 0,
+                antialias: false,
+                preference: 'webgl',
+            });
+
+            this.pixiCanvas = this.app.canvas;
+            this.pixiCanvas.id = 'pixi-play';
+
+            const container = document.getElementById('game-container');
+            if (container) {
+                container.insertBefore(this.pixiCanvas, canvas);
+            } else {
+                canvas.parentNode.insertBefore(this.pixiCanvas, canvas);
+            }
+
+            // --- Game canvas sprite ---
+            this._canvasSource = new PIXI.CanvasSource({
+                resource: this.offCanvas,
+                width: PLAY_W,
+                height: PLAY_H,
+            });
+            this.gameTexture = new PIXI.Texture(this._canvasSource);
+            this.gameSprite = new PIXI.Sprite(this.gameTexture);
+
+            // --- GPU Bloom: glowCanvas → sprite with BlurFilter + additive blend ---
+            this._glowCanvasSource = new PIXI.CanvasSource({
+                resource: this.glowCanvas,
+                width: PLAY_W,
+                height: PLAY_H,
+            });
+            const glowTex = new PIXI.Texture(this._glowCanvasSource);
+            this._glowSprite = new PIXI.Sprite(glowTex);
+            this._blurFilter = new PIXI.BlurFilter({ strength: 8, quality: 3 });
+            this._glowSprite.filters = [this._blurFilter];
+            this._glowSprite.blendMode = 'add';
+            this._glowSprite.alpha = 1.3;
+
+            // --- Shared glow texture for native Pixi particles ---
+            this.glowTex = this._createGlowTexture(64);
+
+            // --- Bullet ParticleContainer (additive, GPU-batched) ---
+            this.bulletLayer = new PIXI.ParticleContainer({
+                texture: this.glowTex,
+                dynamicProperties: { vertex: true, position: true, rotation: true, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+                blendMode: 'add',
+            });
+
+            // --- Particle ParticleContainer (additive, GPU-batched) ---
+            this.particleLayer = new PIXI.ParticleContainer({
+                texture: this.glowTex,
+                dynamicProperties: { vertex: true, position: true, rotation: true, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+                blendMode: 'add',
+            });
+
+            // --- Explosion fireball sprites ---
+            this._explosionLayer = new PIXI.Container();
+
+            // --- Per-level colour grade (identity by default) ---
+            this._colorGrade = new PIXI.ColorMatrixFilter();
+
+            // --- Game layer: assembles all gameplay Pixi objects ---
+            // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
+            this.gameLayer = new PIXI.Container();
+            this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
+            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (sky + all Canvas 2D)
+            this._initStarLayers();                         // 2-3. GPU star tiles
+            this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
+            this.gameLayer.addChild(this.bulletLayer);      // 5. Native bullets
+            this.gameLayer.addChild(this.particleLayer);    // 6. Native particles
+            this.gameLayer.addChild(this._explosionLayer);  // 7. Fireball sprites
+            this.app.stage.addChild(this.gameLayer);
+
+            // --- Screen flash overlay (above colour grade + bloom) ---
+            this._flashSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+            this._flashSprite.width = PLAY_W;
+            this._flashSprite.height = PLAY_H;
+            this._flashSprite.alpha = 0;
+            this._flashSprite.blendMode = 'add';
+            this.app.stage.addChild(this._flashSprite);
+
+            // Context loss
+            this.pixiCanvas.addEventListener('webglcontextlost', (e) => {
+                e.preventDefault();
+                console.warn('[Renderer] WebGL context lost');
+                this.usePixi = false;
+            });
+            this.pixiCanvas.addEventListener('webglcontextrestored', () => {
+                console.log('[Renderer] WebGL context restored');
+                this.usePixi = true;
+            });
+
+            this._initChromaFilter();
+            this._initCRTFilter();
+
+            // --- pixi-filters effects (guarded — no-ops if PIXIFilters not loaded) ---
+            this._initShockwaveFilter();
+            this._initGodrayFilter();
+            this._initGlitchFilter();
+
+            // --- Laser beam MeshRope ---
+            this._initLaserBeam();
+
+            // Apply initial filter chain
+            this._rebuildGameLayerFilters();
+            this._rebuildFilterChain();
+
+            this.usePixi = true;
+            this.ready = true;
+            console.log('[Renderer] PixiJS v' + PIXI.VERSION + ' (' + this.app.renderer.name + ') — bloom + colour grade active');
+        } catch (e) {
+            console.warn('[Renderer] PixiJS init failed:', e);
+            this.ready = true;
+        }
+    },
+
+    // Canvas 2D white radial gradient (used for addGlow and baked into glowTex)
+    _createGlowImage(size) {
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const g = c.getContext('2d');
+        const half = size / 2;
+        const grad = g.createRadialGradient(half, half, 0, half, half, half);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(0.3, 'rgba(255,255,255,0.5)');
+        grad.addColorStop(0.7, 'rgba(255,255,255,0.15)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+        return c;
+    },
+
+    // Convert the glow canvas into a PIXI.Texture for ParticleContainer use
+    _createGlowTexture(size) {
+        const canvas = this._createGlowImage(size);
+        const src = new PIXI.CanvasSource({ resource: canvas, width: size, height: size });
+        return new PIXI.Texture(src);
+    },
+
+    // --- Star field (TilingSprite) ---
+
+    _createStarTexture(count, maxRadius, seed) {
+        const c = document.createElement('canvas');
+        c.width = PLAY_W; c.height = PLAY_H;
+        const g = c.getContext('2d');
+        // Seeded random via simple LCG so each call is reproducible
+        let r = seed || 1337;
+        const rng = () => { r = (r * 1664525 + 1013904223) & 0xffffffff; return (r >>> 0) / 0xffffffff; };
+        for (let i = 0; i < count; i++) {
+            const x = rng() * PLAY_W;
+            const y = rng() * PLAY_H;
+            const radius = 0.4 + rng() * maxRadius;
+            const alpha = 0.25 + rng() * 0.6;
+            g.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            g.beginPath();
+            g.arc(x, y, radius, 0, Math.PI * 2);
+            g.fill();
+        }
+        const src = new PIXI.CanvasSource({ resource: c, width: PLAY_W, height: PLAY_H });
+        return new PIXI.Texture(src);
+    },
+
+    _initStarLayers() {
+        try {
+            // Deep slow stars — many, small
+            const slowTex = this._createStarTexture(120, 1.0, 9001);
+            this._starSlowLayer = new PIXI.TilingSprite({ texture: slowTex, width: PLAY_W, height: PLAY_H });
+            this._starSlowLayer.blendMode = 'add';
+            this._starSlowLayer.alpha = 0.65;
+
+            // Near fast stars — fewer, slightly larger
+            const fastTex = this._createStarTexture(40, 1.6, 4242);
+            this._starFastLayer = new PIXI.TilingSprite({ texture: fastTex, width: PLAY_W, height: PLAY_H });
+            this._starFastLayer.blendMode = 'add';
+            this._starFastLayer.alpha = 0.85;
+
+            this.gameLayer.addChild(this._starSlowLayer);
+            this.gameLayer.addChild(this._starFastLayer);
+        } catch (e) {
+            console.warn('[Renderer] Star layers unavailable:', e);
+        }
+    },
+
+    // --- Laser beam (MeshRope) ---
+
+    _createLaserBeamTexture() {
+        const w = 14, h = 32;
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d');
+        // Horizontal gradient: transparent → bright centre → transparent
+        const grad = g.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0,    'rgba(255,255,255,0)');
+        grad.addColorStop(0.3,  'rgba(255,255,255,0.35)');
+        grad.addColorStop(0.5,  'rgba(255,255,255,1)');
+        grad.addColorStop(0.7,  'rgba(255,255,255,0.35)');
+        grad.addColorStop(1,    'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, w, h);
+        const src = new PIXI.CanvasSource({ resource: c, width: w, height: h });
+        return new PIXI.Texture(src);
+    },
+
+    _initLaserBeam() {
+        if (!this.usePixi) return;
+        try {
+            this._laserBeamTex = this._createLaserBeamTexture();
+            this._laserBeamPoints = [];
+            const numPoints = 10;
+            for (let i = 0; i < numPoints; i++) {
+                this._laserBeamPoints.push(new PIXI.Point(PLAY_W / 2, PLAY_H * (1 - i / (numPoints - 1))));
+            }
+            this._laserBeamMesh = new PIXI.MeshRope({
+                texture: this._laserBeamTex,
+                points: this._laserBeamPoints,
+            });
+            this._laserBeamMesh.blendMode = 'add';
+            this._laserBeamMesh.visible = false;
+            this._laserBeamMesh.alpha = 0.9;
+            this.gameLayer.addChild(this._laserBeamMesh);
+        } catch (e) {
+            console.warn('[Renderer] LaserBeam mesh unavailable:', e);
+        }
+    },
+
+    // Called each frame from Player.update() — x/y is the ship's gun tip
+    updateLaserBeam(x, y, color, visible) {
+        if (!this._laserBeamMesh) return;
+        if (!visible) {
+            this._laserBeamMesh.visible = false;
+            return;
+        }
+        const pts = this._laserBeamPoints;
+        const numPoints = pts.length;
+        const t = this._laserBeamTime;
+        for (let i = 0; i < numPoints; i++) {
+            const frac = i / (numPoints - 1);             // 0 = ship tip, 1 = top of screen
+            const waveAmp = (1 - frac) * (1 - frac) * 10; // strongest near ship, tapers to 0
+            pts[i].x = x + Math.sin(t * 7 + i * 1.3) * waveAmp;
+            pts[i].y = y * (1 - frac);                    // ship y → 0 at top
+        }
+        const hex = typeof color === 'string' ? this.colorToHex(color) : (color || 0x4488ff);
+        this._laserBeamMesh.tint = hex;
+        this._laserBeamMesh.visible = true;
+    },
+
+    // --- pixi-filters effects ---
+
+    _initShockwaveFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._shockwaveFilter = new PIXIFilters.ShockwaveFilter({
+                center: [0.5, 0.5],
+                time: 0,
+                amplitude: 35,
+                wavelength: 90,
+                brightness: 0.85,
+                speed: 650,
+                radius: -1,
+            });
+            this._shockwaveFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] ShockwaveFilter unavailable:', e);
+        }
+    },
+
+    _initGodrayFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._godrayFilter = new PIXIFilters.GodrayFilter({
+                angle: 30,
+                gain: 0.55,
+                lacunarity: 2.5,
+                time: 0,
+                parallel: false,
+                x: 0.5,
+                y: 0.0,
+                alpha: 0,
+            });
+            this._godrayFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] GodrayFilter unavailable:', e);
+        }
+    },
+
+    _initGlitchFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._glitchFilter = new PIXIFilters.GlitchFilter({
+                slices: 6,
+                offset: 55,
+                fillMode: 0,
+                average: false,
+                seed: Math.random(),
+                minSize: 8,
+                sampleSize: 512,
+            });
+            this._glitchFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] GlitchFilter unavailable:', e);
+        }
+    },
+
+    // gameLayer.filters = colorGrade + any active game-space effects
+    _rebuildGameLayerFilters() {
+        if (!this.gameLayer) return;
+        const filters = [this._colorGrade];
+        if (this._shockwaveFilter && this._shockwaveActive) filters.push(this._shockwaveFilter);
+        if (this._godrayFilter && this._godrayTimer > 0) filters.push(this._godrayFilter);
+        this.gameLayer.filters = filters;
+    },
+
+    _initChromaFilter() {
+        try {
+            this._chromaFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: `
+                        in vec2 aPosition;
+                        out vec2 vTextureCoord;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uOutputTexture;
+                        vec4 filterVertexPosition(void) {
+                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+                            return vec4(position, 0.0, 1.0);
+                        }
+                        vec2 filterTextureCoord(void) {
+                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
+                        }
+                        void main(void) {
+                            gl_Position = filterVertexPosition();
+                            vTextureCoord = filterTextureCoord();
+                        }`,
+                    fragment: `
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform float uOffset;
+                        void main(void) {
+                            float r = texture(uTexture, vTextureCoord + vec2(uOffset, 0.0)).r;
+                            float g = texture(uTexture, vTextureCoord).g;
+                            float b = texture(uTexture, vTextureCoord - vec2(uOffset, 0.0)).b;
+                            float a = texture(uTexture, vTextureCoord).a;
+                            gl_FragColor = vec4(r, g, b, a);
+                        }`
+                },
+                resources: {
+                    chromaUniforms: { uOffset: { value: 0.0, type: 'f32' } }
+                }
+            });
+        } catch (e) {
+            console.warn('[Renderer] Chroma filter unavailable:', e);
+        }
+    },
+
+    _initCRTFilter() {
+        try {
+            this._crtFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: `
+                        in vec2 aPosition;
+                        out vec2 vTextureCoord;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uOutputTexture;
+                        vec4 filterVertexPosition(void) {
+                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+                            return vec4(position, 0.0, 1.0);
+                        }
+                        vec2 filterTextureCoord(void) {
+                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
+                        }
+                        void main(void) {
+                            gl_Position = filterVertexPosition();
+                            vTextureCoord = filterTextureCoord();
+                        }`,
+                    fragment: `
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform vec4 uInputSize;
+                        uniform float uIntensity;
+                        void main(void) {
+                            vec4 color = texture(uTexture, vTextureCoord);
+                            float line = mod(vTextureCoord.y * uInputSize.y, 2.0);
+                            float scanline = 1.0 - step(1.0, line) * uIntensity;
+                            gl_FragColor = vec4(color.rgb * scanline, color.a);
+                        }`
+                },
+                resources: {
+                    crtUniforms: { uIntensity: { value: 0.12, type: 'f32' } }
+                }
+            });
+        } catch (e) {
+            console.warn('[Renderer] CRT filter unavailable:', e);
+        }
+    },
+
+    // Chroma + CRT + Glitch live on app.stage (screen-space, above colour grade + bloom)
+    _rebuildFilterChain() {
+        if (!this.app) return;
+        const filters = [];
+        if (this._chromaFilter && (this._chromaTimer > 0 || this._chromaPersist)) filters.push(this._chromaFilter);
+        if (this._crtFilter && this._crtEnabled) filters.push(this._crtFilter);
+        if (this._glitchFilter && this._glitchTimer > 0) filters.push(this._glitchFilter);
+        this.app.stage.filters = filters.length > 0 ? filters : null;
+    },
+
+    // --- Frame lifecycle ---
+
+    getPlayCtx() { return this.offCtx; },
+
+    beginFrame() {
+        this.offCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+    },
+
+    updateEffects(dt) {
+        if (!this.usePixi) return;
+
+        // Chromatic aberration
+        if (this._chromaTimer > 0 && !this._chromaPersist) {
+            this._chromaTimer -= dt;
+            if (this._chromaTimer <= 0) {
+                this._chromaTimer = 0;
+                this._chromaIntensity = 0;
+                this._rebuildFilterChain();
+            }
+        }
+        if (this._chromaFilter) {
+            const t = this._chromaDuration > 0 ? this._chromaTimer / this._chromaDuration : 0;
+            const offset = this._chromaPersist ? this._chromaIntensity : this._chromaIntensity * t;
+            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = offset;
+        }
+
+        // Screen flash
+        if (this._flashTimer > 0) {
+            this._flashTimer -= dt;
+            const t = Math.max(0, this._flashTimer / this._flashDuration);
+            this._flashSprite.alpha = t * 0.8;
+            this._flashSprite.tint = this._flashColor;
+            if (this._flashTimer <= 0) this._flashSprite.alpha = 0;
+        }
+
+        // Explosion fireball sprites
+        for (let i = this._explosionSprites.length - 1; i >= 0; i--) {
+            const e = this._explosionSprites[i];
+            e.elapsed += dt;
+            const t = e.elapsed / e.duration;
+            const eased = 1 - Math.pow(1 - Math.min(t, 1), 2);
+            e.sprite.scale.set(e.maxScale * eased);
+            e.sprite.alpha = 1 - t;
+            if (t >= 1) {
+                this._explosionLayer.removeChild(e.sprite);
+                this._explosionSprites.splice(i, 1);
+            }
+        }
+
+        // Star field scroll
+        if (this._starSlowLayer) {
+            this._starScrollSlow += dt * 18;
+            this._starScrollFast += dt * 55;
+            this._starSlowLayer.tilePosition.y = this._starScrollSlow;
+            this._starFastLayer.tilePosition.y = this._starScrollFast;
+        }
+
+        // Laser beam time (drives oscillation animation)
+        if (this._laserBeamMesh) {
+            this._laserBeamTime += dt;
+        }
+
+        // Shockwave — expand until wave leaves screen (~1.2s at speed 650)
+        if (this._shockwaveActive && this._shockwaveFilter) {
+            this._shockwaveTimer -= dt;
+            this._shockwaveFilter.time += dt;
+            if (this._shockwaveTimer <= 0) {
+                this._shockwaveActive = false;
+                this._shockwaveFilter.enabled = false;
+                this._rebuildGameLayerFilters();
+            }
+        }
+
+        // God-ray fade in → hold → fade out
+        if (this._godrayTimer > 0 && this._godrayFilter) {
+            this._godrayTimer -= dt;
+            this._godrayFilter.time += dt * 0.4;
+            const frac = this._godrayTimer / this._godrayDuration;
+            if (frac > 0.8) {
+                this._godrayFilter.alpha = (1 - frac) / 0.2 * 0.65;
+            } else if (frac < 0.3) {
+                this._godrayFilter.alpha = frac / 0.3 * 0.65;
+            } else {
+                this._godrayFilter.alpha = 0.65;
+            }
+            if (this._godrayTimer <= 0) {
+                this._godrayTimer = 0;
+                this._godrayFilter.enabled = false;
+                this._rebuildGameLayerFilters();
+            }
+        }
+
+        // Glitch — update seed each frame for randomness, disable when expired
+        if (this._glitchTimer > 0 && this._glitchFilter) {
+            this._glitchTimer -= dt;
+            this._glitchFilter.seed = Math.random();
+            if (this._glitchTimer <= 0) {
+                this._glitchTimer = 0;
+                this._glitchFilter.enabled = false;
+                this._rebuildFilterChain();
+            }
+        }
+    },
+
+    // Pixi mode: upload game + glow canvases separately (glow sprite handles bloom)
+    // Fallback mode: composite glow additively into compCanvas for blitToOverlay
+    endFrame() {
+        if (this.usePixi) {
+            this._canvasSource.update();
+            this._glowCanvasSource.update();
+            this.app.renderer.render(this.app.stage);
+        } else {
+            const c = this.compCtx;
+            c.clearRect(0, 0, PLAY_W, PLAY_H);
+            c.globalCompositeOperation = 'source-over';
+            c.drawImage(this.offCanvas, 0, 0);
+            c.globalCompositeOperation = 'lighter';
+            c.drawImage(this.glowCanvas, 0, 0);
+            c.globalCompositeOperation = 'source-over';
+        }
+    },
+
+    // Canvas 2D fallback only — blits compCanvas onto the overlay
+    blitToOverlay(targetCtx, x, y) {
+        targetCtx.drawImage(this.compCanvas, x, y);
+    },
+
+    setShake(x, y) {
+        if (this.usePixi && this.gameLayer) {
+            this.gameLayer.position.set(x, y);
+        }
+    },
+
+    resize(scale, pixiLeft, pixiTop) {
+        if (!this.pixiCanvas) return;
+        this.pixiCanvas.style.width = (PLAY_W * scale) + 'px';
+        this.pixiCanvas.style.height = (PLAY_H * scale) + 'px';
+        this.pixiCanvas.style.left = pixiLeft + 'px';
+        this.pixiCanvas.style.top = pixiTop + 'px';
+    },
+
+    // --- Glow API (Canvas 2D — writes to glowCanvas, blurred by _glowSprite in Pixi mode) ---
+
+    _glowCache: {},
+
+    _getTintedGlow(colorHex) {
+        if (this._glowCache[colorHex]) return this._glowCache[colorHex];
+        const size = 64;
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const g = c.getContext('2d');
+        g.drawImage(this._glowImg, 0, 0);
+        g.globalCompositeOperation = 'source-in';
+        g.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+        g.fillRect(0, 0, size, size);
+        this._glowCache[colorHex] = c;
+        return c;
+    },
+
+    addGlow(x, y, color, size, alpha) {
+        const hex = typeof color === 'number' ? color : this.colorToHex(color);
+        const img = this._getTintedGlow(hex);
+        const g = this.glowCtx;
+        g.globalAlpha = alpha || 0.4;
+        g.drawImage(img, x - size, y - size, size * 2, size * 2);
+        g.globalAlpha = 1;
+    },
+
+    colorToHex(cssColor) {
+        if (typeof cssColor === 'number') return cssColor;
+        if (cssColor.charAt(0) === '#') {
+            if (cssColor.length === 4) {
+                const r = cssColor[1], g = cssColor[2], b = cssColor[3];
+                return parseInt(r + r + g + g + b + b, 16);
+            }
+            return parseInt(cssColor.slice(1, 7), 16);
+        }
+        if (cssColor.charAt(0) === 'r') {
+            const m = cssColor.match(/([\d.]+)/g);
+            if (m) return (parseInt(m[0]) << 16) | (parseInt(m[1]) << 8) | parseInt(m[2]);
+        }
+        if (cssColor.charAt(0) === 'h') {
+            const m = cssColor.match(/([\d.]+)/g);
+            if (m) {
+                const rgb = _rendererHslToRgb(parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2]));
+                return (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+            }
+        }
+        return 0xffffff;
+    },
+
+    // --- Bloom control ---
+
+    setBloomIntensity(scale, threshold) {
+        if (!this._blurFilter || !this._glowSprite) return;
+        this._blurFilter.strength = 6 + scale * 7.5;
+        this._glowSprite.alpha = 1.0 + scale * 0.5;
+    },
+
+    // --- Per-level colour grade ---
+
+    setColorGrade(opts) {
+        if (!this._colorGrade) return;
+        this._colorGrade.reset();
+        if (!opts) return;
+        if (opts.hue)        this._colorGrade.hue(opts.hue, false);
+        if (opts.saturate)   this._colorGrade.saturate(opts.saturate, false);
+        if (opts.contrast)   this._colorGrade.contrast(opts.contrast, false);
+        if (opts.brightness) this._colorGrade.brightness(1 + opts.brightness, false);
+    },
+
+    // --- Explosion fireball sprite ---
+
+    spawnExplosionSprite(x, y, maxScale, colorHex, duration) {
+        if (!this.usePixi || !this.glowTex || !this._explosionLayer) return;
+        const s = new PIXI.Sprite(this.glowTex);
+        s.anchor.set(0.5);
+        s.x = x;
+        s.y = y;
+        s.tint = colorHex || 0xff8800;
+        s.alpha = 1.0;
+        s.scale.set(0.05);
+        s.blendMode = 'add';
+        this._explosionLayer.addChild(s);
+        this._explosionSprites.push({ sprite: s, maxScale: maxScale || 3, duration: duration || 0.5, elapsed: 0 });
+    },
+
+    // --- Screen-space effects ---
+
+    triggerChroma(intensity, duration) {
+        if (!this._chromaFilter) return;
+        this._chromaIntensity = intensity || 0.008;
+        this._chromaDuration = duration || 0.3;
+        this._chromaTimer = this._chromaDuration;
+        this._rebuildFilterChain();
+    },
+
+    setPersistentChroma(intensity) {
+        if (!this._chromaFilter) return;
+        this._chromaPersist = intensity > 0;
+        this._chromaIntensity = intensity;
+        this._rebuildFilterChain();
+    },
+
+    triggerFlash(color, duration) {
+        if (!this.usePixi) return;
+        this._flashColor = color || 0xffffff;
+        this._flashDuration = duration || 0.3;
+        this._flashTimer = this._flashDuration;
+        this._flashSprite.alpha = 0.8;
+        this._flashSprite.tint = this._flashColor;
+    },
+
+    setCRT(enabled) {
+        this._crtEnabled = enabled;
+        this._rebuildFilterChain();
+    },
+
+    // --- Game-space effects ---
+
+    // Shockwave ripple expanding from a normalised position (0-1 range)
+    triggerShockwave(normX, normY) {
+        if (!this._shockwaveFilter) return;
+        this._shockwaveFilter.center = [normX, normY];
+        this._shockwaveFilter.time = 0;
+        this._shockwaveActive = true;
+        this._shockwaveTimer = 1.1;
+        this._shockwaveFilter.enabled = true;
+        this._rebuildGameLayerFilters();
+    },
+
+    // Volumetric god-ray light from top-centre — use on boss entrance
+    triggerGodray(duration) {
+        if (!this._godrayFilter) return;
+        this._godrayDuration = duration || 2.5;
+        this._godrayTimer = this._godrayDuration;
+        this._godrayFilter.time = 0;
+        this._godrayFilter.alpha = 0;
+        this._godrayFilter.enabled = true;
+        this._rebuildGameLayerFilters();
+    },
+
+    // Screen-space glitch burst — use on boss phase transition
+    triggerGlitch(duration) {
+        if (!this._glitchFilter) return;
+        this._glitchTimer = duration || 0.55;
+        this._glitchFilter.enabled = true;
+        this._rebuildFilterChain();
+    },
+};
+
+function _rendererHslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r, g, b;
+    if (h < 60) { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
 
 
 // === config.js ===
@@ -346,18 +1209,21 @@ const Audio = {
     enabled: true,
 
     init() {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-        // Resume on user interaction (browser policy)
-        const resume = () => {
-            if (this.ctx.state === 'suspended') this.ctx.resume();
-            window.removeEventListener('click', resume);
-            window.removeEventListener('keydown', resume);
+        // Defer AudioContext creation to first user interaction (browser policy)
+        const createCtx = () => {
+            if (this.ctx) return;
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            window.removeEventListener('click', createCtx);
+            window.removeEventListener('keydown', createCtx);
+            window.removeEventListener('touchstart', createCtx);
         };
-        window.addEventListener('click', resume);
-        window.addEventListener('keydown', resume);
+        window.addEventListener('click', createCtx);
+        window.addEventListener('keydown', createCtx);
+        window.addEventListener('touchstart', createCtx);
     },
 
     _createGain(volume) {
+        if (!this.ctx) return null;
         const gain = this.ctx.createGain();
         gain.gain.value = volume * this.sfxVolume * this.masterVolume;
         gain.connect(this.ctx.destination);
@@ -1864,10 +2730,9 @@ const Tutorial = {
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
-    maxParticles: 400,
+    maxParticles: 3000,
 
     spawn(x, y, count, opts = {}) {
-        // Apply particle density setting
         const densityScale = { low: 0.3, medium: 0.6, high: 1.0 };
         const scale = densityScale[Settings.values.particleDensity] || 1.0;
         const actualCount = Math.min(Math.max(1, Math.round(count * scale)), this.maxParticles - this.particles.length);
@@ -1875,17 +2740,50 @@ const Particles = {
         for (let i = 0; i < actualCount; i++) {
             const angle = opts.angle !== undefined ? opts.angle + (Math.random() - 0.5) * (opts.spread || Math.PI * 2) : Math.random() * Math.PI * 2;
             const speed = (opts.speed || 100) * (0.5 + Math.random());
-            this.particles.push({
+            const life = opts.life || (0.3 + Math.random() * 0.5);
+            const size = opts.size || (1 + Math.random() * 2);
+            const p = {
                 x, y,
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
-                life: opts.life || (0.3 + Math.random() * 0.5),
-                maxLife: opts.life || (0.3 + Math.random() * 0.5),
-                size: opts.size || (1 + Math.random() * 2),
+                life, maxLife: life, size,
                 color: opts.color || '#00ffff',
-                decay: opts.decay || 1
-            });
+                decay: opts.decay || 1,
+                _pp: null, // Pixi Particle
+            };
+            if (Renderer.usePixi && Renderer.particleLayer && Renderer.glowTex) {
+                const s = (size * 2) / 32;
+                p._pp = new PIXI.Particle({
+                    texture: Renderer.glowTex,
+                    x, y,
+                    scaleX: s, scaleY: s,
+                    anchorX: 0.5, anchorY: 0.5,
+                    tint: Renderer.colorToHex(p.color),
+                    alpha: 0.85,
+                });
+                Renderer.particleLayer.addParticle(p._pp);
+            }
+            this.particles.push(p);
         }
+    },
+
+    // Multi-layer explosion: shockwave + particle bursts + GPU fireball + addGlow
+    spawnExplosion(x, y, opts = {}) {
+        const style = opts.style || 'medium';
+        const color  = opts.color  || '#ff8800';
+        const color2 = opts.color2 || '#ffffff';
+        const styles = {
+            small:  { shock: 40,  core: 15, coreSpd: 120, coreLife: 0.4, coreSize: 1.5, spark: 8,  sparkSpd: 80,  sparkLife: 0.6, sparkSize: 2,   fScale: 1.2, fDur: 0.35 },
+            medium: { shock: 70,  core: 30, coreSpd: 200, coreLife: 0.6, coreSize: 2.5, spark: 18, sparkSpd: 140, sparkLife: 0.9, sparkSize: 3,   fScale: 2.2, fDur: 0.45 },
+            large:  { shock: 110, core: 55, coreSpd: 280, coreLife: 0.8, coreSize: 3.5, spark: 28, sparkSpd: 200, sparkLife: 1.2, sparkSize: 4,   fScale: 3.5, fDur: 0.55 },
+            mega:   { shock: 160, core: 80, coreSpd: 370, coreLife: 1.0, coreSize: 5,   spark: 45, sparkSpd: 280, sparkLife: 1.5, sparkSize: 6,   fScale: 5.5, fDur: 0.65 },
+        };
+        const s = styles[style] || styles.medium;
+        this.spawnShockwave(x, y, color, s.shock, 0.4);
+        this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd,  life: s.coreLife,  size: s.coreSize  });
+        this.spawn(x, y, s.spark, { color: color,  speed: s.sparkSpd, life: s.sparkLife, size: s.sparkSize });
+        Renderer.addGlow(x, y, Renderer.colorToHex(color2), s.shock * 0.9, 0.95);
+        Renderer.spawnExplosionSprite(x, y, s.fScale, Renderer.colorToHex(color), s.fDur);
     },
 
     // Spawn an expanding shockwave ring
@@ -1900,6 +2798,7 @@ const Particles = {
     },
 
     update(dt) {
+        const usePixi = Renderer.usePixi && Renderer.particleLayer;
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
             p.x += p.vx * dt;
@@ -1907,7 +2806,19 @@ const Particles = {
             p.vx *= (1 - 0.5 * dt);
             p.vy *= (1 - 0.5 * dt);
             p.life -= dt * p.decay;
-            if (p.life <= 0) this.particles.splice(i, 1);
+            if (p.life <= 0) {
+                if (p._pp) { Renderer.particleLayer.removeParticle(p._pp); p._pp = null; }
+                this.particles.splice(i, 1);
+            } else if (usePixi && p._pp) {
+                const t = p.life / p.maxLife;
+                const currentSize = p.size * (0.3 + t * 0.7);
+                const s = (currentSize * 2) / 32;
+                p._pp.x = p.x;
+                p._pp.y = p.y;
+                p._pp.scaleX = s;
+                p._pp.scaleY = s;
+                p._pp.alpha = t * 0.9;
+            }
         }
         // Update shockwaves
         for (let i = this.shockwaves.length - 1; i >= 0; i--) {
@@ -1920,42 +2831,57 @@ const Particles = {
     },
 
     draw(ctx) {
-        const prevComposite = ctx.globalCompositeOperation;
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.shadowBlur = 0; // No shadowBlur in hot loop
-
-        for (const p of this.particles) {
-            const t = p.life / p.maxLife; // 1→0 over lifetime
-            const currentSize = p.size * (0.3 + t * 0.7);
-
-            // Soft outer glow (replaces shadowBlur)
-            ctx.globalAlpha = t * 0.2;
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, currentSize * 2.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Main particle
-            ctx.globalAlpha = t * 0.9;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
-            ctx.fill();
-
-            // White-hot centre on large/fresh particles
-            if (t > 0.5 && p.size >= 2) {
-                ctx.fillStyle = '#ffffff';
-                ctx.globalAlpha = (t - 0.5) * 1.2;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, currentSize * 0.35, 0, Math.PI * 2);
-                ctx.fill();
+        if (Renderer.usePixi) {
+            // Pixi path: particles are rendered via particleLayer; just feed bloom
+            for (const p of this.particles) {
+                const t = p.life / p.maxLife;
+                if (t > 0.4 && p.size >= 1.5) {
+                    const currentSize = p.size * (0.3 + t * 0.7);
+                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 9, t * 0.45);
+                }
             }
+        } else {
+            // Canvas 2D fallback path
+            const prevComposite = ctx.globalCompositeOperation;
+            ctx.globalCompositeOperation = 'lighter';
+
+            for (const p of this.particles) {
+                const t = p.life / p.maxLife;
+                const currentSize = p.size * (0.3 + t * 0.7);
+
+                if (t > 0.4 && p.size >= 1.5) {
+                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 8, t * 0.5);
+                }
+
+                ctx.globalAlpha = t * 0.2;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, currentSize * 2.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.globalAlpha = t * 0.9;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (t > 0.5 && p.size >= 2) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.globalAlpha = (t - 0.5) * 1.2;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, currentSize * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            ctx.globalCompositeOperation = prevComposite;
         }
 
-        ctx.globalCompositeOperation = prevComposite;
-
-        // Shockwave rings — these are few in number so shadowBlur is acceptable
+        // Shockwave rings
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
+            // GPU glow at shockwave centre
+            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 2.5, (1 - t) * 0.8);
+
             ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
             ctx.lineWidth = 2 * (1 - t) + 0.5;
@@ -1967,7 +2893,15 @@ const Particles = {
         ctx.globalAlpha = 1;
     },
 
-    clear() { this.particles.length = 0; this.shockwaves.length = 0; }
+    clear() {
+        if (Renderer.usePixi && Renderer.particleLayer) {
+            for (const p of this.particles) {
+                if (p._pp) Renderer.particleLayer.removeParticle(p._pp);
+            }
+        }
+        this.particles.length = 0;
+        this.shockwaves.length = 0;
+    }
 };
 
 
@@ -2063,7 +2997,7 @@ const Transition = {
 
 // === bullets.js ===
 // ============================================================
-//  BULLET POOL — optimised: no shadowBlur, hand-drawn glow
+//  BULLET POOL — optimised with hand-drawn glow
 // ============================================================
 class BulletPool {
     constructor(maxSize = 500) {
@@ -2082,8 +3016,31 @@ class BulletPool {
             active: true,
             type: opts.type || 'normal',
             life: opts.life || 5,
-            grazed: false
+            grazed: false,
+            _p: null,   // Pixi outer glow Particle
+            _pc: null,  // Pixi white-core Particle
         };
+        if (Renderer.usePixi && Renderer.bulletLayer && Renderer.glowTex) {
+            const hexColor = Renderer.colorToHex(bullet.color);
+            const outerScale = (bullet.radius * 5) / 32;
+            const coreScale  = (bullet.radius * 0.8) / 32;
+            bullet._p = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: outerScale, scaleY: outerScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: hexColor, alpha: 0.8,
+            });
+            bullet._pc = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: coreScale, scaleY: coreScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: 0xffffff, alpha: 0.95,
+            });
+            Renderer.bulletLayer.addParticle(bullet._p);
+            Renderer.bulletLayer.addParticle(bullet._pc);
+        }
         this.pool.push(bullet);
         return bullet;
     }
@@ -2119,12 +3076,34 @@ class BulletPool {
             b.y += b.vy * dt;
             b.life -= dt;
             if (b.x < -20 || b.x > PLAY_W + 20 || b.y < -20 || b.y > PLAY_H + 20 || b.life <= 0 || !b.active) {
+                if (b._p)  { Renderer.bulletLayer.removeParticle(b._p);  b._p  = null; }
+                if (b._pc) { Renderer.bulletLayer.removeParticle(b._pc); b._pc = null; }
                 this.pool.splice(i, 1);
+            } else if (b._p) {
+                // Sync Pixi particle positions each frame
+                const outerScale = (b.radius * 5) / 32;
+                const coreScale  = (b.radius * 0.8) / 32;
+                b._p.x = b.x;  b._p.y = b.y;
+                b._p.scaleX = outerScale; b._p.scaleY = b.type === 'laser' ? outerScale * 3 : outerScale;
+                b._pc.x = b.x; b._pc.y = b.y;
+                b._pc.scaleX = coreScale; b._pc.scaleY = b.type === 'laser' ? coreScale * 3 : coreScale;
+                if (b.type === 'homing') {
+                    b._p.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+                }
             }
         }
     }
 
     draw(ctx) {
+        // In Pixi mode the particles are synced in update(); only keep addGlow for bloom source
+        if (Renderer.usePixi) {
+            for (const b of this.pool) {
+                Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 7, 0.5);
+            }
+            return;
+        }
+
+        // Canvas 2D fallback path
         const prevComposite = ctx.globalCompositeOperation;
         ctx.globalCompositeOperation = 'lighter';
 
@@ -2143,11 +3122,14 @@ class BulletPool {
     }
 
     _drawNormal(ctx, b) {
+        // GPU glow halo behind bullet
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
+
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
         if (trailLen > 2) {
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = b.color;
             ctx.beginPath();
             ctx.moveTo(b.x + b.radius * 0.5, b.y);
@@ -2158,11 +3140,11 @@ class BulletPool {
             ctx.fill();
         }
 
-        // Soft outer glow (replaces shadowBlur)
-        ctx.globalAlpha = 0.2;
+        // Soft outer glow
+        ctx.globalAlpha = 0.35;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 2.2, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, b.radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Main bullet body
@@ -2180,6 +3162,9 @@ class BulletPool {
     }
 
     _drawHoming(ctx, b) {
+        // GPU glow halo
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.45);
+
         const angle = Math.atan2(b.vy, b.vx);
 
         // Exhaust trail
@@ -2217,6 +3202,9 @@ class BulletPool {
     }
 
     _drawLaser(ctx, b) {
+        // GPU glow halo (elongated by using wider size)
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.5);
+
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 
         // Wide outer glow
@@ -2234,7 +3222,15 @@ class BulletPool {
         ctx.fillRect(b.x - b.radius * 0.35, b.y - len * 0.6, b.radius * 0.7, len * 1.2);
     }
 
-    clear() { this.pool.length = 0; }
+    clear() {
+        if (Renderer.usePixi && Renderer.bulletLayer) {
+            for (const b of this.pool) {
+                if (b._p)  Renderer.bulletLayer.removeParticle(b._p);
+                if (b._pc) Renderer.bulletLayer.removeParticle(b._pc);
+            }
+        }
+        this.pool.length = 0;
+    }
 }
 
 
@@ -2305,6 +3301,9 @@ const Scoring = {
         let pts = basePoints * this.multiplier * pointBlankMult * GameConfig.scoreMultiplier;
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
+
+        // Each kill contributes a small amount of surge charge; grazes are faster
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 2);
 
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
@@ -2398,14 +3397,11 @@ const Scoring = {
             const scale = 1 + (1 - p.life / p.maxLife) * 0.3; // Grow slightly over time
             ctx.globalAlpha = alpha;
             ctx.fillStyle = p.color;
-            ctx.shadowColor = p.color;
-            ctx.shadowBlur = 0;
             ctx.font = 'bold ' + Math.round(p.size * scale) + 'px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
             ctx.fillText(p.text, p.x, p.y);
         }
         ctx.globalAlpha = 1;
-        ctx.shadowBlur = 0;
     },
 
     breakChain() {
@@ -2473,7 +3469,7 @@ const Enemies = {
         },
         phase_shifter: {
             hp: 4, speed: 100, radius: 15, score: 600, color: '#ff00ff', accent: '#ff88ff', bulletColor: '#cc00ff',
-            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.2, cancelBullets: true
+            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.20, cancelBullets: true
         },
         shielded_cruiser: {
             hp: 8, shieldHp: 3, speed: 40, radius: 28, score: 1000, color: '#8b00ff', accent: '#aa44ff', bulletColor: '#6600cc',
@@ -2481,7 +3477,7 @@ const Enemies = {
         },
         bomber: {
             hp: 6, speed: 50, radius: 24, score: 700, color: '#ff4400', accent: '#ff6622', bulletColor: '#ff2200',
-            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.3, cancelBullets: true
+            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.30, cancelBullets: true
         },
         sniper: {
             hp: 2, speed: 20, radius: 14, score: 400, color: '#ffff00', accent: '#ffffaa', bulletColor: '#ffcc00',
@@ -2493,7 +3489,7 @@ const Enemies = {
         },
         shield_wall: {
             hp: 3, speed: 60, radius: 16, score: 250, color: '#4488ff', accent: '#66aaff', bulletColor: '#2266dd',
-            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.1
+            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.10
         }
     },
 
@@ -2725,6 +3721,7 @@ const Enemies = {
         if (enemy.shieldHp > 0) {
             enemy.shieldHp -= damage;
             enemy.flashTimer = 0.08;
+            Particles.spawn(enemy.x, enemy.y, 3, { color: enemy.bulletColor, speed: 60, life: 0.15, size: 1.5 });
             if (enemy.shieldHp <= 0) {
                 Particles.spawn(enemy.x, enemy.y, 12, { color: enemy.bulletColor, speed: 120, life: 0.4 });
             }
@@ -2732,6 +3729,10 @@ const Enemies = {
         }
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
+        // Impact spark burst at hit point
+        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
+        // GPU glow flash
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -2741,16 +3742,19 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        // Explosion particles — apply equipped explosion cosmetic
-        const particleCount = enemy.radius > 20 ? 30 : 15;
+        const isBig = enemy.radius > 20;
         const explColor = Hangar.explosionColor;
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
-        Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
-        // Shockwave ring for medium+ enemies
-        if (enemy.radius > 15) {
-            Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
-        }
+        const accent = enemy.accent || explColor;
+
+        // Layered explosion: use spawnExplosion for the main burst
+        Particles.spawnExplosion(enemy.x, enemy.y, {
+            style: isBig ? 'large' : 'medium',
+            color: explColor,
+            color2: '#ffffff',
+        });
+        // Extra accent-coloured sparks for visual variety
+        Particles.spawn(enemy.x, enemy.y, isBig ? 20 : 10, { color: accent, speed: 180, life: 0.7, size: 3 });
+        if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
         if (enemy.cancelBullets) {
@@ -2798,12 +3802,9 @@ const Enemies = {
             const glitchFlash = isGlitchLevel && Math.random() < 0.02;
             if (e.flashTimer > 0 || glitchFlash) {
                 ctx.fillStyle = glitchFlash ? '#ff00ff' : '#ffffff';
-                ctx.shadowColor = glitchFlash ? '#ff00ff' : '#ffffff';
             } else {
                 ctx.fillStyle = e.color;
-                ctx.shadowColor = e.color;
             }
-            ctx.shadowBlur = 0; // No shadowBlur in gameplay — use hand-drawn glow for performance
 
             // Draw based on type
             const r = e.radius;
@@ -3139,12 +4140,14 @@ const PowerUps = {
             const pulse = 0.7 + Math.sin(p.bobTimer * 1.5) * 0.3;
             const rot = p.bobTimer * 0.8;
 
+            // Dynamic light — pulsing glow around power-ups
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 6, 0.3 + pulse * 0.4);
+
             ctx.save();
             ctx.translate(p.x, p.y + bob);
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;
-            ctx.shadowColor = p.color;
             
             ctx.lineWidth = 1.5;
             ctx.globalAlpha = 0.3 + Math.sin(p.bobTimer * 2) * 0.15;
@@ -3155,7 +4158,6 @@ const PowerUps = {
             // Inner filled hexagon background
             ctx.globalAlpha = 0.5 * pulse;
             ctx.fillStyle = p.color;
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             for (let j = 0; j < 6; j++) {
                 const a = (Math.PI * 2 / 6) * j + rot * 0.3;
@@ -3168,7 +4170,6 @@ const PowerUps = {
             // Weapon icon — drawn in white over the colored background
             ctx.globalAlpha = 1;
             
-            ctx.shadowColor = '#ffffff';
 
             switch (p.type) {
                 case 'spread':
@@ -3716,8 +4717,6 @@ const Asteroids = {
             ctx.fillStyle = a.destructible ? '#665544' : '#444455';
             ctx.strokeStyle = a.destructible ? '#887766' : '#6666aa';
             ctx.lineWidth = 1.5;
-            ctx.shadowColor = a.destructible ? '#886644' : '#6666aa';
-            ctx.shadowBlur = 0;
             // Irregular polygon
             ctx.beginPath();
             for (let j = 0; j < 7; j++) {
@@ -3810,17 +4809,14 @@ const Escort = {
         // Allied ship — green tinted
         const flash = this.flashTimer > 0;
         ctx.fillStyle = flash ? '#ffffff' : '#44aa44';
-        ctx.shadowColor = '#44aa44'; ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.moveTo(0, -25); ctx.lineTo(30, 10); ctx.lineTo(20, 20);
         ctx.lineTo(-20, 20); ctx.lineTo(-30, 10);
         ctx.closePath(); ctx.fill();
         ctx.strokeStyle = '#88ff88'; ctx.lineWidth = 1.5; ctx.stroke();
         // Engine
-        ctx.fillStyle = '#22ff22'; ctx.shadowColor = '#22ff22';
         ctx.fillRect(-12, 20, 8, 6 + Math.random() * 3);
         ctx.fillRect(4, 20, 8, 6 + Math.random() * 3);
-        ctx.shadowBlur = 0;
         ctx.restore();
 
         // HP bar
@@ -4013,6 +5009,7 @@ const Boss = {
             if (this.y >= 120) {
                 this.y = 120;
                 this.entered = true;
+                Renderer.triggerGodray(2.5);
             }
             return;
         }
@@ -4023,12 +5020,12 @@ const Boss = {
 
             // Stage 1 (0-1.5s): Internal explosions, increasing frequency
             if (this.defeatTimer < 1.5) {
-                const freq = 0.3 - this.defeatTimer * 0.12; // Faster over time
+                const freq = 0.3 - this.defeatTimer * 0.12;
                 if (this.defeatTimer % Math.max(0.08, freq) < dt) {
                     const rx = this.x + (Math.random() - 0.5) * 80;
                     const ry = this.y + (Math.random() - 0.5) * 80;
                     const col = this.colors[Math.floor(Math.random() * this.colors.length)] || '#ff8800';
-                    Particles.spawn(rx, ry, 12, { color: col, speed: 100 + this.defeatTimer * 40, life: 0.5, size: 2 + this.defeatTimer });
+                    Particles.spawnExplosion(rx, ry, { style: 'small', color: col, color2: '#ffffff' });
                     Audio.playExplosionSmall();
                     ScreenShake.trigger(3 + this.defeatTimer * 3, 0.15);
                 }
@@ -4038,13 +5035,13 @@ const Boss = {
             if (this.defeatTimer >= 1.5 && this.defeatTimer < 2.5) {
                 if (this.defeatTimer % 0.2 < dt) {
                     const ringCount = 16;
+                    const dist = (this.defeatTimer - 1.5) * 150;
                     for (let j = 0; j < ringCount; j++) {
                         const a = (Math.PI * 2 / ringCount) * j + this.defeatTimer * 2;
-                        const dist = (this.defeatTimer - 1.5) * 150;
-                        Particles.spawn(
+                        Particles.spawnExplosion(
                             this.x + Math.cos(a) * dist,
                             this.y + Math.sin(a) * dist,
-                            3, { color: '#ffffff', speed: 80, life: 0.4, size: 3 }
+                            { style: 'small', color: this.colors[j % this.colors.length] || '#ffffff', color2: '#ffffff' }
                         );
                     }
                     Audio.playExplosionSmall();
@@ -4052,48 +5049,50 @@ const Boss = {
                 }
             }
 
-            // Stage 3 (2.5-3.5s): Boss-specific final effect
+            // Stage 3 (2.5-3.5s): Boss-specific mega final effect
             if (this.defeatTimer >= 2.5 && this.defeatTimer < 3.5) {
                 if (this.defeatTimer - dt < 2.5) {
-                    // One-time big boom at start of stage 3
                     Audio.playExplosionLarge();
-                    ScreenShake.trigger(15, 0.8);
+                    ScreenShake.trigger(20, 1.0);
+                    Renderer.triggerFlash(0xffffff, 0.7);
+                    Renderer.triggerChroma(0.025, 0.8);
 
-                    // Boss-specific final burst
                     switch (this.bossType) {
                         case 'furnace':
-                            // Fiery explosion
-                            Particles.spawn(this.x, this.y, 50, { color: '#ff4400', speed: 300, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 30, { color: '#ffaa00', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff4400', color2: '#ffaa00' });
+                            Particles.spawnExplosion(this.x + 30, this.y - 20, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
                             break;
                         case 'leviathan':
-                            // Organic dissolution
-                            for (let j = 0; j < 40; j++) {
-                                const a = Math.random() * Math.PI * 2;
-                                const d = Math.random() * 60;
-                                Particles.spawn(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d, 3, { color: '#00ffaa', speed: 150 + Math.random() * 100, life: 1.2, size: 3 });
+                            for (let j = 0; j < 6; j++) {
+                                const a = (Math.PI * 2 / 6) * j;
+                                const d = 50 + Math.random() * 40;
+                                Particles.spawnExplosion(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d,
+                                    { style: 'large', color: '#00ffaa', color2: '#ffffff' });
                             }
                             break;
                         case 'interceptor_duo':
-                            // Twin explosions
-                            Particles.spawn(this.x - 40, this.y, 35, { color: '#ffaa00', speed: 250, life: 0.8, size: 4 });
-                            Particles.spawn(this.x + 40, this.y, 35, { color: '#ff4400', speed: 250, life: 0.8, size: 4 });
+                            Particles.spawnExplosion(this.x - 50, this.y, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x + 50, this.y, { style: 'large', color: '#ff4400', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'medium', color: '#ffffff', color2: '#ffff00' });
                             break;
                         case 'nexus':
-                            // Energy implosion then burst
-                            Particles.spawn(this.x, this.y, 60, { color: '#cc44ff', speed: 350, life: 1.2, size: 5 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 200, life: 1.0, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#cc44ff', color2: '#ffffff' });
+                            Particles.spawnShockwave(this.x, this.y, '#cc44ff', 200, 0.6);
                             break;
-                        case 'echo':
-                            // Glitch dissolution
-                            for (let j = 0; j < 50; j++) {
-                                const col = ['#00ffff', '#ff00ff', '#ffffff'][j % 3];
-                                Particles.spawn(this.x + (Math.random() - 0.5) * 100, this.y + (Math.random() - 0.5) * 100, 2, { color: col, speed: 200 + Math.random() * 150, life: 1.0, size: 2 + Math.random() * 3 });
+                        case 'echo': {
+                            const echoCols = ['#00ffff', '#ff00ff', '#ffffff'];
+                            for (let j = 0; j < 5; j++) {
+                                const ox = (Math.random() - 0.5) * 120;
+                                const oy = (Math.random() - 0.5) * 120;
+                                Particles.spawnExplosion(this.x + ox, this.y + oy,
+                                    { style: 'medium', color: echoCols[j % 3], color2: '#ffffff' });
                             }
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#00ffff' });
                             break;
+                        }
                         default: // architect
-                            Particles.spawn(this.x, this.y, 60, { color: '#ffffff', speed: 250, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ff00ff', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y + 20, { style: 'large', color: '#ffffff', color2: '#ff00ff' });
                             break;
                     }
                 }
@@ -4668,9 +5667,12 @@ const Boss = {
         this.patternIndex = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
         Enemies.enemyBullets.clear();
-        ScreenShake.trigger(8, 0.5);
-        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 180, life: 0.6, size: 3 });
-        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 80, 0.5);
+        ScreenShake.trigger(12, 0.6);
+        Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
+        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 120, 0.6);
+        Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
+        Renderer.triggerFlash(0xffffff, 0.2);
+        Renderer.triggerGlitch(0.55);
         Audio.playExplosionLarge();
         Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
@@ -4691,8 +5693,6 @@ const Boss = {
             ctx.fillStyle = `rgba(255, 0, 80, ${0.5 + Math.sin(this.warningTimer * 8) * 0.5})`;
             ctx.font = 'bold 28px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
-            ctx.shadowColor = '#ff0050';
-            ctx.shadowBlur = 0;
             ctx.fillText('WARNING', PLAY_W / 2, PLAY_H / 2 - 20);
             ctx.font = '16px Share Tech Mono, Consolas, monospace';
             ctx.fillText(this.bossName + ' APPROACHES', PLAY_W / 2, PLAY_H / 2 + 15);
@@ -4706,10 +5706,11 @@ const Boss = {
         const flash = this.flashTimer > 0;
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
+        // Dynamic light — boss core glow (brighter during flash)
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+
         // Core body
         ctx.fillStyle = mainColor;
-        ctx.shadowColor = mainColor;
-        ctx.shadowBlur = 0;
 
         // Type-specific body shapes
         const r = this.radius;
@@ -4750,10 +5751,8 @@ const Boss = {
                 ctx.fillRect(-r * 0.15, r * 0.85, r * 0.3, r * 0.08);
                 // Furnace glow (core)
                 ctx.fillStyle = '#ff2200';
-                ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 0;
                 ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 4) * 0.3;
                 ctx.beginPath(); ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
                 break;
             }
             case 'leviathan': {
@@ -4787,10 +5786,8 @@ const Boss = {
                     ctx.fillStyle = flash ? '#ffffff' : '#001a10';
                     ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12, r * 0.08, 0, 0, Math.PI * 2); ctx.fill();
                     ctx.fillStyle = '#00ffaa';
-                    ctx.shadowColor = '#00ffaa'; ctx.shadowBlur = 0;
                     ctx.beginPath(); ctx.arc(ex, ey, r * 0.04, 0, Math.PI * 2); ctx.fill();
                 }
-                ctx.shadowBlur = 0;
                 break;
             }
             case 'interceptor_duo': {
@@ -4846,13 +5843,11 @@ const Boss = {
                 // Phase 2: energy link between ships
                 if (this.phase === 2) {
                     ctx.strokeStyle = `rgba(255, 150, 0, ${0.4 + Math.sin(this.moveTimer * 5) * 0.2})`;
-                    ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 0;
                     ctx.lineWidth = 2;
                     for (let beam = 0; beam < 3; beam++) {
                         const by = -r * 0.2 + beam * r * 0.25;
                         ctx.beginPath(); ctx.moveTo(-sep, by); ctx.lineTo(sep, by); ctx.stroke();
                     }
-                    ctx.shadowBlur = 0;
                 }
                 break;
             }
@@ -4985,9 +5980,7 @@ const Boss = {
                 // Central eye
                 ctx.fillStyle = flash ? '#ffffff' : '#220000';
                 ctx.beginPath(); ctx.ellipse(0, -r * 0.25, r * 0.15, r * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#ff4444'; ctx.shadowColor = '#ff4444'; ctx.shadowBlur = 0;
                 ctx.beginPath(); ctx.arc(0, -r * 0.25, r * 0.05, 0, Math.PI * 2); ctx.fill();
-                ctx.shadowColor = mainColor; ctx.shadowBlur = 0;
                 // Leg struts
                 ctx.strokeStyle = mainColor; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(r * 0.15, r * 0.7); ctx.lineTo(r * 0.35, r * 1.0); ctx.stroke();
@@ -5007,8 +6000,6 @@ const Boss = {
                 const ax = Math.cos(seg.angle + this.moveTimer * 0.5) * 45;
                 const ay = Math.sin(seg.angle + this.moveTimer * 0.5) * 45;
                 ctx.fillStyle = '#ff6644';
-                ctx.shadowColor = '#ff6644';
-                ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(ax, ay, 12, 0, Math.PI * 2);
                 ctx.fill();
@@ -5044,10 +6035,7 @@ const Boss = {
             const pct = Math.max(0, this.hp / this.maxHp);
             const hpColor = this.phase === 1 ? '#ff4444' : this.phase === 2 ? '#ff00ff' : '#ff0040';
             ctx.fillStyle = hpColor;
-            ctx.shadowColor = hpColor;
-            ctx.shadowBlur = 0;
             ctx.fillRect(barX, barY, barW * pct, barH);
-            ctx.shadowBlur = 0;
             // Phase label
             ctx.fillStyle = '#ffffff';
             ctx.font = '12px Share Tech Mono, Consolas, monospace';
@@ -5195,6 +6183,15 @@ const Player = {
             this.fireTimer = rates[this.primaryWeapon] || 0.12;
         }
 
+        // Laser beam MeshRope — show while firing, hide otherwise
+        if (this.primaryWeapon === 'laser' && this.alive) {
+            const laserColor = Hangar.equipped.bullet === 'neon' ? '#4488ff' : Hangar.bulletColor;
+            const isLaserFiring = shouldFire && !this.dashing;
+            Renderer.updateLaserBeam(this.x, this.y - this.radius, laserColor, isLaserFiring);
+        } else {
+            Renderer.updateLaserBeam(0, 0, null, false);
+        }
+
         // Dash input
         if (Input.isPressed('dash') && GameConfig.dash.enabled && this.dashCooldown <= 0 && !this.dashing) {
             this._startDash();
@@ -5230,8 +6227,15 @@ const Player = {
                 Scoring.activateSurge();
                 Achievements.onSurge();
                 Audio.playSurgeActivate();
-                ScreenShake.trigger(6, 0.3);
-                Particles.spawn(this.x, this.y, 25, { color: '#ffffff', speed: 150, life: 0.5, size: 3 });
+                ScreenShake.trigger(12, 0.5);
+                Renderer.triggerFlash(0xffffff, 0.35);
+                Renderer.triggerChroma(0.025, 0.7);
+                Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
+                Particles.spawn(this.x, this.y, 80, { color: '#ffffff', speed: 300, life: 0.7, size: 4 });
+                Particles.spawn(this.x, this.y, 40, { color: '#00ffff', speed: 200, life: 1.0, size: 2.5 });
+                Particles.spawnShockwave(this.x, this.y, '#00ffff', 150, 0.45);
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 150, 0.95);
+                Renderer.spawnExplosionSprite(this.x, this.y, 5, 0x00ffff, 0.5);
             }
         }
 
@@ -5366,8 +6370,8 @@ const Player = {
             case 'homing': {
                 const lvl = this.primaryLevel;
                 const count = lvl >= 5 ? 5 : lvl >= 4 ? 4 : lvl >= 3 ? 3 : lvl >= 2 ? 2 : 1;
-                const dmg = 0.3; // Low damage — convenience weapon, not a damage dealer
-                const spd = lvl >= 4 ? 0.7 : 0.6;
+                const dmg = 0.5;
+                const spd = lvl >= 4 ? 0.7 : lvl >= 2 ? 0.65 : 0.6;
                 for (let j = 0; j < count; j++) {
                     const ox = (j - (count - 1) / 2) * 14;
                     this.bullets.spawn(this.x + ox, this.y - this.radius,
@@ -5378,7 +6382,7 @@ const Player = {
             }
             case 'laser': {
                 const lvl = this.primaryLevel;
-                const beamDamage = lvl >= 5 ? 5 : lvl >= 4 ? 4.5 : lvl >= 3 ? 4 : lvl >= 2 ? 3 : 2;
+                const beamDamage = lvl >= 5 ? 4 : lvl >= 4 ? 3.5 : lvl >= 3 ? 3 : lvl >= 2 ? 2.5 : 1.5;
                 const beamWidth = lvl >= 5 ? 8 : lvl >= 4 ? 7 : lvl >= 3 ? 6 : lvl >= 2 ? 5 : 4;
                 this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed * 1.5,
                     { color: laserColor, radius: beamWidth, damage: beamDamage, type: 'laser' });
@@ -5406,7 +6410,7 @@ const Player = {
         // Drone firing — Lv1-2: contact only, Lv3: 4 drones fire, Lv4: 5 drones fire faster, Lv5: 6 drones + stronger
         if (this.droneLevel >= 3) {
             const droneCount = this.droneLevel >= 5 ? 6 : this.droneLevel >= 4 ? 5 : 4;
-            const droneDmg = 0.5; // Same damage per shot at all levels — more drones = more coverage, not more burst
+            const droneDmg = 0.35; // Same damage per shot at all levels — more drones = more coverage, not more burst
             for (let d = 0; d < droneCount; d++) {
                 const a = (Math.PI * 2 / droneCount) * d + this.engineFlicker * 0.15;
                 const dx = this.x + Math.cos(a) * 30;
@@ -5449,6 +6453,9 @@ const Player = {
         this.bombTimer = 1.5;
         this.invincible = true;
         this.invincibleTimer = 1.5;
+        Renderer.triggerChroma(0.015, 0.6);
+        Renderer.triggerFlash(0x00ffff, 0.3);
+        Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();
@@ -5495,8 +6502,11 @@ const Player = {
             this.shieldFlashTimer = 0.3;
             this.invincible = true;
             this.invincibleTimer = 0.8;
-            Particles.spawn(this.x, this.y, 15, { color: '#4488ff', speed: 120, life: 0.3, size: 2 });
-            ScreenShake.trigger(4, 0.2);
+            Particles.spawn(this.x, this.y, 20, { color: '#4488ff', speed: 150, life: 0.4, size: 2.5 });
+            Particles.spawnShockwave(this.x, this.y, '#4488ff', 60, 0.35);
+            Renderer.addGlow(this.x, this.y, 0x4488ff, 100, 0.8);
+            Renderer.triggerChroma(0.008, 0.3);
+            ScreenShake.trigger(6, 0.3);
             Audio.playShieldHit();
             return;
         }
@@ -5541,9 +6551,11 @@ const Player = {
             });
         }
 
-        Particles.spawn(this.x, this.y, 30, { color: skinColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(this.x, this.y, 20, { color: '#ffffff', speed: 150, life: 0.4, size: 2 });
-        ScreenShake.trigger(10, 0.5);
+        Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
+        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
+        Renderer.triggerChroma(0.02, 0.7);
+        Renderer.triggerFlash(0xffffff, 0.4);
+        ScreenShake.trigger(15, 0.6);
         Audio.playPlayerDeath();
 
         if (this.lives > 0) {
@@ -5596,8 +6608,6 @@ const Player = {
                 ctx.rotate(f.rot);
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = f.color;
-                ctx.shadowColor = f.color;
-                ctx.shadowBlur = 0;
                 // Irregular triangle fragment
                 ctx.beginPath();
                 ctx.moveTo(-f.size * 0.5, -f.size * 0.3);
@@ -5608,7 +6618,6 @@ const Player = {
                 ctx.restore();
             }
             ctx.globalAlpha = 1;
-            ctx.shadowBlur = 0;
             // Still draw bullets even when dead
             this.bullets.draw(ctx);
             return;
@@ -5642,8 +6651,6 @@ const Player = {
                 const dx = this.x + Math.cos(a) * 30;
                 const dy = this.y + Math.sin(a) * 30;
                 ctx.fillStyle = '#cc44ff';
-                ctx.shadowColor = '#cc44ff';
-                ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(dx, dy, 5, 0, Math.PI * 2);
                 ctx.fill();
@@ -5669,11 +6676,15 @@ const Player = {
         ctx.save();
         ctx.translate(this.x, this.y);
 
+        // GPU glow behind player — engine glow + surge glow
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
+        if (Scoring.surgeActive) {
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
+        }
+
         // Surge glow
         if (Scoring.surgeActive && !Settings.values.flashReduction) {
             ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.radius + 10 + Math.sin(this.engineFlicker) * 3, 0, Math.PI * 2);
             ctx.fill();
@@ -5684,8 +6695,6 @@ const Player = {
             const shieldAlpha = this.shieldFlashTimer > 0 ? 0.6 : 0.2 + Math.sin(this.engineFlicker * 0.3) * 0.1;
             const shieldColor = this.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
             ctx.strokeStyle = shieldColor;
-            ctx.shadowColor = shieldColor;
-            ctx.shadowBlur = 0;
             ctx.lineWidth = 2;
             ctx.globalAlpha = shieldAlpha;
             ctx.beginPath();
@@ -5702,8 +6711,6 @@ const Player = {
         ctx.globalAlpha = shipAlpha;
         const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
         ctx.fillStyle = sc;
-        ctx.shadowColor = sc;
-        ctx.shadowBlur = 0;
         const r = this.radius;
 
         // Main fuselage
@@ -5744,14 +6751,12 @@ const Player = {
 
         // Wing tip accents
         ctx.fillStyle = sc;
-        ctx.shadowBlur = 0;
         ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
         ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
 
         // Outline
         ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
         ctx.lineWidth = 1;
-        ctx.shadowBlur = 0;
         // Fuselage outline
         ctx.beginPath();
         ctx.moveTo(0, -r * 1.1);
@@ -5773,8 +6778,6 @@ const Player = {
         const trailColor = Hangar.trailColor;
         const flicker = Math.sin(this.engineFlicker) * 2;
         ctx.fillStyle = trailColor;
-        ctx.shadowColor = trailColor;
-        ctx.shadowBlur = 0;
         // Left engine
         ctx.beginPath();
         ctx.moveTo(-r * 0.35, r * 0.65);
@@ -5791,8 +6794,6 @@ const Player = {
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
             ctx.fillStyle = '#ffffff';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.hitboxRadius + 1, 0, Math.PI * 2);
             ctx.fill();
@@ -5815,13 +6816,28 @@ const Player = {
         // Bomb effect
         if (this.bombActive && !Settings.values.flashReduction) {
             const bombAlpha = this.bombTimer / 1.5;
+            // GPU glow at bomb centre
+            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
+            // Screen-filling flash
             ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
             ctx.fillRect(0, 0, PLAY_W, PLAY_H);
+            // White-hot centre
+            ctx.fillStyle = `rgba(255, 255, 255, ${bombAlpha * 0.12})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 80 * bombAlpha, 0, Math.PI * 2);
+            ctx.fill();
+            // Expanding shockwave ring
             const ringR = (1.5 - this.bombTimer) * 400;
             ctx.strokeStyle = `rgba(0, 255, 255, ${bombAlpha * 0.5})`;
             ctx.lineWidth = 3;
             ctx.beginPath();
             ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+            // Secondary inner ring
+            ctx.strokeStyle = `rgba(255, 255, 255, ${bombAlpha * 0.3})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
             ctx.stroke();
         } else if (this.bombActive) {
             // Reduced flash — just the ring, dimmer
@@ -5838,27 +6854,56 @@ const Player = {
 
 // === background.js ===
 // ============================================================
-//  BACKGROUND RENDERER — Parallax + Per-Theme Silhouettes
+//  BACKGROUND RENDERER — Enhanced parallax with 5 layers
+//
+//  Layer order (back to front):
+//    1. Sky gradient (static)
+//    2. Deep star field — slow scroll, alpha twinkle
+//    3. Nebula / atmosphere — large soft colour clouds, per-theme
+//    4. Sun / horizon glow
+//    5. Mid parallax — theme-specific ambient elements
+//    6. Horizon silhouettes — buildings, antennas, etc.
+//    7. Perspective grid
+//    8. Near foreground — fast debris/dust for speed sensation
+//    9. Glitch overlay (void theme only)
 // ============================================================
 const Background = {
     gridOffset: 0,
     bgType: 'synthwave',
 
     // Parallax layers
-    farStars: [],    // Slowest — distant stars/particles
-    midLayer: [],    // Medium — theme-specific mid elements
-    nearLayer: [],   // Fastest — foreground silhouette elements
+    farStars: [],      // Layer 2 — deep star field
+    nebulae: [],       // Layer 3 — large soft colour blobs
+    midLayer: [],      // Layer 5 — theme-specific mid elements
+    nearLayer: [],     // Layer 6 — horizon silhouettes
+    foreground: [],    // Layer 8 — fast foreground particles
 
     init() {
-        // Far stars (all themes)
+        // Deep star field — more stars, with twinkle phase
         this.farStars = [];
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 100; i++) {
             this.farStars.push({
                 x: Math.random() * PLAY_W,
                 y: Math.random() * PLAY_H,
-                size: 0.5 + Math.random() * 1.5,
-                speed: 10 + Math.random() * 20, // Slow — far away
-                brightness: 0.2 + Math.random() * 0.6
+                size: 0.5 + Math.random() * 1.8,
+                speed: 8 + Math.random() * 15,
+                brightness: 0.3 + Math.random() * 0.5,
+                twinklePhase: Math.random() * Math.PI * 2,
+                twinkleSpeed: 1.5 + Math.random() * 3,
+            });
+        }
+
+        // Nebula clouds — large, soft, theme-coloured
+        this.nebulae = [];
+        for (let i = 0; i < 6; i++) {
+            this.nebulae.push({
+                x: Math.random() * PLAY_W,
+                y: Math.random() * PLAY_H * 0.7,
+                rx: 60 + Math.random() * 120,
+                ry: 30 + Math.random() * 60,
+                speed: 5 + Math.random() * 10,
+                driftX: (Math.random() - 0.5) * 8,
+                alpha: 0.03 + Math.random() * 0.04,
             });
         }
 
@@ -5869,50 +6914,56 @@ const Background = {
                 x: Math.random() * PLAY_W,
                 y: Math.random() * PLAY_H,
                 size: 2 + Math.random() * 4,
-                speed: 30 + Math.random() * 40, // Medium speed
+                speed: 30 + Math.random() * 40,
                 type: Math.floor(Math.random() * 3)
             });
         }
 
-        // Near layer silhouettes are static (drawn procedurally based on theme)
+        // Near foreground — fast particles for speed sensation
+        this.foreground = [];
+        for (let i = 0; i < 25; i++) {
+            this.foreground.push({
+                x: Math.random() * PLAY_W,
+                y: Math.random() * PLAY_H,
+                size: 0.5 + Math.random() * 1.5,
+                speed: 200 + Math.random() * 300,
+                alpha: 0.05 + Math.random() * 0.08,
+                length: 4 + Math.random() * 12,
+            });
+        }
+
+        // Horizon silhouettes
         this.nearLayer = [];
         this._generateNearLayer();
     },
 
     _generateNearLayer() {
         this.nearLayer = [];
-        // Generate horizon silhouette elements based on theme
-        // Each element: { x, w, h, type }
         const W = PLAY_W;
         switch (this.bgType) {
             case 'synthwave':
             case 'industrial':
-                // Buildings
                 for (let x = 10; x < W - 10; x += 30 + Math.random() * 20) {
                     this.nearLayer.push({ x, w: 20 + Math.random() * 35, h: 40 + Math.random() * 100, type: 'building' });
                 }
                 break;
             case 'space':
-                // Space station debris, satellite dishes, antenna arrays
                 for (let x = 30; x < W - 30; x += 60 + Math.random() * 80) {
                     const types = ['antenna', 'dish', 'debris'];
                     this.nearLayer.push({ x, w: 15 + Math.random() * 30, h: 20 + Math.random() * 60, type: types[Math.floor(Math.random() * 3)] });
                 }
                 break;
             case 'sky':
-                // Cloud banks — wider, shorter, softer
                 for (let x = 0; x < W; x += 40 + Math.random() * 60) {
                     this.nearLayer.push({ x, w: 60 + Math.random() * 100, h: 15 + Math.random() * 30, type: 'cloud' });
                 }
                 break;
             case 'digital':
-                // Data towers — tall, thin, geometric
                 for (let x = 20; x < W - 20; x += 25 + Math.random() * 40) {
                     this.nearLayer.push({ x, w: 8 + Math.random() * 15, h: 50 + Math.random() * 130, type: 'datatower' });
                 }
                 break;
             case 'void':
-                // Corrupted fragments — jagged, irregular
                 for (let x = 30; x < W - 30; x += 50 + Math.random() * 70) {
                     this.nearLayer.push({ x, w: 20 + Math.random() * 40, h: 30 + Math.random() * 70, type: 'corrupt' });
                 }
@@ -5924,27 +6975,46 @@ const Background = {
         this.gridOffset += dt * 120;
         if (this.gridOffset > 60) this.gridOffset -= 60;
 
-        // Parallax scroll — far layer (slow)
+        // Far stars — slow scroll + twinkle
         for (const s of this.farStars) {
             s.y += s.speed * dt;
+            s.twinklePhase += s.twinkleSpeed * dt;
             if (s.y > PLAY_H) { s.y = -2; s.x = Math.random() * PLAY_W; }
         }
 
-        // Mid layer (medium)
+        // Nebulae — very slow vertical scroll + horizontal drift
+        for (const n of this.nebulae) {
+            n.y += n.speed * dt;
+            n.x += n.driftX * dt;
+            if (n.y > PLAY_H * 0.8 + n.ry) {
+                n.y = -n.ry;
+                n.x = Math.random() * PLAY_W;
+            }
+            if (n.x < -n.rx) n.x = PLAY_W + n.rx;
+            if (n.x > PLAY_W + n.rx) n.x = -n.rx;
+        }
+
+        // Mid layer
         for (const m of this.midLayer) {
             m.y += m.speed * dt;
             if (m.y > PLAY_H + 10) { m.y = -10; m.x = Math.random() * PLAY_W; }
+        }
+
+        // Foreground — fast scroll
+        for (const f of this.foreground) {
+            f.y += f.speed * dt;
+            if (f.y > PLAY_H + f.length) { f.y = -f.length; f.x = Math.random() * PLAY_W; }
         }
     },
 
     draw(ctx) {
         const themes = {
-            synthwave: { sky: ['#0a0620','#1a0a3e','#2d0a4e','#5c1a6e','#ff006e'], sun: 'rgba(255,100,0,0.4)', grid: 'rgba(255,0,255,0.25)', vgrid: 'rgba(0,255,255,0.2)', silhouette: '#0d0520', accent: '#ff00ff', windowColor: 'rgba(255,200,100,' },
-            industrial: { sky: ['#0a0808','#1a0a08','#2d1510','#4a1a10','#ff4400'], sun: 'rgba(255,60,0,0.5)', grid: 'rgba(255,80,0,0.2)', vgrid: 'rgba(255,120,0,0.15)', silhouette: '#0a0504', accent: '#ff4400', windowColor: 'rgba(255,100,30,' },
-            space: { sky: ['#020210','#050520','#080840','#0a0a50','#0a0a30'], sun: 'rgba(50,50,255,0.2)', grid: 'rgba(80,80,255,0.15)', vgrid: 'rgba(100,100,255,0.1)', silhouette: '#030318', accent: '#4466aa', windowColor: 'rgba(100,150,255,' },
-            sky: { sky: ['#081830','#102848','#204070','#4080b0','#80c0e0'], sun: 'rgba(255,220,100,0.4)', grid: 'rgba(255,255,255,0.08)', vgrid: 'rgba(255,255,200,0.06)', silhouette: '#1a3050', accent: '#6090c0', windowColor: 'rgba(255,255,200,' },
-            digital: { sky: ['#050010','#100020','#200040','#400060','#ff00ff'], sun: 'rgba(200,0,255,0.4)', grid: 'rgba(255,0,255,0.3)', vgrid: 'rgba(0,255,255,0.25)', silhouette: '#0a0018', accent: '#cc44ff', windowColor: 'rgba(180,0,255,' },
-            void: { sky: ['#000000','#020204','#040208','#020204','#000000'], sun: 'rgba(100,0,0,0.2)', grid: 'rgba(255,0,0,0.1)', vgrid: 'rgba(255,0,0,0.08)', silhouette: '#040204', accent: '#440022', windowColor: 'rgba(255,0,50,' }
+            synthwave: { sky: ['#0a0620','#1a0a3e','#2d0a4e','#5c1a6e','#ff006e'], sun: 'rgba(255,100,0,0.4)', grid: 'rgba(255,0,255,0.25)', vgrid: 'rgba(0,255,255,0.2)', silhouette: '#0d0520', accent: '#ff00ff', windowColor: 'rgba(255,200,100,', nebula: '#ff00ff' },
+            industrial: { sky: ['#0a0808','#1a0a08','#2d1510','#4a1a10','#ff4400'], sun: 'rgba(255,60,0,0.5)', grid: 'rgba(255,80,0,0.2)', vgrid: 'rgba(255,120,0,0.15)', silhouette: '#0a0504', accent: '#ff4400', windowColor: 'rgba(255,100,30,', nebula: '#ff4400' },
+            space: { sky: ['#020210','#050520','#080840','#0a0a50','#0a0a30'], sun: 'rgba(50,50,255,0.2)', grid: 'rgba(80,80,255,0.15)', vgrid: 'rgba(100,100,255,0.1)', silhouette: '#030318', accent: '#4466aa', windowColor: 'rgba(100,150,255,', nebula: '#4488cc' },
+            sky: { sky: ['#081830','#102848','#204070','#4080b0','#80c0e0'], sun: 'rgba(255,220,100,0.4)', grid: 'rgba(255,255,255,0.08)', vgrid: 'rgba(255,255,200,0.06)', silhouette: '#1a3050', accent: '#6090c0', windowColor: 'rgba(255,255,200,', nebula: '#80b0d0' },
+            digital: { sky: ['#050010','#100020','#200040','#400060','#ff00ff'], sun: 'rgba(200,0,255,0.4)', grid: 'rgba(255,0,255,0.3)', vgrid: 'rgba(0,255,255,0.25)', silhouette: '#0a0018', accent: '#cc44ff', windowColor: 'rgba(180,0,255,', nebula: '#cc44ff' },
+            void: { sky: ['#000000','#020204','#040208','#020204','#000000'], sun: 'rgba(100,0,0,0.2)', grid: 'rgba(255,0,0,0.1)', vgrid: 'rgba(255,0,0,0.08)', silhouette: '#040204', accent: '#440022', windowColor: 'rgba(255,0,50,', nebula: '#440022' }
         };
         const t = themes[this.bgType] || themes.synthwave;
 
@@ -5966,25 +7036,46 @@ const Background = {
         ctx.fillStyle = this._cachedSkyGrad;
         ctx.fillRect(0, 0, PLAY_W, PLAY_H);
 
-        // === Far parallax layer — stars ===
-        for (const s of this.farStars) {
-            ctx.fillStyle = `rgba(255, 255, 255, ${s.brightness})`;
-            ctx.fillRect(s.x, s.y, s.size, s.size);
+        // === Deep star field — GPU TilingSprite in Pixi mode, Canvas 2D fallback ===
+        if (!Renderer.usePixi) {
+            for (const s of this.farStars) {
+                const twinkle = 0.5 + 0.5 * Math.sin(s.twinklePhase);
+                const alpha = s.brightness * (0.4 + twinkle * 0.6);
+                ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+                ctx.fillRect(s.x, s.y, s.size, s.size);
+            }
         }
 
-        // === Sun / horizon glow (cached) ===
+        // === Nebula / atmosphere layer ===
+        for (const n of this.nebulae) {
+            ctx.globalAlpha = n.alpha;
+            ctx.fillStyle = t.nebula;
+            ctx.beginPath();
+            ctx.ellipse(n.x, n.y, n.rx, n.ry, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Secondary puff offset
+            ctx.beginPath();
+            ctx.ellipse(n.x + n.rx * 0.4, n.y + n.ry * 0.3, n.rx * 0.6, n.ry * 0.5, 0, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+
+        // === Sun / horizon glow ===
         const sunY = PLAY_H * 0.82;
         ctx.fillStyle = this._cachedSunGrad;
         ctx.fillRect(0, sunY - 200, PLAY_W, 400);
 
-        // === Mid parallax layer — theme-specific ambient particles ===
+        // === Mid parallax layer ===
         this._drawMidLayer(ctx, t);
 
-        // === Near layer — horizon silhouettes ===
+        // === Horizon silhouettes ===
         this._drawSilhouettes(ctx, t);
 
         // === Perspective grid ===
         this._drawGrid(ctx, t);
+
+        // === Near foreground — fast streaks ===
+        this._drawForeground(ctx, t);
 
         // === Void glitch effects ===
         if (this.bgType === 'void') {
@@ -5999,7 +7090,6 @@ const Background = {
                 case 'space':
                     ctx.fillStyle = '#6688cc';
                     ctx.fillRect(m.x, m.y, m.size, m.size * 0.6);
-                    // Occasional twinkling
                     if (Math.sin(this.gridOffset * 0.02 + m.x) > 0.8) {
                         ctx.globalAlpha = 0.35;
                         ctx.fillStyle = '#aaccff';
@@ -6029,7 +7119,6 @@ const Background = {
                     ctx.fill();
                     break;
                 default: // synthwave
-                    // Faint geometric shapes
                     ctx.strokeStyle = 'rgba(255, 0, 255, 0.06)';
                     ctx.lineWidth = 0.5;
                     ctx.beginPath();
@@ -6043,14 +7132,26 @@ const Background = {
 
     _drawSilhouettes(ctx, theme) {
         const baseY = PLAY_H * 0.78;
+
+        // Gradient fade at top of silhouette region
+        const fadeGrad = ctx.createLinearGradient(0, baseY - 140, 0, baseY - 80);
+        fadeGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        fadeGrad.addColorStop(1, theme.silhouette);
+        ctx.fillStyle = fadeGrad;
+        ctx.fillRect(0, baseY - 140, PLAY_W, 60);
+
         ctx.fillStyle = theme.silhouette;
-        ctx.shadowColor = theme.accent;
-        ctx.shadowBlur = 0;
+
+        // Slow horizontal drift for applicable themes
+        const drift = (this.bgType === 'synthwave' || this.bgType === 'industrial' || this.bgType === 'digital')
+            ? Math.sin(this.gridOffset * 0.003) * 8 : 0;
+
+        ctx.save();
+        if (drift !== 0) ctx.translate(drift, 0);
 
         for (const el of this.nearLayer) {
             switch (el.type) {
                 case 'building':
-                    // City buildings with windows
                     ctx.fillStyle = theme.silhouette;
                     ctx.fillRect(el.x, baseY - el.h, el.w, el.h + 200);
                     ctx.strokeStyle = theme.accent;
@@ -6061,7 +7162,6 @@ const Background = {
                     ctx.lineTo(el.x + el.w, baseY - el.h);
                     ctx.stroke();
                     ctx.globalAlpha = 1;
-                    // Windows
                     for (let wy = baseY - el.h + 8; wy < baseY; wy += 10) {
                         for (let wx = el.x + 4; wx < el.x + el.w - 4; wx += 8) {
                             if (Math.random() > 0.5) {
@@ -6074,23 +7174,16 @@ const Background = {
                     break;
 
                 case 'antenna':
-                    // Tall thin antenna with blinking top
                     ctx.fillStyle = theme.silhouette;
                     ctx.fillRect(el.x + el.w / 2 - 2, baseY - el.h, 4, el.h + 200);
-                    // Cross bar
                     ctx.fillRect(el.x, baseY - el.h * 0.6, el.w, 3);
-                    // Blinking light
                     if (Math.sin(this.gridOffset * 0.1 + el.x) > 0.3) {
                         ctx.fillStyle = '#ff4444';
-                        ctx.shadowColor = '#ff4444';
-                        ctx.shadowBlur = 0;
                         ctx.fillRect(el.x + el.w / 2 - 2, baseY - el.h - 2, 4, 4);
-                        ctx.shadowBlur = 0;
                     }
                     break;
 
                 case 'dish':
-                    // Satellite dish
                     ctx.fillStyle = theme.silhouette;
                     ctx.fillRect(el.x + el.w / 2 - 3, baseY - el.h * 0.5, 6, el.h * 0.5 + 200);
                     ctx.beginPath();
@@ -6099,7 +7192,6 @@ const Background = {
                     break;
 
                 case 'debris':
-                    // Floating wreckage — irregular shape
                     ctx.fillStyle = theme.silhouette;
                     ctx.beginPath();
                     ctx.moveTo(el.x, baseY - el.h * 0.3);
@@ -6113,13 +7205,11 @@ const Background = {
                     break;
 
                 case 'cloud':
-                    // Soft cloud bank
                     ctx.fillStyle = theme.silhouette;
                     ctx.globalAlpha = 0.4;
                     ctx.beginPath();
                     ctx.ellipse(el.x + el.w / 2, baseY - el.h / 2, el.w / 2, el.h / 2, 0, 0, Math.PI * 2);
                     ctx.fill();
-                    // Secondary puff
                     ctx.beginPath();
                     ctx.ellipse(el.x + el.w * 0.3, baseY - el.h * 0.3, el.w * 0.3, el.h * 0.4, 0, 0, Math.PI * 2);
                     ctx.fill();
@@ -6127,16 +7217,13 @@ const Background = {
                     break;
 
                 case 'datatower':
-                    // Thin geometric data towers
                     ctx.fillStyle = theme.silhouette;
                     ctx.fillRect(el.x, baseY - el.h, el.w, el.h + 200);
-                    // Glowing data lines running up the tower
                     ctx.strokeStyle = theme.accent;
                     ctx.globalAlpha = 0.3;
                     ctx.lineWidth = 1;
                     for (let dy = baseY; dy > baseY - el.h; dy -= 12) {
-                        const lit = Math.sin(this.gridOffset * 0.08 + dy * 0.1 + el.x) > 0.5;
-                        if (lit) {
+                        if (Math.sin(this.gridOffset * 0.08 + dy * 0.1 + el.x) > 0.5) {
                             ctx.globalAlpha = 0.4;
                             ctx.beginPath();
                             ctx.moveTo(el.x, dy);
@@ -6145,7 +7232,6 @@ const Background = {
                         }
                     }
                     ctx.globalAlpha = 1;
-                    // Antenna on top
                     ctx.fillStyle = theme.accent;
                     ctx.globalAlpha = 0.5;
                     ctx.fillRect(el.x + el.w / 2 - 1, baseY - el.h - 8, 2, 8);
@@ -6153,7 +7239,6 @@ const Background = {
                     break;
 
                 case 'corrupt':
-                    // Jagged corrupted fragments
                     ctx.fillStyle = theme.silhouette;
                     ctx.beginPath();
                     ctx.moveTo(el.x, baseY + 200);
@@ -6165,7 +7250,6 @@ const Background = {
                     ctx.lineTo(el.x + el.w, baseY + 200);
                     ctx.closePath();
                     ctx.fill();
-                    // Glitch lines
                     if (Math.random() < 0.1) {
                         ctx.strokeStyle = `rgba(255, 0, 100, 0.3)`;
                         ctx.lineWidth = 1;
@@ -6177,7 +7261,7 @@ const Background = {
                     break;
             }
         }
-        ctx.shadowBlur = 0;
+        ctx.restore();
         ctx.fillStyle = theme.silhouette;
     },
 
@@ -6187,7 +7271,6 @@ const Background = {
 
         ctx.save();
 
-        // Horizontal lines (perspective) — use theme grid color
         ctx.strokeStyle = theme.grid;
         ctx.lineWidth = 1;
         for (let i = 0; i < 15; i++) {
@@ -6201,7 +7284,6 @@ const Background = {
             ctx.stroke();
         }
 
-        // Vertical lines (converging) — use theme vgrid color
         ctx.globalAlpha = 0.2;
         ctx.strokeStyle = theme.vgrid;
         const vanishX = PLAY_W / 2;
@@ -6213,6 +7295,35 @@ const Background = {
             ctx.stroke();
         }
 
+        ctx.restore();
+    },
+
+    _drawForeground(ctx, theme) {
+        // Fast-scrolling streaks in front of everything
+        // Low opacity so they don't obscure gameplay
+        ctx.save();
+        for (const f of this.foreground) {
+            ctx.globalAlpha = f.alpha;
+            switch (this.bgType) {
+                case 'industrial':
+                    ctx.fillStyle = '#ff6633';
+                    break;
+                case 'void':
+                    ctx.fillStyle = Math.random() > 0.7 ? '#ff0066' : '#330011';
+                    break;
+                case 'digital':
+                    ctx.fillStyle = '#00ffcc';
+                    break;
+                case 'sky':
+                    ctx.fillStyle = '#c0d8f0';
+                    break;
+                default:
+                    ctx.fillStyle = '#ffffff';
+                    break;
+            }
+            // Draw as a short vertical streak (motion blur effect)
+            ctx.fillRect(f.x, f.y, f.size * 0.4, f.length);
+        }
         ctx.restore();
     },
 
@@ -6291,7 +7402,7 @@ const HUD = {
         ctx.textAlign = 'center';
         ctx.shadowColor = '#00ffff';
         ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b1', leftCenter, leftY);
+        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
         ctx.shadowBlur = 0;
         leftY += 50;
 
@@ -6758,7 +7869,7 @@ const Menu = {
         ctx.shadowBlur = glow;
         ctx.font = 'bold 72px Share Tech Mono, Consolas, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('NEON STORM \u03b1', SCREEN_W / 2, 280);
+        ctx.fillText('NEON STORM \u03b2', SCREEN_W / 2, 280);
 
         // Subtitle
         ctx.shadowBlur = 5;
@@ -7251,6 +8362,33 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
+        // Bloom intensity per level theme
+        const bloomPresets = {
+            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
+            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
+            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
+            storm:     { bloomScale: 1.1,  threshold: 0.32 },
+            frozen:    { bloomScale: 0.85, threshold: 0.4  },
+            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+        };
+        const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
+        Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Per-level colour grade for distinct mood
+        const colorGradePresets = {
+            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
+            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
+            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
+            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
+            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+        };
+        const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
+        Renderer.setColorGrade(cg);
+
+        // Level 6 glitch atmosphere — persistent chromatic aberration
+        Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
+
         // Activate level-specific systems
         if (levelData.hasAsteroids) Asteroids.activate();
         if (levelData.hasEscort) Escort.activate();
@@ -7581,6 +8719,7 @@ const Game = {
                 Particles.update(dt);
                 Scoring.update(dt);
                 ScreenShake.update(dt);
+                Renderer.updateEffects(dt);
                 WaveSystem.update(dt);
                 Asteroids.update(dt);
                 Escort.update(dt);
@@ -7952,53 +9091,65 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Escort.draw(ctx);
-                PowerUps.draw(ctx);
-                Enemies.draw(ctx);
-                Player.draw(ctx);
-                if (Boss.active) Boss.draw(ctx);
-                Particles.draw(ctx);
-                Scoring.drawPopups(ctx);
-                ctx.restore();
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame(); // Still composites glow + game
+                    Renderer.blitToOverlay(ctx, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Enemies.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
@@ -8071,8 +9222,8 @@ const Game = {
                 // Thank you
                 ctx.fillStyle = '#667788';
                 ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b1', SCREEN_W / 2, 580);
-                ctx.fillText('This is an alpha build — more to come!', SCREEN_W / 2, 605);
+                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
+                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
 
                 // Menu options
                 const items = ['PLAY AGAIN', 'MAIN MENU'];
@@ -8114,12 +9265,15 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
-// Initialize and start
-Game.init().then(() => {
+// Initialize renderer, then game, then start
+(async function boot() {
+    await Renderer.init();
+    resizeCanvas(); // Re-run after Pixi canvas exists
+    await Game.init();
     requestAnimationFrame((timestamp) => {
         Game.lastTime = timestamp;
         gameLoop(timestamp);
     });
-});
+})();
 
 

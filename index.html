@@ -3,19 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NEON STORM α</title>
+<title>NEON STORM β</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { background: #0a0612; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Share Tech Mono', 'Consolas', 'Monaco', 'Courier New', monospace; }
-canvas { display: block; }
+#game-container { position: relative; }
+#pixi-play { position: absolute; z-index: 1; pointer-events: none; }
+#game { position: relative; z-index: 2; display: block; }
 </style>
 </head>
 <body>
-<canvas id="game"></canvas>
+<div id="game-container">
+    <canvas id="game"></canvas>
+</div>
+
+<!-- PixiJS v8 — WebGPU/WebGL renderer with Canvas fallback -->
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
+<!-- PixiJS Filters — AdvancedBloomFilter, CRTFilter, etc. -->
+<script src="https://cdn.jsdelivr.net/npm/pixi-filters@latest/dist/browser/pixi-filters.min.js"></script>
 
 <!-- Source modules loaded in dependency order -->
 <script src="src/constants.js"></script>
+<script src="src/renderer.js"></script>
 <script src="src/config.js"></script>
 <script src="src/input.js"></script>
 <script src="src/audio.js"></script>

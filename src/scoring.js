@@ -65,6 +65,9 @@ const Scoring = {
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
 
+        // Each kill contributes surge charge; grazes are faster (5 each)
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 3);
+
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
             this.spawnPopup(pointBlankLabel, pointBlankMult >= 3 ? '#ff00ff' : '#ffaa00', pointBlankMult >= 3 ? 22 : 16);
@@ -157,14 +160,11 @@ const Scoring = {
             const scale = 1 + (1 - p.life / p.maxLife) * 0.3; // Grow slightly over time
             ctx.globalAlpha = alpha;
             ctx.fillStyle = p.color;
-            ctx.shadowColor = p.color;
-            ctx.shadowBlur = 0;
             ctx.font = 'bold ' + Math.round(p.size * scale) + 'px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
             ctx.fillText(p.text, p.x, p.y);
         }
         ctx.globalAlpha = 1;
-        ctx.shadowBlur = 0;
     },
 
     breakChain() {

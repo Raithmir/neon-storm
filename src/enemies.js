@@ -21,7 +21,7 @@ const Enemies = {
         },
         phase_shifter: {
             hp: 4, speed: 100, radius: 15, score: 600, color: '#ff00ff', accent: '#ff88ff', bulletColor: '#cc00ff',
-            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.2, cancelBullets: true
+            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.20, cancelBullets: true
         },
         shielded_cruiser: {
             hp: 8, shieldHp: 3, speed: 40, radius: 28, score: 1000, color: '#8b00ff', accent: '#aa44ff', bulletColor: '#6600cc',
@@ -29,7 +29,7 @@ const Enemies = {
         },
         bomber: {
             hp: 6, speed: 50, radius: 24, score: 700, color: '#ff4400', accent: '#ff6622', bulletColor: '#ff2200',
-            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.3, cancelBullets: true
+            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.30, cancelBullets: true
         },
         sniper: {
             hp: 2, speed: 20, radius: 14, score: 400, color: '#ffff00', accent: '#ffffaa', bulletColor: '#ffcc00',
@@ -41,7 +41,7 @@ const Enemies = {
         },
         shield_wall: {
             hp: 3, speed: 60, radius: 16, score: 250, color: '#4488ff', accent: '#66aaff', bulletColor: '#2266dd',
-            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.1
+            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.10
         }
     },
 
@@ -273,6 +273,7 @@ const Enemies = {
         if (enemy.shieldHp > 0) {
             enemy.shieldHp -= damage;
             enemy.flashTimer = 0.08;
+            Particles.spawn(enemy.x, enemy.y, 3, { color: enemy.bulletColor, speed: 60, life: 0.15, size: 1.5 });
             if (enemy.shieldHp <= 0) {
                 Particles.spawn(enemy.x, enemy.y, 12, { color: enemy.bulletColor, speed: 120, life: 0.4 });
             }
@@ -280,6 +281,10 @@ const Enemies = {
         }
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
+        // Impact spark burst at hit point
+        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
+        // GPU glow flash
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -289,16 +294,19 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        // Explosion particles — apply equipped explosion cosmetic
-        const particleCount = enemy.radius > 20 ? 30 : 15;
+        const isBig = enemy.radius > 20;
         const explColor = Hangar.explosionColor;
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
-        Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
-        // Shockwave ring for medium+ enemies
-        if (enemy.radius > 15) {
-            Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
-        }
+        const accent = enemy.accent || explColor;
+
+        // Layered explosion: use spawnExplosion for the main burst
+        Particles.spawnExplosion(enemy.x, enemy.y, {
+            style: isBig ? 'large' : 'medium',
+            color: explColor,
+            color2: '#ffffff',
+        });
+        // Extra accent-coloured sparks for visual variety
+        Particles.spawn(enemy.x, enemy.y, isBig ? 20 : 10, { color: accent, speed: 180, life: 0.7, size: 3 });
+        if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
         if (enemy.cancelBullets) {
@@ -346,12 +354,9 @@ const Enemies = {
             const glitchFlash = isGlitchLevel && Math.random() < 0.02;
             if (e.flashTimer > 0 || glitchFlash) {
                 ctx.fillStyle = glitchFlash ? '#ff00ff' : '#ffffff';
-                ctx.shadowColor = glitchFlash ? '#ff00ff' : '#ffffff';
             } else {
                 ctx.fillStyle = e.color;
-                ctx.shadowColor = e.color;
             }
-            ctx.shadowBlur = 0; // No shadowBlur in gameplay — use hand-drawn glow for performance
 
             // Draw based on type
             const r = e.radius;
@@ -687,12 +692,14 @@ const PowerUps = {
             const pulse = 0.7 + Math.sin(p.bobTimer * 1.5) * 0.3;
             const rot = p.bobTimer * 0.8;
 
+            // Dynamic light — pulsing glow around power-ups
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 6, 0.3 + pulse * 0.4);
+
             ctx.save();
             ctx.translate(p.x, p.y + bob);
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;
-            ctx.shadowColor = p.color;
             
             ctx.lineWidth = 1.5;
             ctx.globalAlpha = 0.3 + Math.sin(p.bobTimer * 2) * 0.15;
@@ -703,7 +710,6 @@ const PowerUps = {
             // Inner filled hexagon background
             ctx.globalAlpha = 0.5 * pulse;
             ctx.fillStyle = p.color;
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             for (let j = 0; j < 6; j++) {
                 const a = (Math.PI * 2 / 6) * j + rot * 0.3;
@@ -716,7 +722,6 @@ const PowerUps = {
             // Weapon icon — drawn in white over the colored background
             ctx.globalAlpha = 1;
             
-            ctx.shadowColor = '#ffffff';
 
             switch (p.type) {
                 case 'spread':

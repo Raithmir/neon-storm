@@ -109,6 +109,7 @@ const Boss = {
             if (this.y >= 120) {
                 this.y = 120;
                 this.entered = true;
+                Renderer.triggerGodray(2.5);
             }
             return;
         }
@@ -119,12 +120,12 @@ const Boss = {
 
             // Stage 1 (0-1.5s): Internal explosions, increasing frequency
             if (this.defeatTimer < 1.5) {
-                const freq = 0.3 - this.defeatTimer * 0.12; // Faster over time
+                const freq = 0.3 - this.defeatTimer * 0.12;
                 if (this.defeatTimer % Math.max(0.08, freq) < dt) {
                     const rx = this.x + (Math.random() - 0.5) * 80;
                     const ry = this.y + (Math.random() - 0.5) * 80;
                     const col = this.colors[Math.floor(Math.random() * this.colors.length)] || '#ff8800';
-                    Particles.spawn(rx, ry, 12, { color: col, speed: 100 + this.defeatTimer * 40, life: 0.5, size: 2 + this.defeatTimer });
+                    Particles.spawnExplosion(rx, ry, { style: 'small', color: col, color2: '#ffffff' });
                     Audio.playExplosionSmall();
                     ScreenShake.trigger(3 + this.defeatTimer * 3, 0.15);
                 }
@@ -134,13 +135,13 @@ const Boss = {
             if (this.defeatTimer >= 1.5 && this.defeatTimer < 2.5) {
                 if (this.defeatTimer % 0.2 < dt) {
                     const ringCount = 16;
+                    const dist = (this.defeatTimer - 1.5) * 150;
                     for (let j = 0; j < ringCount; j++) {
                         const a = (Math.PI * 2 / ringCount) * j + this.defeatTimer * 2;
-                        const dist = (this.defeatTimer - 1.5) * 150;
-                        Particles.spawn(
+                        Particles.spawnExplosion(
                             this.x + Math.cos(a) * dist,
                             this.y + Math.sin(a) * dist,
-                            3, { color: '#ffffff', speed: 80, life: 0.4, size: 3 }
+                            { style: 'small', color: this.colors[j % this.colors.length] || '#ffffff', color2: '#ffffff' }
                         );
                     }
                     Audio.playExplosionSmall();
@@ -148,48 +149,50 @@ const Boss = {
                 }
             }
 
-            // Stage 3 (2.5-3.5s): Boss-specific final effect
+            // Stage 3 (2.5-3.5s): Boss-specific mega final effect
             if (this.defeatTimer >= 2.5 && this.defeatTimer < 3.5) {
                 if (this.defeatTimer - dt < 2.5) {
-                    // One-time big boom at start of stage 3
                     Audio.playExplosionLarge();
-                    ScreenShake.trigger(15, 0.8);
+                    ScreenShake.trigger(20, 1.0);
+                    Renderer.triggerFlash(0xffffff, 0.7);
+                    Renderer.triggerChroma(0.025, 0.8);
 
-                    // Boss-specific final burst
                     switch (this.bossType) {
                         case 'furnace':
-                            // Fiery explosion
-                            Particles.spawn(this.x, this.y, 50, { color: '#ff4400', speed: 300, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 30, { color: '#ffaa00', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff4400', color2: '#ffaa00' });
+                            Particles.spawnExplosion(this.x + 30, this.y - 20, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
                             break;
                         case 'leviathan':
-                            // Organic dissolution
-                            for (let j = 0; j < 40; j++) {
-                                const a = Math.random() * Math.PI * 2;
-                                const d = Math.random() * 60;
-                                Particles.spawn(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d, 3, { color: '#00ffaa', speed: 150 + Math.random() * 100, life: 1.2, size: 3 });
+                            for (let j = 0; j < 6; j++) {
+                                const a = (Math.PI * 2 / 6) * j;
+                                const d = 50 + Math.random() * 40;
+                                Particles.spawnExplosion(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d,
+                                    { style: 'large', color: '#00ffaa', color2: '#ffffff' });
                             }
                             break;
                         case 'interceptor_duo':
-                            // Twin explosions
-                            Particles.spawn(this.x - 40, this.y, 35, { color: '#ffaa00', speed: 250, life: 0.8, size: 4 });
-                            Particles.spawn(this.x + 40, this.y, 35, { color: '#ff4400', speed: 250, life: 0.8, size: 4 });
+                            Particles.spawnExplosion(this.x - 50, this.y, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x + 50, this.y, { style: 'large', color: '#ff4400', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'medium', color: '#ffffff', color2: '#ffff00' });
                             break;
                         case 'nexus':
-                            // Energy implosion then burst
-                            Particles.spawn(this.x, this.y, 60, { color: '#cc44ff', speed: 350, life: 1.2, size: 5 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 200, life: 1.0, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#cc44ff', color2: '#ffffff' });
+                            Particles.spawnShockwave(this.x, this.y, '#cc44ff', 200, 0.6);
                             break;
-                        case 'echo':
-                            // Glitch dissolution
-                            for (let j = 0; j < 50; j++) {
-                                const col = ['#00ffff', '#ff00ff', '#ffffff'][j % 3];
-                                Particles.spawn(this.x + (Math.random() - 0.5) * 100, this.y + (Math.random() - 0.5) * 100, 2, { color: col, speed: 200 + Math.random() * 150, life: 1.0, size: 2 + Math.random() * 3 });
+                        case 'echo': {
+                            const echoCols = ['#00ffff', '#ff00ff', '#ffffff'];
+                            for (let j = 0; j < 5; j++) {
+                                const ox = (Math.random() - 0.5) * 120;
+                                const oy = (Math.random() - 0.5) * 120;
+                                Particles.spawnExplosion(this.x + ox, this.y + oy,
+                                    { style: 'medium', color: echoCols[j % 3], color2: '#ffffff' });
                             }
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#00ffff' });
                             break;
+                        }
                         default: // architect
-                            Particles.spawn(this.x, this.y, 60, { color: '#ffffff', speed: 250, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ff00ff', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y + 20, { style: 'large', color: '#ffffff', color2: '#ff00ff' });
                             break;
                     }
                 }
@@ -764,9 +767,12 @@ const Boss = {
         this.patternIndex = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
         Enemies.enemyBullets.clear();
-        ScreenShake.trigger(8, 0.5);
-        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 180, life: 0.6, size: 3 });
-        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 80, 0.5);
+        ScreenShake.trigger(12, 0.6);
+        Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
+        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 120, 0.6);
+        Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
+        Renderer.triggerFlash(0xffffff, 0.2);
+        Renderer.triggerGlitch(0.55);
         Audio.playExplosionLarge();
         Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
@@ -787,8 +793,6 @@ const Boss = {
             ctx.fillStyle = `rgba(255, 0, 80, ${0.5 + Math.sin(this.warningTimer * 8) * 0.5})`;
             ctx.font = 'bold 28px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
-            ctx.shadowColor = '#ff0050';
-            ctx.shadowBlur = 0;
             ctx.fillText('WARNING', PLAY_W / 2, PLAY_H / 2 - 20);
             ctx.font = '16px Share Tech Mono, Consolas, monospace';
             ctx.fillText(this.bossName + ' APPROACHES', PLAY_W / 2, PLAY_H / 2 + 15);
@@ -802,10 +806,11 @@ const Boss = {
         const flash = this.flashTimer > 0;
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
+        // Dynamic light — boss core glow (brighter during flash)
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+
         // Core body
         ctx.fillStyle = mainColor;
-        ctx.shadowColor = mainColor;
-        ctx.shadowBlur = 0;
 
         // Type-specific body shapes
         const r = this.radius;
@@ -846,10 +851,8 @@ const Boss = {
                 ctx.fillRect(-r * 0.15, r * 0.85, r * 0.3, r * 0.08);
                 // Furnace glow (core)
                 ctx.fillStyle = '#ff2200';
-                ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 0;
                 ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 4) * 0.3;
                 ctx.beginPath(); ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
                 break;
             }
             case 'leviathan': {
@@ -883,10 +886,8 @@ const Boss = {
                     ctx.fillStyle = flash ? '#ffffff' : '#001a10';
                     ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12, r * 0.08, 0, 0, Math.PI * 2); ctx.fill();
                     ctx.fillStyle = '#00ffaa';
-                    ctx.shadowColor = '#00ffaa'; ctx.shadowBlur = 0;
                     ctx.beginPath(); ctx.arc(ex, ey, r * 0.04, 0, Math.PI * 2); ctx.fill();
                 }
-                ctx.shadowBlur = 0;
                 break;
             }
             case 'interceptor_duo': {
@@ -942,13 +943,11 @@ const Boss = {
                 // Phase 2: energy link between ships
                 if (this.phase === 2) {
                     ctx.strokeStyle = `rgba(255, 150, 0, ${0.4 + Math.sin(this.moveTimer * 5) * 0.2})`;
-                    ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 0;
                     ctx.lineWidth = 2;
                     for (let beam = 0; beam < 3; beam++) {
                         const by = -r * 0.2 + beam * r * 0.25;
                         ctx.beginPath(); ctx.moveTo(-sep, by); ctx.lineTo(sep, by); ctx.stroke();
                     }
-                    ctx.shadowBlur = 0;
                 }
                 break;
             }
@@ -1081,9 +1080,7 @@ const Boss = {
                 // Central eye
                 ctx.fillStyle = flash ? '#ffffff' : '#220000';
                 ctx.beginPath(); ctx.ellipse(0, -r * 0.25, r * 0.15, r * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#ff4444'; ctx.shadowColor = '#ff4444'; ctx.shadowBlur = 0;
                 ctx.beginPath(); ctx.arc(0, -r * 0.25, r * 0.05, 0, Math.PI * 2); ctx.fill();
-                ctx.shadowColor = mainColor; ctx.shadowBlur = 0;
                 // Leg struts
                 ctx.strokeStyle = mainColor; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(r * 0.15, r * 0.7); ctx.lineTo(r * 0.35, r * 1.0); ctx.stroke();
@@ -1103,8 +1100,6 @@ const Boss = {
                 const ax = Math.cos(seg.angle + this.moveTimer * 0.5) * 45;
                 const ay = Math.sin(seg.angle + this.moveTimer * 0.5) * 45;
                 ctx.fillStyle = '#ff6644';
-                ctx.shadowColor = '#ff6644';
-                ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(ax, ay, 12, 0, Math.PI * 2);
                 ctx.fill();
@@ -1140,10 +1135,7 @@ const Boss = {
             const pct = Math.max(0, this.hp / this.maxHp);
             const hpColor = this.phase === 1 ? '#ff4444' : this.phase === 2 ? '#ff00ff' : '#ff0040';
             ctx.fillStyle = hpColor;
-            ctx.shadowColor = hpColor;
-            ctx.shadowBlur = 0;
             ctx.fillRect(barX, barY, barW * pct, barH);
-            ctx.shadowBlur = 0;
             // Phase label
             ctx.fillStyle = '#ffffff';
             ctx.font = '12px Share Tech Mono, Consolas, monospace';

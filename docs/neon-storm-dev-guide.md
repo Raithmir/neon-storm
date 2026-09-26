@@ -1,10 +1,10 @@
-# Neon Storm α — Developer Guide
+# Neon Storm β — Developer Guide
 
 ## Overview
 
-Neon Storm α is a vertical scrolling bullet hell shooter built as a single HTML5 Canvas + vanilla JavaScript file (~5000 lines). It features a 6-level campaign, 9 enemy types, 6 boss fights, 4 weapon types, and a full meta-game with persistent unlockables.
+Neon Storm β is a vertical scrolling bullet hell shooter. It features a 6-level campaign, 9 enemy types, 6 boss fights, 4 weapon types, and a full meta-game with persistent unlockables.
 
-**Tech stack:** HTML5 Canvas 2D, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX, localStorage/Artifact Storage API for persistence.
+**Tech stack:** PixiJS v8 (WebGPU/WebGL) for gameplay rendering, HTML5 Canvas 2D for UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX, localStorage/Artifact Storage API for persistence.
 
 **Target:** Desktop browsers at 1920×1080. Scales to fit the browser window.
 
@@ -12,49 +12,62 @@ Neon Storm α is a vertical scrolling bullet hell shooter built as a single HTML
 
 ## File Structure
 
-Everything lives in a single `neon-storm-alpha.html` file. The JavaScript is organized into clearly labeled sections using comment banners:
+The project is split into 20 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file. For the web server approach, `index.html` loads them directly via `<script>` tags.
+
+### Module Map (in dependency order)
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `constants.js` | ~45 | Canvas setup, screen constants, dual-canvas sizing |
+| `renderer.js` | ~115 | PixiJS pipeline + offscreen Canvas 2D bridge |
+| `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
+| `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions |
+| `audio.js` | ~330 | Web Audio API procedural SFX + music hooks |
+| `storage.js` | ~810 | Persistence, high scores, settings, NC, end-run bonuses |
+| `ui-systems.js` | ~380 | Custom difficulty, hangar/shop, tutorial |
+| `particles.js` | ~200 | Particles, screen shake, screen transitions |
+| `bullets.js` | ~175 | BulletPool class (player + enemy projectiles) |
+| `scoring.js` | ~210 | Chain combo, graze, surge meter, popups |
+| `enemies.js` | ~830 | Enemy types, AI, patterns, power-ups |
+| `waves.js` | ~375 | Wave sequencer + level 1-6 data |
+| `level-systems.js` | ~245 | Asteroids, escort, campaign progression |
+| `bosses.js` | ~1150 | Boss types, patterns, visuals, defeat sequences |
+| `player.js` | ~775 | Player ship, weapons, abilities, collision |
+| `background.js` | ~405 | 6-theme parallax backgrounds |
+| `hud.js` | ~385 | HUD panels (left + right) |
+| `menus.js` | ~540 | All menu screens |
+| `game.js` | ~935 | Main game state machine |
+| `main.js` | ~25 | Boot sequence + game loop |
+
+### Rendering Architecture
+
+The game uses a dual-canvas architecture:
 
 ```
-// ============================================================
-//  SECTION NAME
-// ============================================================
+  Gameplay .draw(ctx) methods
+           │
+           ▼
+  Offscreen Canvas 2D (720×960)    ◄── All existing draw code draws here
+           │
+           ▼
+  PixiJS Texture Upload            ◄── GPU texture from offscreen canvas
+           │
+           ▼
+  PixiJS Sprite + Filters          ◄── Bloom, blur, distortion (Phase 2+)
+           │
+           ▼
+  Pixi Canvas (play area)          ◄── Positioned over the play area
+
+  Overlay Canvas 2D (1920×1080)    ◄── Menus, HUD, transitions (unchanged)
 ```
 
-### Section Map (in order of appearance)
+The `Renderer` module manages this pipeline:
+- `Renderer.getPlayCtx()` — returns the offscreen Canvas 2D context
+- `Renderer.beginFrame()` — clears the offscreen canvas
+- `Renderer.endFrame()` — uploads to GPU and renders via PixiJS
+- `Renderer.setShake(x, y)` — applies screen shake to the PixiJS sprite
 
-| Section | Line ~Range | Purpose |
-|---------|------------|---------|
-| **Core Engine** | 17–110 | Canvas setup, screen constants, scaling |
-| **Game Config** | 40–100 | Difficulty presets (casual/normal/hardcore) |
-| **Input System** | 105–210 | Keyboard + gamepad polling, rebindable actions |
-| **Audio System** | 215–475 | Web Audio API procedural SFX + music hooks |
-| **Storage** | 478–500 | Persistence abstraction (Artifact Storage / localStorage) |
-| **High Scores** | 503–635 | Per-difficulty leaderboards + 3-letter initial entry |
-| **Settings** | 638–840 | Player preferences (volume, shake, hitbox, fire mode) |
-| **Neon Credits** | 843–865 | Currency earn/spend/persist |
-| **End Run Bonus** | 868–930 | Post-level score bonuses calculation |
-| **Custom Difficulty** | 933–1080 | Full toggle panel for custom games |
-| **Hangar/Shop** | 1083–1260 | Cosmetic unlockables + loadout |
-| **Tutorial** | 1263–1330 | How to Play pages |
-| **Particle System** | 1278–1370 | Visual effects (explosions, trails, sparks) |
-| **Screen Shake** | 1373–1395 | Camera shake effect |
-| **BulletPool** | 1398–1470 | Object pool for projectiles (player + enemy) |
-| **Scoring System** | 1473–1540 | Chain combo, graze, surge meter |
-| **Enemy System** | 1543–1960 | Enemy types, spawning, AI, patterns, drawing |
-| **Power-Up System** | 1963–2035 | Weapon/drone pickups |
-| **Wave System** | 2038–2120 | Data-driven level sequencer |
-| **Level Data** | 2123–2370 | LEVEL_1 through LEVEL_6 wave definitions |
-| **Asteroid System** | 2373–2450 | Level 3 hazard objects |
-| **Escort System** | 2453–2530 | Level 4 allied ship |
-| **Campaign System** | 2533–2580 | Level progression + unlock tracking |
-| **Boss Type Defs** | 2583–2620 | Per-boss HP, phases, colors |
-| **Boss System** | 2623–3020 | Boss state machine, attack patterns, drawing |
-| **Player** | 3023–3480 | Ship state, movement, weapons, abilities, collision |
-| **Background** | 3490–3750 | Scrolling synthwave/themed backgrounds |
-| **HUD** | 3753–4090 | Side panel UI rendering |
-| **Menu System** | 4093–4480 | Title, difficulty select, game over, victory, high scores, pause |
-| **Game State Machine** | 4483–4920 | Main game loop coordinator, state transitions |
-| **Game Loop** | 4923–4940 | requestAnimationFrame loop |
+When PixiJS isn't available, `endFrame()` is a no-op and `Game.draw()` blits the offscreen canvas directly onto the overlay canvas with `ctx.drawImage()`. All gameplay draw code is identical in both paths — only the final compositing differs.
 
 ---
 
@@ -302,14 +315,9 @@ Data is stored via the `Storage` abstraction which tries `window.storage` (Artif
 ```
 2. Cosmetics are currently visual definitions only — the equipped cosmetic is tracked in `Hangar.equipped` but **not yet applied to gameplay rendering**. This is the main cosmetic integration TODO.
 
-### Applying Cosmetics to Gameplay (TODO)
+### Applying Cosmetics to Gameplay
 
-The Hangar tracks which cosmetics are equipped (`Hangar.equipped.skin`, `.trail`, `.bullet`, `.explosion`) but the Player draw code doesn't read these yet. To implement:
-
-1. In `Player.draw()`, read `Hangar.equipped.skin` and change the ship fill color
-2. In the engine trail section, read `Hangar.equipped.trail` and change trail color/behavior
-3. In `BulletPool.draw()`, read `Hangar.equipped.bullet` and modify player bullet rendering
-4. In `Enemies._onDeath()` and explosion code, read `Hangar.equipped.explosion` and vary the particle effect
+The Hangar tracks equipped cosmetics (`Hangar.equipped.skin`, `.trail`, `.bullet`, `.explosion`) and these are applied in gameplay rendering. Ship skins change the player ship fill colour (including Chromatic Shift and Ghost Frame special skins), engine trails use `Hangar.trailColor`, bullet styles apply base shot colour, and explosion effects vary particle colours on enemy death.
 
 ### Tuning Difficulty
 
@@ -336,55 +344,26 @@ The input system supports gamepad via `Input.gpBindings`. Button indices follow 
 
 ## Known Limitations & TODOs
 
+See `neon-storm-checklist.md` for the complete remaining work tracker.
+
+### Renderer
+- [ ] PixiJS filters (bloom, blur, distortion) not yet applied — pipeline is in place but Phase 2 work
+- [ ] Background sky gradient renders correctly but is not yet GPU-accelerated (draws to offscreen Canvas 2D)
+- [ ] Canvas 2D fallback has no glow/shadowBlur effects (intentional — graceful degradation, not parity)
+
 ### Gameplay
-- [ ] Boss attack patterns are shared across all boss types — each boss needs unique patterns
-- [ ] Cosmetics (ship skins, trails, bullet styles, explosions) are purchasable but not yet applied to rendering
-- [ ] Sniper enemy targeting laser doesn't aim at the player — it just points straight down
-- [ ] No visual distinction for glitched enemies in Level 6 (they use same sprites)
 - [ ] Escort ship (Level 4) doesn't dodge — could benefit from basic avoidance AI
 - [ ] Asteroid collision only checks player bullets, not enemy bullets
-- [ ] Shield Wall enemies don't actually link together visually — they're independent units
+- [ ] Shield Wall enemies don't visually link together
 
 ### Audio
 - [ ] Music system has hooks but no actual music tracks
-- [ ] No audio for shield hit, escort damage, asteroid destruction
-- [ ] Sound effects could use more variety (randomized pitch/timing)
 
 ### UI/UX
-- [ ] Key rebinding UI not implemented (bindings are defined but not editable in-game)
-- [ ] Gamepad button remapping UI not implemented
-- [ ] No visual controller button prompts (shows keyboard keys even when using gamepad)
-- [ ] Colorblind mode setting exists but doesn't change any colors yet
-- [ ] Flash reduction setting exists but doesn't affect anything yet
-- [ ] Particle density setting exists but doesn't reduce particle counts yet
-- [ ] No level select screen for replaying completed levels on preset difficulties
-- [ ] No confirmation dialog for restart/quit in pause menu
+- [ ] Gamepad button prompts not shown when controller is detected
 
-### Polish
-- [ ] Screen transitions are instant — could use fade effects
-- [ ] No title screen ship animation (GDD specifies drifting ship in background)
-- [ ] Chain milestone visual feedback (only has SFX, no on-screen popup)
-- [ ] Boss defeat sequence could be more dramatic
-- [ ] End-of-campaign celebration screen (currently just shows normal victory)
-- [ ] Background city skyline is static — could have parallax scrolling
-- [ ] No death animation for the player ship (just particles)
-
-### Performance
-- [ ] No spatial partitioning for collision detection (brute force O(n×m))
-- [ ] Particle system could be capped per frame to prevent slowdown
-- [ ] Shadow/glow effects are expensive — may need optimization on lower-end hardware
-- [ ] Consider offscreen canvas for static HUD elements
-
-### Future Features
-See `neon-storm-future-features.md` for the full roadmap including:
-- Adaptive rank system
-- Ship selection with different stats
-- Achievement system
-- Daily challenge mode
-- Endless/survival mode
-- Local co-op
-- Online leaderboards
-- Mobile/touch controls
+### Hangar Bonus Content
+- [ ] Boss Practice Mode, Enemy Gallery, Music Player, Ship Color Designer — listed in shop but not implemented
 
 ---
 
@@ -405,10 +384,10 @@ See `neon-storm-future-features.md` for the full roadmap including:
 
 | Document | Purpose |
 |----------|---------|
-| `neon-storm-gdd.md` | Original Game Design Document (Level 1 scope) |
-| `neon-storm-future-features.md` | Future feature roadmap with priority matrix |
+| `neon-storm-gdd.md` | Original Game Design Document |
+| `neon-storm-checklist.md` | Remaining work tracker (single source of truth) |
 | `neon-storm-dev-guide.md` | This file — developer reference |
 
 ---
 
-*Last updated for Neon Storm α — all 6 levels, balance pass 2.*
+*Last updated for Neon Storm β — PixiJS renderer pipeline (Phase 1).*

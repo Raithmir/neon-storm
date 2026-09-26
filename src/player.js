@@ -134,6 +134,15 @@ const Player = {
             this.fireTimer = rates[this.primaryWeapon] || 0.12;
         }
 
+        // Laser beam MeshRope — show while firing, hide otherwise
+        if (this.primaryWeapon === 'laser' && this.alive) {
+            const laserColor = Hangar.equipped.bullet === 'neon' ? '#4488ff' : Hangar.bulletColor;
+            const isLaserFiring = shouldFire && !this.dashing;
+            Renderer.updateLaserBeam(this.x, this.y - this.radius, laserColor, isLaserFiring);
+        } else {
+            Renderer.updateLaserBeam(0, 0, null, false);
+        }
+
         // Dash input
         if (Input.isPressed('dash') && GameConfig.dash.enabled && this.dashCooldown <= 0 && !this.dashing) {
             this._startDash();
@@ -169,8 +178,15 @@ const Player = {
                 Scoring.activateSurge();
                 Achievements.onSurge();
                 Audio.playSurgeActivate();
-                ScreenShake.trigger(6, 0.3);
-                Particles.spawn(this.x, this.y, 25, { color: '#ffffff', speed: 150, life: 0.5, size: 3 });
+                ScreenShake.trigger(12, 0.5);
+                Renderer.triggerFlash(0xffffff, 0.35);
+                Renderer.triggerChroma(0.025, 0.7);
+                Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
+                Particles.spawn(this.x, this.y, 80, { color: '#ffffff', speed: 300, life: 0.7, size: 4 });
+                Particles.spawn(this.x, this.y, 40, { color: '#00ffff', speed: 200, life: 1.0, size: 2.5 });
+                Particles.spawnShockwave(this.x, this.y, '#00ffff', 150, 0.45);
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 150, 0.95);
+                Renderer.spawnExplosionSprite(this.x, this.y, 5, 0x00ffff, 0.5);
             }
         }
 
@@ -305,8 +321,8 @@ const Player = {
             case 'homing': {
                 const lvl = this.primaryLevel;
                 const count = lvl >= 5 ? 5 : lvl >= 4 ? 4 : lvl >= 3 ? 3 : lvl >= 2 ? 2 : 1;
-                const dmg = 0.3; // Low damage — convenience weapon, not a damage dealer
-                const spd = lvl >= 4 ? 0.7 : 0.6;
+                const dmg = 0.5;
+                const spd = lvl >= 4 ? 0.7 : lvl >= 2 ? 0.65 : 0.6;
                 for (let j = 0; j < count; j++) {
                     const ox = (j - (count - 1) / 2) * 14;
                     this.bullets.spawn(this.x + ox, this.y - this.radius,
@@ -317,7 +333,7 @@ const Player = {
             }
             case 'laser': {
                 const lvl = this.primaryLevel;
-                const beamDamage = lvl >= 5 ? 5 : lvl >= 4 ? 4.5 : lvl >= 3 ? 4 : lvl >= 2 ? 3 : 2;
+                const beamDamage = lvl >= 5 ? 4 : lvl >= 4 ? 3.5 : lvl >= 3 ? 3 : lvl >= 2 ? 2.5 : 1.5;
                 const beamWidth = lvl >= 5 ? 8 : lvl >= 4 ? 7 : lvl >= 3 ? 6 : lvl >= 2 ? 5 : 4;
                 this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed * 1.5,
                     { color: laserColor, radius: beamWidth, damage: beamDamage, type: 'laser' });
@@ -345,7 +361,7 @@ const Player = {
         // Drone firing — Lv1-2: contact only, Lv3: 4 drones fire, Lv4: 5 drones fire faster, Lv5: 6 drones + stronger
         if (this.droneLevel >= 3) {
             const droneCount = this.droneLevel >= 5 ? 6 : this.droneLevel >= 4 ? 5 : 4;
-            const droneDmg = 0.5; // Same damage per shot at all levels — more drones = more coverage, not more burst
+            const droneDmg = 0.35; // Same damage per shot at all levels — more drones = more coverage, not more burst
             for (let d = 0; d < droneCount; d++) {
                 const a = (Math.PI * 2 / droneCount) * d + this.engineFlicker * 0.15;
                 const dx = this.x + Math.cos(a) * 30;
@@ -388,6 +404,9 @@ const Player = {
         this.bombTimer = 1.5;
         this.invincible = true;
         this.invincibleTimer = 1.5;
+        Renderer.triggerChroma(0.015, 0.6);
+        Renderer.triggerFlash(0x00ffff, 0.3);
+        Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();
@@ -434,8 +453,11 @@ const Player = {
             this.shieldFlashTimer = 0.3;
             this.invincible = true;
             this.invincibleTimer = 0.8;
-            Particles.spawn(this.x, this.y, 15, { color: '#4488ff', speed: 120, life: 0.3, size: 2 });
-            ScreenShake.trigger(4, 0.2);
+            Particles.spawn(this.x, this.y, 20, { color: '#4488ff', speed: 150, life: 0.4, size: 2.5 });
+            Particles.spawnShockwave(this.x, this.y, '#4488ff', 60, 0.35);
+            Renderer.addGlow(this.x, this.y, 0x4488ff, 100, 0.8);
+            Renderer.triggerChroma(0.008, 0.3);
+            ScreenShake.trigger(6, 0.3);
             Audio.playShieldHit();
             return;
         }
@@ -480,9 +502,11 @@ const Player = {
             });
         }
 
-        Particles.spawn(this.x, this.y, 30, { color: skinColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(this.x, this.y, 20, { color: '#ffffff', speed: 150, life: 0.4, size: 2 });
-        ScreenShake.trigger(10, 0.5);
+        Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
+        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
+        Renderer.triggerChroma(0.02, 0.7);
+        Renderer.triggerFlash(0xffffff, 0.4);
+        ScreenShake.trigger(15, 0.6);
         Audio.playPlayerDeath();
 
         if (this.lives > 0) {
@@ -535,8 +559,6 @@ const Player = {
                 ctx.rotate(f.rot);
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = f.color;
-                ctx.shadowColor = f.color;
-                ctx.shadowBlur = 0;
                 // Irregular triangle fragment
                 ctx.beginPath();
                 ctx.moveTo(-f.size * 0.5, -f.size * 0.3);
@@ -547,7 +569,6 @@ const Player = {
                 ctx.restore();
             }
             ctx.globalAlpha = 1;
-            ctx.shadowBlur = 0;
             // Still draw bullets even when dead
             this.bullets.draw(ctx);
             return;
@@ -581,8 +602,6 @@ const Player = {
                 const dx = this.x + Math.cos(a) * 30;
                 const dy = this.y + Math.sin(a) * 30;
                 ctx.fillStyle = '#cc44ff';
-                ctx.shadowColor = '#cc44ff';
-                ctx.shadowBlur = 0;
                 ctx.beginPath();
                 ctx.arc(dx, dy, 5, 0, Math.PI * 2);
                 ctx.fill();
@@ -608,11 +627,15 @@ const Player = {
         ctx.save();
         ctx.translate(this.x, this.y);
 
+        // GPU glow behind player — engine glow + surge glow
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
+        if (Scoring.surgeActive) {
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
+        }
+
         // Surge glow
         if (Scoring.surgeActive && !Settings.values.flashReduction) {
             ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.radius + 10 + Math.sin(this.engineFlicker) * 3, 0, Math.PI * 2);
             ctx.fill();
@@ -623,8 +646,6 @@ const Player = {
             const shieldAlpha = this.shieldFlashTimer > 0 ? 0.6 : 0.2 + Math.sin(this.engineFlicker * 0.3) * 0.1;
             const shieldColor = this.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
             ctx.strokeStyle = shieldColor;
-            ctx.shadowColor = shieldColor;
-            ctx.shadowBlur = 0;
             ctx.lineWidth = 2;
             ctx.globalAlpha = shieldAlpha;
             ctx.beginPath();
@@ -641,8 +662,6 @@ const Player = {
         ctx.globalAlpha = shipAlpha;
         const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
         ctx.fillStyle = sc;
-        ctx.shadowColor = sc;
-        ctx.shadowBlur = 0;
         const r = this.radius;
 
         // Main fuselage
@@ -683,14 +702,12 @@ const Player = {
 
         // Wing tip accents
         ctx.fillStyle = sc;
-        ctx.shadowBlur = 0;
         ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
         ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
 
         // Outline
         ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
         ctx.lineWidth = 1;
-        ctx.shadowBlur = 0;
         // Fuselage outline
         ctx.beginPath();
         ctx.moveTo(0, -r * 1.1);
@@ -712,8 +729,6 @@ const Player = {
         const trailColor = Hangar.trailColor;
         const flicker = Math.sin(this.engineFlicker) * 2;
         ctx.fillStyle = trailColor;
-        ctx.shadowColor = trailColor;
-        ctx.shadowBlur = 0;
         // Left engine
         ctx.beginPath();
         ctx.moveTo(-r * 0.35, r * 0.65);
@@ -730,8 +745,6 @@ const Player = {
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
             ctx.fillStyle = '#ffffff';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.hitboxRadius + 1, 0, Math.PI * 2);
             ctx.fill();
@@ -754,13 +767,28 @@ const Player = {
         // Bomb effect
         if (this.bombActive && !Settings.values.flashReduction) {
             const bombAlpha = this.bombTimer / 1.5;
+            // GPU glow at bomb centre
+            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
+            // Screen-filling flash
             ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
             ctx.fillRect(0, 0, PLAY_W, PLAY_H);
+            // White-hot centre
+            ctx.fillStyle = `rgba(255, 255, 255, ${bombAlpha * 0.12})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 80 * bombAlpha, 0, Math.PI * 2);
+            ctx.fill();
+            // Expanding shockwave ring
             const ringR = (1.5 - this.bombTimer) * 400;
             ctx.strokeStyle = `rgba(0, 255, 255, ${bombAlpha * 0.5})`;
             ctx.lineWidth = 3;
             ctx.beginPath();
             ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+            // Secondary inner ring
+            ctx.strokeStyle = `rgba(255, 255, 255, ${bombAlpha * 0.3})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
             ctx.stroke();
         } else if (this.bombActive) {
             // Reduced flash — just the ring, dimmer

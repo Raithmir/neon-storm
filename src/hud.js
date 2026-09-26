@@ -46,7 +46,7 @@ const HUD = {
         ctx.textAlign = 'center';
         ctx.shadowColor = '#00ffff';
         ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b1', leftCenter, leftY);
+        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
         ctx.shadowBlur = 0;
         leftY += 50;
 

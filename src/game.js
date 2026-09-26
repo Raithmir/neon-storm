@@ -74,6 +74,33 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
+        // Bloom intensity per level theme
+        const bloomPresets = {
+            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
+            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
+            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
+            storm:     { bloomScale: 1.1,  threshold: 0.32 },
+            frozen:    { bloomScale: 0.85, threshold: 0.4  },
+            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+        };
+        const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
+        Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Per-level colour grade for distinct mood
+        const colorGradePresets = {
+            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
+            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
+            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
+            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
+            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+        };
+        const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
+        Renderer.setColorGrade(cg);
+
+        // Level 6 glitch atmosphere — persistent chromatic aberration
+        Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
+
         // Activate level-specific systems
         if (levelData.hasAsteroids) Asteroids.activate();
         if (levelData.hasEscort) Escort.activate();
@@ -404,6 +431,7 @@ const Game = {
                 Particles.update(dt);
                 Scoring.update(dt);
                 ScreenShake.update(dt);
+                Renderer.updateEffects(dt);
                 WaveSystem.update(dt);
                 Asteroids.update(dt);
                 Escort.update(dt);
@@ -775,53 +803,65 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Escort.draw(ctx);
-                PowerUps.draw(ctx);
-                Enemies.draw(ctx);
-                Player.draw(ctx);
-                if (Boss.active) Boss.draw(ctx);
-                Particles.draw(ctx);
-                Scoring.drawPopups(ctx);
-                ctx.restore();
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame(); // Still composites glow + game
+                    Renderer.blitToOverlay(ctx, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Enemies.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
@@ -894,8 +934,8 @@ const Game = {
                 // Thank you
                 ctx.fillStyle = '#667788';
                 ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b1', SCREEN_W / 2, 580);
-                ctx.fillText('This is an alpha build — more to come!', SCREEN_W / 2, 605);
+                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
+                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
 
                 // Menu options
                 const items = ['PLAY AGAIN', 'MAIN MENU'];

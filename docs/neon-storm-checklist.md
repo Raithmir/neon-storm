@@ -1,8 +1,20 @@
-# NEON STORM α — Remaining Work
+# NEON STORM β — Remaining Work
 
-*All completed items removed. This tracks only what's left to do, categorised by priority and area.*
+*All completed items removed. This is the single tracker for what's left to do.*
 
 *For a full history of what's been implemented, see the Developer Guide.*
+
+---
+
+## Renderer Visual Upgrades (Phase 2+)
+
+The PixiJS pipeline is in place (Phase 1 complete). These are the visual upgrade phases — see `neon-storm-beta-roadmap.md` for full details.
+
+- [x] Phase 2: Bloom & Blending — AdvancedBloomFilter with per-level intensity tuning, additive glow layer with 200-sprite GPU pool, bullet/particle/explosion glow halos, particle cap raised to 1500
+- [x] Phase 3: Enhanced Backgrounds — deep star field with alpha twinkle (100 stars), nebula/atmosphere layer with per-theme colours and drift, near foreground speed streaks (25 particles), horizon silhouette gradient fade and horizontal drift on city themes
+- [x] Phase 4: Weapons & Combat VFX — enemy hit spark bursts with GPU glow flash, enhanced death explosions with white-hot flash particles and glow burst, bomb visual upgrade with centre glow + white-hot core + secondary ring, shield hit ripple shockwave with glow
+- [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
+- [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
 
 ---
 
@@ -69,16 +81,17 @@ Large effort features for expanding the game's reach or technical foundation.
 - [ ] Ghost Replay System — record player inputs per frame, replay as translucent ghost ship for learning optimal routes
 - [ ] Mobile / Touch Controls — relative touch drag for movement, auto-fire, large tap buttons for abilities
 - [ ] Modding Support — expose wave data format as documented JSON schema, level editor or JSON upload, community levels with separate leaderboard
-- [ ] WebGL Renderer Migration — GPU-accelerated rendering for shader effects (real bloom, distortion) and higher particle counts. Only needed if Canvas 2D becomes a performance bottleneck.
 
 ---
 
 ## Quick Reference: What's Done
 
-The alpha includes: 6-level campaign with unique bosses, 9 enemy types, 4 weapon types with 3 upgrade levels each, hybrid weapon/drone system, chain combo + graze + surge scoring, 3 difficulty presets + custom difficulty with 15 toggles, shield HP system, asteroid + escort level mechanics, persistent high scores + neon credits + cosmetics shop + achievements (20 challenges), endless survival mode, controls rebinding (keyboard + gamepad), 6 per-theme parallax backgrounds with horizon silhouettes, procedural SFX with pitch randomisation, screen transitions, boss-specific attack patterns + movement + visuals + defeat sequences, and comprehensive developer documentation.
+The beta includes everything from the alpha plus the PixiJS rendering pipeline. Alpha features: 6-level campaign with unique bosses, 9 enemy types, 4 weapon types with 3 upgrade levels each, hybrid weapon/drone system, chain combo + graze + surge scoring, 3 difficulty presets + custom difficulty with 15 toggles, shield HP system, asteroid + escort level mechanics, persistent high scores + neon credits + cosmetics shop + achievements (20 challenges), endless survival mode, controls rebinding (keyboard + gamepad), 6 per-theme parallax backgrounds with horizon silhouettes, procedural SFX with pitch randomisation, screen transitions, boss-specific attack patterns + movement + visuals + defeat sequences, and comprehensive developer documentation.
 
-**~7000 lines across 19 source modules with concatenation build system.**
+Beta additions: PixiJS v8 dual-canvas rendering pipeline with offscreen Canvas 2D bridge, automatic WebGPU/WebGL/Canvas fallback, self-contained build with bundled PixiJS.
+
+**~8200 lines across 20 source modules with concatenation build system.**
 
 ---
 
-*Last updated: Neon Storm α — final feature push complete*
+*Last updated: Neon Storm β — Phase 1 renderer migration complete*

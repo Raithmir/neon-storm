@@ -59,8 +59,6 @@ const Asteroids = {
             ctx.fillStyle = a.destructible ? '#665544' : '#444455';
             ctx.strokeStyle = a.destructible ? '#887766' : '#6666aa';
             ctx.lineWidth = 1.5;
-            ctx.shadowColor = a.destructible ? '#886644' : '#6666aa';
-            ctx.shadowBlur = 0;
             // Irregular polygon
             ctx.beginPath();
             for (let j = 0; j < 7; j++) {
@@ -153,17 +151,14 @@ const Escort = {
         // Allied ship — green tinted
         const flash = this.flashTimer > 0;
         ctx.fillStyle = flash ? '#ffffff' : '#44aa44';
-        ctx.shadowColor = '#44aa44'; ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.moveTo(0, -25); ctx.lineTo(30, 10); ctx.lineTo(20, 20);
         ctx.lineTo(-20, 20); ctx.lineTo(-30, 10);
         ctx.closePath(); ctx.fill();
         ctx.strokeStyle = '#88ff88'; ctx.lineWidth = 1.5; ctx.stroke();
         // Engine
-        ctx.fillStyle = '#22ff22'; ctx.shadowColor = '#22ff22';
         ctx.fillRect(-12, 20, 8, 6 + Math.random() * 3);
         ctx.fillRect(4, 20, 8, 6 + Math.random() * 3);
-        ctx.shadowBlur = 0;
         ctx.restore();
 
         // HP bar
