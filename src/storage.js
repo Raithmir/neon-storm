@@ -129,34 +129,20 @@ const HighScores = {
     },
 
     drawInitialEntry(ctx, x, y) {
-        ctx.fillStyle = '#ffff00';
-        ctx.font = 'bold 18px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('NEW HIGH SCORE!', x, y);
-
-        ctx.fillStyle = '#aaaaaa';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('ENTER YOUR INITIALS', x, y + 25);
-
+        Neon.text(ctx, 'NEW HIGH SCORE!', x, y + 10, '#ffee33', 28, { core: 0.4 });
+        UI.label(ctx, 'ENTER YOUR INITIALS', x, y + 40, UI.TEXT, 16);
         for (let i = 0; i < 3; i++) {
-            const cx = x - 30 + i * 30;
+            const cx = x - 56 + i * 56;
             const selected = i === this.initialCursor;
-            ctx.fillStyle = selected ? '#00ffff' : '#888888';
-            ctx.shadowColor = selected ? '#00ffff' : 'transparent';
-            ctx.shadowBlur = selected ? 10 : 0;
-            ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(this.currentInitials[i], cx, y + 65);
+            const c = selected ? UI.CYAN : UI.DIM;
+            UI.panel(ctx, cx - 22, y + 58, 44, 56, c, { fill: selected ? 'rgba(0,255,255,0.08)' : 'rgba(6,2,18,0.6)' });
+            Neon.text(ctx, this.currentInitials[i], cx, y + 100, selected ? '#ffffff' : UI.TEXT, 38, { halo: selected ? 0.5 : 0 });
             if (selected) {
-                ctx.fillStyle = '#00ffff';
-                ctx.fillText('▲', cx, y + 42);
-                ctx.fillText('▼', cx, y + 82);
+                Neon.text(ctx, '▲', cx, y + 52, UI.CYAN, 14, { halo: 0 });
+                Neon.text(ctx, '▼', cx, y + 132, UI.CYAN, 14, { halo: 0 });
             }
         }
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = '#778899';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ CHANGE  ←→ MOVE  ENTER CONFIRM', x, y + 105);
+        UI.label(ctx, '↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM', x, y + 160, UI.DIM, 14);
     },
 
     drawBoard(ctx, difficulty, x, y, w) {
@@ -215,6 +201,7 @@ const Settings = {
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
+        graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -222,6 +209,7 @@ const Settings = {
         { key: 'sfxVolume', label: 'SFX VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
+        { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },
@@ -242,6 +230,10 @@ const Settings = {
     },
 
     _apply() {
+        if (Renderer.quality !== undefined && this._appliedQuality !== this.values.graphicsQuality) {
+            this._appliedQuality = this.values.graphicsQuality;
+            Renderer.setQuality(this.values.graphicsQuality);
+        }
         Audio.sfxVolume = this.values.sfxVolume / 100;
         Audio.musicVolume = this.values.musicVolume / 100;
         GameConfig.fireMode = this.values.fireMode;
@@ -311,79 +303,59 @@ const Settings = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'SETTINGS', 110);
+        const cx = SCREEN_W / 2;
+        const rowH = 58, top = 200;
+        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * rowH + 30, UI.CYAN);
 
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('SETTINGS', SCREEN_W / 2, 120);
-        ctx.shadowBlur = 0;
-
-        const startY = 220;
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
-            const y = startY + i * 55;
+            const y = top + i * rowH;
             const selected = i === this.selectedIndex;
+            const valColor = selected ? UI.CYAN : UI.TEXT;
 
-            // Label (skip for action items — they draw their own centered label)
-            if (item.type !== 'action') {
-                ctx.fillStyle = selected ? '#ffffff' : '#667788';
-                ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.textAlign = 'right';
-                ctx.fillText(item.label, SCREEN_W / 2 - 20, y);
+            if (item.type === 'action') {
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 520, size: 20 });
+                continue;
             }
+            if (selected) {
+                ctx.fillStyle = UI.CYAN;
+                ctx.globalAlpha = 0.12;
+                ctx.fillRect(cx - 400, y - 26, 800, 42);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 400, y - 26, 3, 42);
+            }
+            Neon.text(ctx, item.label, cx - 30, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
+                { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
 
-            // Value
-            ctx.textAlign = 'left';
-            ctx.fillStyle = selected ? '#00ffff' : '#888888';
-            ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-
+            const vx = cx + 20;
             if (item.type === 'slider') {
                 const val = this.values[item.key];
-                const barW = 150;
-                const barH = 8;
-                const barX = SCREEN_W / 2 + 20;
-                ctx.fillStyle = '#222233';
-                ctx.fillRect(barX, y - barH / 2 - 2, barW, barH);
-                ctx.fillStyle = selected ? '#00ffff' : '#667788';
-                ctx.fillRect(barX, y - barH / 2 - 2, barW * (val / item.max), barH);
-                ctx.fillStyle = selected ? '#ffffff' : '#aaaaaa';
-                ctx.fillText(val + '%', barX + barW + 15, y);
+                Neon.bar(ctx, vx + 24, y - 10, 220, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
+                Neon.text(ctx, val + '%', vx + 270, y + 2, valColor, 18, { align: 'left', halo: 0 });
                 if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.fillText('◂', barX - 15, y);
-                    ctx.fillText('▸', barX + barW + 55, y);
+                    Neon.text(ctx, '◂', vx + 8, y + 2, UI.CYAN, 18, { halo: 0 });
+                    Neon.text(ctx, '▸', vx + 340, y + 2, UI.CYAN, 18, { halo: 0 });
                 }
             } else if (item.type === 'cycle') {
-                const val = this.values[item.key].toUpperCase();
-                ctx.fillText(selected ? '◂ ' + val + ' ▸' : val, SCREEN_W / 2 + 20, y);
+                const val = this.values[item.key].toString().toUpperCase();
+                Neon.text(ctx, selected ? '◂  ' + val + '  ▸' : val, vx, y + 2, valColor, 18, { align: 'left', halo: selected ? 0.3 : 0 });
             } else if (item.type === 'toggle') {
-                const val = this.values[item.key];
-                ctx.fillStyle = val ? '#00ff88' : '#ff4444';
-                ctx.fillText(val ? 'ON' : 'OFF', SCREEN_W / 2 + 20, y);
-            } else if (item.type === 'action') {
-                ctx.textAlign = 'center';
-                if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('▸ ' + item.label + ' ◂', SCREEN_W / 2, y);
-                } else {
-                    ctx.fillStyle = '#667788';
-                    ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText(item.label, SCREEN_W / 2, y);
-                }
+                const on = this.values[item.key];
+                // Switch: a pill with a knob
+                const sx = vx, sy = y - 12;
+                ctx.fillStyle = on ? 'rgba(0,255,136,0.25)' : 'rgba(255,51,85,0.15)';
+                ctx.fillRect(sx, sy, 56, 22);
+                ctx.strokeStyle = on ? '#00ff88' : '#ff3355';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(sx + 0.5, sy + 0.5, 55, 21);
+                ctx.fillStyle = on ? '#00ff88' : '#ff3355';
+                ctx.fillRect(on ? sx + 34 : sx + 4, sy + 4, 18, 14);
+                Neon.text(ctx, on ? 'ON' : 'OFF', sx + 72, y + 2, on ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: 0 });
             }
         }
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ SELECT  ←→ ADJUST  ENTER CONFIRM  ESC BACK', SCREEN_W / 2, SCREEN_H - 50);
+        UI.hint(ctx, '↑↓ SELECT   ←→ ADJUST   ENTER CONFIRM   ESC BACK');
     }
 };
 
@@ -481,102 +453,50 @@ const ControlsScreen = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('CONTROLS', SCREEN_W / 2, 80);
-        ctx.shadowBlur = 0;
-
-        // Column headers
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('ACTION', SCREEN_W / 2 - 200, 130);
-        ctx.fillText('KEYBOARD', SCREEN_W / 2, 130);
-        ctx.fillText('GAMEPAD', SCREEN_W / 2 + 200, 130);
-
-        // Separator line
-        ctx.strokeStyle = '#333355';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(SCREEN_W / 2 - 320, 140);
-        ctx.lineTo(SCREEN_W / 2 + 320, 140);
-        ctx.stroke();
-
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'CONTROLS', 100);
+        const cx = SCREEN_W / 2;
         const items = this.getItems();
-        const startY = 170;
-        const lineH = 40;
+        const top = 220, lineH = 50;
+        UI.panel(ctx, cx - 440, top - 70, 880, items.length * lineH + 60, UI.CYAN);
+        UI.label(ctx, 'ACTION', cx - 260, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'KEYBOARD', cx, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'GAMEPAD', cx + 260, top - 30, UI.DIM, 14);
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            const y = startY + i * lineH;
+            const y = top + i * lineH;
             const selected = i === this.selectedIndex;
-            const isAction = item.action === 'back' || item.action === 'reset';
-
-            if (isAction) {
-                ctx.textAlign = 'center';
-                ctx.fillStyle = selected ? (item.action === 'reset' ? '#ffaa00' : '#00ffff') : '#667788';
-                ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(selected ? '▸ ' + item.label + ' ◂' : item.label, SCREEN_W / 2, y);
+            if (item.action === 'back' || item.action === 'reset') {
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 460, size: 20, color: item.action === 'reset' ? '#ffaa00' : UI.CYAN });
                 continue;
             }
-
-            // Selection highlight
             if (selected) {
-                ctx.strokeStyle = '#00ffff';
-                ctx.shadowColor = '#00ffff';
-                ctx.shadowBlur = 6;
-                ctx.lineWidth = 1;
-                ctx.strokeRect(SCREEN_W / 2 - 320, y - 15, 640, 32);
-                ctx.shadowBlur = 0;
+                ctx.fillStyle = UI.CYAN;
+                ctx.globalAlpha = 0.12;
+                ctx.fillRect(cx - 420, y - 26, 840, 40);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 420, y - 26, 3, 40);
             }
-
-            // Action name
-            ctx.textAlign = 'center';
-            ctx.fillStyle = selected ? '#ffffff' : '#99aabb';
-            ctx.font = selected ? 'bold 15px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(item.label, SCREEN_W / 2 - 200, y);
-
-            // Keyboard binding
-            const isListeningKey = this.mode === 'rebind_key' && selected;
-            ctx.fillStyle = isListeningKey ? '#ffff00' : (selected ? '#00ffff' : '#888888');
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(isListeningKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), SCREEN_W / 2, y);
-
-            // Gamepad binding
-            const isListeningBtn = this.mode === 'rebind_button' && selected;
-            ctx.fillStyle = isListeningBtn ? '#ffff00' : (selected ? '#00ffff' : '#888888');
-            ctx.fillText(isListeningBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), SCREEN_W / 2 + 200, y);
+            Neon.text(ctx, item.label, cx - 260, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
+            const listenKey = this.mode === 'rebind_key' && selected;
+            const listenBtn = this.mode === 'rebind_button' && selected;
+            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), cx, y,
+                listenKey ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenKey ? 0.4 : 0, weight: '' });
+            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), cx + 260, y,
+                listenBtn ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenBtn ? 0.4 : 0, weight: '' });
         }
 
-        // Instructions
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
         if (this.mode === 'rebind_key') {
-            ctx.fillStyle = '#ffff00';
-            ctx.fillText('Press any key to bind, or ESC to cancel', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'Press any key to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
         } else if (this.mode === 'rebind_button') {
-            ctx.fillStyle = '#ffff00';
-            ctx.fillText('Press any gamepad button to bind, or ESC to cancel', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
         } else {
-            ctx.fillText('ENTER/→ = Rebind keyboard    ← = Rebind gamepad (if connected)', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, SCREEN_H - 90, UI.DIM, 15);
         }
-        ctx.fillStyle = '#667788';
-        ctx.fillText('ESC = Back', SCREEN_W / 2, SCREEN_H - 55);
-
-        // Gamepad status
-        ctx.fillStyle = Input.gamepadState ? '#00ff88' : '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', SCREEN_W / 2, SCREEN_H - 30);
+        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, SCREEN_H - 62,
+            Input.gamepadState ? '#00ff88' : UI.DIM, 14);
+        UI.hint(ctx, 'ESC BACK', SCREEN_H - 34);
     }
 };
 
@@ -788,23 +708,14 @@ const EndRunBonus = {
     draw(ctx, x, startY) {
         let y = startY;
         for (const b of this.bonuses) {
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.textAlign = 'right';
-            ctx.fillText(b.label, x - 10, y);
-            ctx.textAlign = 'left';
-            ctx.fillStyle = '#00ff88';
-            ctx.fillText('+' + b.value.toLocaleString(), x + 10, y);
-            y += 22;
+            Neon.text(ctx, b.label, x - 16, y, UI.DIM, 17, { align: 'right', halo: 0, weight: '' });
+            Neon.text(ctx, '+' + b.value.toLocaleString(), x + 16, y, '#00ff88', 17, { align: 'left', halo: 0.2 });
+            y += 28;
         }
         if (this.bonuses.length > 0) {
-            y += 5;
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('TOTAL BONUS: +' + this.totalBonus.toLocaleString(), x, y);
+            y += 8;
+            Neon.text(ctx, 'TOTAL BONUS  +' + this.totalBonus.toLocaleString(), x, y, '#ffffff', 19, { halo: 0.2 });
         }
-        ctx.textAlign = 'center';
-        return y + 10;
+        return y + 14;
     }
 };

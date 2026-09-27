@@ -31,6 +31,8 @@ function resizeCanvas() {
     if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
         Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
     }
+    // Render at the display's real pixel density (capped by graphics quality)
+    if (typeof Renderer !== 'undefined' && Renderer.ready) Renderer.applyResolution(scale);
 }
 window.addEventListener('resize', resizeCanvas);
 // Safe initial sizing (Renderer not yet available — just size the overlay canvas)

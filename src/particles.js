@@ -4,60 +4,135 @@
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
+    shards: [],     // Neon outline pieces from shattered ships
     maxParticles: 3000,
+    maxShards: 600,
 
-    spawn(x, y, count, opts = {}) {
+    _density() {
         const densityScale = { low: 0.3, medium: 0.6, high: 1.0 };
-        const scale = densityScale[Settings.values.particleDensity] || 1.0;
-        const actualCount = Math.min(Math.max(1, Math.round(count * scale)), this.maxParticles - this.particles.length);
+        return densityScale[Settings.values.particleDensity] || 1.0;
+    },
+
+    // opts: angle/spread (radians), speed, life, size, color, decay,
+    //       streak (draw as a spark line stretched along its velocity),
+    //       drag (velocity kept per second, default 0.5), gravity (px/s²)
+    spawn(x, y, count, opts = {}) {
+        const actualCount = Math.min(Math.max(1, Math.round(count * this._density())), this.maxParticles - this.particles.length);
         if (actualCount <= 0) return;
         for (let i = 0; i < actualCount; i++) {
             const angle = opts.angle !== undefined ? opts.angle + (Math.random() - 0.5) * (opts.spread || Math.PI * 2) : Math.random() * Math.PI * 2;
-            const speed = (opts.speed || 100) * (0.5 + Math.random());
+            const speed = (opts.speed !== undefined ? opts.speed : 100) * (0.5 + Math.random());
             const life = opts.life || (0.3 + Math.random() * 0.5);
             const size = opts.size || (1 + Math.random() * 2);
-            const p = {
+            this._add({
                 x, y,
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
                 life, maxLife: life, size,
                 color: opts.color || '#00ffff',
                 decay: opts.decay || 1,
-                _pp: null, // Pixi Particle
-            };
-            if (Renderer.usePixi && Renderer.particleLayer && Renderer.glowTex) {
-                const s = (size * 2) / 32;
-                p._pp = new PIXI.Particle({
-                    texture: Renderer.glowTex,
-                    x, y,
-                    scaleX: s, scaleY: s,
-                    anchorX: 0.5, anchorY: 0.5,
-                    tint: Renderer.colorToHex(p.color),
-                    alpha: 0.85,
-                });
-                Renderer.particleLayer.addParticle(p._pp);
-            }
-            this.particles.push(p);
+                streak: !!opts.streak,
+                pixel: !!opts.pixel,
+                drag: opts.drag !== undefined ? opts.drag : 0.5,
+                gravity: opts.gravity || 0,
+                _pp: null,
+            });
         }
     },
 
-    // Multi-layer explosion: shockwave + particle bursts + GPU fireball + addGlow
+    _add(p) {
+        if (this.particles.length >= this.maxParticles) return;
+        p._hex = Renderer.colorToHex(p.color);
+        if (Renderer.usePixi && Renderer.particleLayer && Renderer.fx) {
+            p._pp = new PIXI.Particle({
+                texture: p.streak ? Renderer.fx.spark : (p.pixel ? Renderer.fx.pixel : Renderer.fx.glow),
+                x: p.x, y: p.y,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: p._hex,
+                alpha: 0.9,
+            });
+            this._syncPixi(p, 1);
+            Renderer.particleLayer.addParticle(p._pp);
+        }
+        this.particles.push(p);
+    },
+
+    // A stationary glow that fades quickly: muzzle flashes, explosion cores, exhaust
+    flash(x, y, radius, color, life) {
+        if (Renderer.calm() && radius > 20) radius = 20;   // Flash Reduction: no big white bursts
+        this._add({ x, y, vx: 0, vy: 0, life, maxLife: life, size: radius / 2, color, decay: 1, flash: true, drag: 0, gravity: 0, _pp: null });
+    },
+
+    // Bullet impact: a spray of sparks thrown back against the shot's direction
+    impact(b) {
+        const back = Math.atan2(-b.vy, -b.vx);
+        this.spawn(b.x, b.y, 4, { angle: back, spread: 1.6, speed: 160, life: 0.18, size: 1.4, color: b.color, streak: true, drag: 0.1 });
+        this.flash(b.x, b.y, 7, '#ffffff', 0.06);
+    },
+
+    // Multi-layer explosion: white flash, fireball, neon ring, spark streaks, core burst, embers
     spawnExplosion(x, y, opts = {}) {
         const style = opts.style || 'medium';
         const color  = opts.color  || '#ff8800';
         const color2 = opts.color2 || '#ffffff';
         const styles = {
-            small:  { shock: 40,  core: 15, coreSpd: 120, coreLife: 0.4, coreSize: 1.5, spark: 8,  sparkSpd: 80,  sparkLife: 0.6, sparkSize: 2,   fScale: 1.2, fDur: 0.35 },
-            medium: { shock: 70,  core: 30, coreSpd: 200, coreLife: 0.6, coreSize: 2.5, spark: 18, sparkSpd: 140, sparkLife: 0.9, sparkSize: 3,   fScale: 2.2, fDur: 0.45 },
-            large:  { shock: 110, core: 55, coreSpd: 280, coreLife: 0.8, coreSize: 3.5, spark: 28, sparkSpd: 200, sparkLife: 1.2, sparkSize: 4,   fScale: 3.5, fDur: 0.55 },
-            mega:   { shock: 160, core: 80, coreSpd: 370, coreLife: 1.0, coreSize: 5,   spark: 45, sparkSpd: 280, sparkLife: 1.5, sparkSize: 6,   fScale: 5.5, fDur: 0.65 },
+            small:  { shock: 40,  core: 8,  coreSpd: 120, coreLife: 0.4, coreSize: 1.5, spark: 10, sparkSpd: 220, sparkLife: 0.35, ember: 3,  fScale: 1.2, fDur: 0.35 },
+            medium: { shock: 70,  core: 14, coreSpd: 200, coreLife: 0.6, coreSize: 2.5, spark: 20, sparkSpd: 320, sparkLife: 0.45, ember: 6,  fScale: 2.2, fDur: 0.45 },
+            large:  { shock: 110, core: 24, coreSpd: 280, coreLife: 0.8, coreSize: 3.5, spark: 30, sparkSpd: 420, sparkLife: 0.55, ember: 10, fScale: 3.5, fDur: 0.55 },
+            mega:   { shock: 160, core: 36, coreSpd: 370, coreLife: 1.0, coreSize: 5,   spark: 48, sparkSpd: 520, sparkLife: 0.7,  ember: 16, fScale: 5.5, fDur: 0.65 },
         };
         const s = styles[style] || styles.medium;
-        this.spawnShockwave(x, y, color, s.shock, 0.4);
-        this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd,  life: s.coreLife,  size: s.coreSize  });
-        this.spawn(x, y, s.spark, { color: color,  speed: s.sparkSpd, life: s.sparkLife, size: s.sparkSize });
+        // Hangar explosion styles (opts.variant): burst (default), shatter, pixel, supernova
+        const v = opts.variant || 'burst';
+        const nova = v === 'supernova';
+        this.flash(x, y, s.shock * (nova ? 1.2 : 0.7), '#ffffff', nova ? 0.16 : 0.1);
+        this.spawnShockwave(x, y, color, s.shock * (nova ? 1.5 : 1), nova ? 0.55 : 0.4);
+        if (style !== 'small' || nova) this.spawnShockwave(x, y, color2, s.shock * 0.6, 0.25);
+        if (v === 'pixel') {
+            // Pixel Dissolve: the burst breaks into squares that drift down and fade
+            this.spawn(x, y, s.spark + s.core, { color, speed: s.coreSpd * 0.6, life: 0.9, size: 3, pixel: true, drag: 1.5, gravity: 40 });
+            this.spawn(x, y, s.core, { color: color2, speed: s.coreSpd * 0.4, life: 0.6, size: 2, pixel: true, drag: 1.5 });
+        } else {
+            const sparkK = v === 'shatter' ? 0.5 : (nova ? 1.6 : 1);
+            this.spawn(x, y, s.spark * sparkK, { color, speed: s.sparkSpd * (nova ? 1.3 : 1), life: s.sparkLife, size: 1.6, streak: true, drag: 0.15 });
+            this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd, life: s.coreLife * 0.5, size: s.coreSize * 0.7 });
+            if (v !== 'shatter') this.spawn(x, y, s.ember, { color, speed: 40, life: 1.4, size: 1.6, drag: 0.3, gravity: -25 });
+        }
         Renderer.addGlow(x, y, Renderer.colorToHex(color2), s.shock * 0.9, 0.95);
         Renderer.spawnExplosionSprite(x, y, s.fScale, Renderer.colorToHex(color), s.fDur);
+    },
+
+    // Break a neon outline into spinning line segments.
+    // pts: flat closed outline [x0, y0, ...] in units of `scale`, rotated by `rot`.
+    shatter(x, y, pts, scale, rot, color, speed, cuts) {
+        const n = pts.length / 2;
+        const cos = Math.cos(rot || 0), sin = Math.sin(rot || 0);
+        const pieces = Math.max(1, Math.round(this._density() * (cuts || 2)));   // cuts per edge
+        const sp = speed || 1;
+        for (let i = 0; i < n && this.shards.length < this.maxShards; i++) {
+            const j = (i + 1) % n;
+            const ax = pts[i * 2] * scale, ay = pts[i * 2 + 1] * scale;
+            const bx = pts[j * 2] * scale, by = pts[j * 2 + 1] * scale;
+            for (let k = 0; k < pieces; k++) {
+                const t0 = k / pieces, t1 = (k + 1) / pieces;
+                const x0 = ax + (bx - ax) * t0, y0 = ay + (by - ay) * t0;
+                const x1 = ax + (bx - ax) * t1, y1 = ay + (by - ay) * t1;
+                const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+                const wx = mx * cos - my * sin, wy = mx * sin + my * cos;
+                const d = Math.sqrt(wx * wx + wy * wy) || 1;
+                const out = (60 + Math.random() * 140) * sp;
+                const life = 0.8 + Math.random() * 0.5;
+                this.shards.push({
+                    x: x + wx, y: y + wy,
+                    vx: wx / d * out + (Math.random() - 0.5) * 60,
+                    vy: wy / d * out + (Math.random() - 0.5) * 60,
+                    a: Math.atan2(y1 - y0, x1 - x0) + (rot || 0),
+                    va: (Math.random() - 0.5) * 14,
+                    half: Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0)) / 2,
+                    life, maxLife: life, color,
+                });
+            }
+        }
     },
 
     // Spawn an expanding shockwave ring
@@ -71,35 +146,63 @@ const Particles = {
         });
     },
 
+    _syncPixi(p, t) {
+        const pp = p._pp;
+        pp.x = p.x;
+        pp.y = p.y;
+        if (p.streak) {
+            const speed = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+            pp.rotation = Math.atan2(p.vy, p.vx) + Math.PI / 2;
+            pp.scaleX = p.size * 0.45;
+            pp.scaleY = (3 + speed * 0.045) * (0.4 + t * 0.6) / 32;
+            pp.alpha = t;
+        } else if (p.pixel) {
+            pp.scaleX = pp.scaleY = p.size * 0.5 * (0.5 + t * 0.5);
+            pp.alpha = t;
+        } else if (p.flash) {
+            const s = (p.size * 2 * (0.6 + t * 0.4)) / 32;
+            pp.scaleX = pp.scaleY = s;
+            pp.alpha = t;
+        } else {
+            const s = (p.size * (0.3 + t * 0.7) * 2) / 32;
+            pp.scaleX = pp.scaleY = s;
+            pp.alpha = t * 0.9;
+        }
+    },
+
     update(dt) {
         const usePixi = Renderer.usePixi && Renderer.particleLayer;
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
             p.x += p.vx * dt;
             p.y += p.vy * dt;
-            p.vx *= (1 - 0.5 * dt);
-            p.vy *= (1 - 0.5 * dt);
+            p.vx *= (1 - p.drag * dt);
+            p.vy *= (1 - p.drag * dt);
+            p.vy += p.gravity * dt;
             p.life -= dt * p.decay;
             if (p.life <= 0) {
                 if (p._pp) { Renderer.particleLayer.removeParticle(p._pp); p._pp = null; }
                 this.particles.splice(i, 1);
             } else if (usePixi && p._pp) {
-                const t = p.life / p.maxLife;
-                const currentSize = p.size * (0.3 + t * 0.7);
-                const s = (currentSize * 2) / 32;
-                p._pp.x = p.x;
-                p._pp.y = p.y;
-                p._pp.scaleX = s;
-                p._pp.scaleY = s;
-                p._pp.alpha = t * 0.9;
+                this._syncPixi(p, p.life / p.maxLife);
             }
+        }
+        for (let i = this.shards.length - 1; i >= 0; i--) {
+            const s = this.shards[i];
+            s.x += s.vx * dt;
+            s.y += s.vy * dt;
+            s.vx *= (1 - 1.2 * dt);
+            s.vy *= (1 - 1.2 * dt);
+            s.a += s.va * dt;
+            s.life -= dt;
+            if (s.life <= 0) this.shards.splice(i, 1);
         }
         // Update shockwaves
         for (let i = this.shockwaves.length - 1; i >= 0; i--) {
             const s = this.shockwaves[i];
             s.life -= dt;
             const t = 1 - s.life / s.maxLife; // 0→1 over lifetime
-            s.radius = s.maxRadius * t;
+            s.radius = s.maxRadius * (1 - (1 - t) * (1 - t));   // fast start, slowing
             if (s.life <= 0) this.shockwaves.splice(i, 1);
         }
     },
@@ -109,9 +212,9 @@ const Particles = {
             // Pixi path: particles are rendered via particleLayer; just feed bloom
             for (const p of this.particles) {
                 const t = p.life / p.maxLife;
-                if (t > 0.4 && p.size >= 1.5) {
+                if (!p.streak && t > 0.4 && p.size >= 1.5) {
                     const currentSize = p.size * (0.3 + t * 0.7);
-                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 9, t * 0.45);
+                    Renderer.addGlow(p.x, p.y, p._hex, currentSize * (p.flash ? 4 : 9), t * 0.45);
                 }
             }
         } else {
@@ -123,8 +226,28 @@ const Particles = {
                 const t = p.life / p.maxLife;
                 const currentSize = p.size * (0.3 + t * 0.7);
 
+                if (p.pixel) {
+                    const sz = p.size * 1.5 * (0.5 + t * 0.5);
+                    ctx.globalAlpha = t;
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+                    continue;
+                }
+                if (p.streak) {
+                    const len = 3 + Math.sqrt(p.vx * p.vx + p.vy * p.vy) * 0.03;
+                    const a = Math.atan2(p.vy, p.vx);
+                    ctx.globalAlpha = t;
+                    ctx.strokeStyle = p.color;
+                    ctx.lineWidth = p.size;
+                    ctx.beginPath();
+                    ctx.moveTo(p.x - Math.cos(a) * len, p.y - Math.sin(a) * len);
+                    ctx.lineTo(p.x + Math.cos(a) * len, p.y + Math.sin(a) * len);
+                    ctx.stroke();
+                    continue;
+                }
+
                 if (t > 0.4 && p.size >= 1.5) {
-                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 8, t * 0.5);
+                    Renderer.addGlow(p.x, p.y, p._hex, currentSize * 8, t * 0.5);
                 }
 
                 ctx.globalAlpha = t * 0.2;
@@ -150,17 +273,37 @@ const Particles = {
             ctx.globalCompositeOperation = prevComposite;
         }
 
-        // Shockwave rings
+        // Shattered outline pieces: coloured halo pass, then white-hot core pass
+        if (this.shards.length > 0) {
+            ctx.lineCap = 'round';
+            for (let pass = 0; pass < 2; pass++) {
+                ctx.lineWidth = pass === 0 ? 5 : 1.5;
+                for (const s of this.shards) {
+                    const t = s.life / s.maxLife;
+                    const dx = Math.cos(s.a) * s.half, dy = Math.sin(s.a) * s.half;
+                    ctx.strokeStyle = pass === 0 ? s.color : '#ffffff';
+                    ctx.globalAlpha = pass === 0 ? t * 0.45 : t * 0.9;
+                    ctx.beginPath();
+                    ctx.moveTo(s.x - dx, s.y - dy);
+                    ctx.lineTo(s.x + dx, s.y + dy);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        // Shockwave rings: faint wide halo plus a thin bright line
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
-            // GPU glow at shockwave centre
             Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 2.5, (1 - t) * 0.8);
-
-            ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
-            ctx.lineWidth = 2 * (1 - t) + 0.5;
             ctx.beginPath();
             ctx.arc(s.x, s.y, s.radius, 0, Math.PI * 2);
+            ctx.globalAlpha = (1 - t) * 0.3;
+            ctx.lineWidth = 7 * (1 - t) + 1;
+            ctx.stroke();
+            ctx.globalAlpha = (1 - t) * 0.9;
+            ctx.lineWidth = 1.5 * (1 - t) + 0.5;
+            ctx.strokeStyle = '#ffffff';
             ctx.stroke();
         }
 
@@ -175,6 +318,7 @@ const Particles = {
         }
         this.particles.length = 0;
         this.shockwaves.length = 0;
+        this.shards.length = 0;
     }
 };
 

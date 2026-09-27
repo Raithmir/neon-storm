@@ -21,7 +21,6 @@ const Player = {
     deathAnimTimer: 0,
     deathX: 0,
     deathY: 0,
-    deathFragments: [],
 
     // Weapons
     primaryWeapon: 'none', // 'none', 'spread', 'homing', 'laser'
@@ -122,15 +121,6 @@ const Player = {
         if (!this.alive) {
             this.respawnTimer -= dt;
             this.deathAnimTimer = Math.max(0, this.deathAnimTimer - dt);
-            // Animate death fragments
-            for (const f of this.deathFragments) {
-                f.x += f.vx * dt;
-                f.y += f.vy * dt;
-                f.vy += 30 * dt; // slight gravity
-                f.rot += f.rotSpeed * dt;
-                f.vx *= 0.98;
-                f.vy *= 0.98;
-            }
             if (this.respawnTimer <= 0 && this.lives > 0) this._respawn();
             // Keep bullets moving even while dead
             this.bullets.update(dt, Enemies.list);
@@ -320,7 +310,7 @@ const Player = {
                 if (Boss.hitTest(b)) {
                     b.active = false;
                     Scoring.onHit();
-                    Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
+                    Particles.impact(b);
                     continue;
                 }
             }
@@ -336,7 +326,7 @@ const Player = {
                     const playerDist = Math.sqrt(pdx * pdx + pdy * pdy);
                     Enemies.hit(e, b.damage, playerDist);
                     Scoring.onHit();
-                    Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
+                    Particles.impact(b);
                     if (b.pierce) {
                         (b.hitSet || (b.hitSet = new Set())).add(e);
                         continue;
@@ -452,6 +442,7 @@ const Player = {
     // Base shot: always available, on its own timer so weapons never slow it down
     _fireBaseShot() {
         this.bullets.spawn(this.x, this.y - this.radius, 0, -700, { color: Hangar.bulletColor, radius: 3, damage: 1 });
+        Particles.flash(this.x, this.y - this.radius - 2, 9, Hangar.bulletColor, 0.05);
         Audio.playShot();
     },
 
@@ -506,6 +497,8 @@ const Player = {
                 break;
             }
         }
+        const flashColor = colors[this.primaryWeapon];
+        if (flashColor) Particles.flash(this.x, this.y - this.radius - 2, 12, flashColor, 0.06);
     },
 
     // Drones Lv3+: each drone fires at the nearest target, including the boss
@@ -641,24 +634,13 @@ const Player = {
                 break;
         }
 
-        // Death animation — spawn ship fragments
+        // Death animation — the ship's outline shatters
         this.deathX = this.x;
         this.deathY = this.y;
         this.deathAnimTimer = 1.5;
-        this.deathFragments = [];
-        const skinColor = Hangar.skinColor;
-        for (let i = 0; i < 8; i++) {
-            const angle = (Math.PI * 2 / 8) * i + Math.random() * 0.3;
-            this.deathFragments.push({
-                x: this.x, y: this.y,
-                vx: Math.cos(angle) * (60 + Math.random() * 80),
-                vy: Math.sin(angle) * (60 + Math.random() * 80),
-                rot: Math.random() * Math.PI * 2,
-                rotSpeed: (Math.random() - 0.5) * 8,
-                size: 4 + Math.random() * 6,
-                color: i % 2 === 0 ? skinColor : '#88eeff'
-            });
-        }
+        const skinColor = Hangar.skinColor || '#00ffff';
+        Particles.shatter(this.x, this.y, this._NEON_HULL, this.radius, 0, skinColor, 1.6);
+        Particles.shatter(this.x, this.y, this._NEON_CANOPY, this.radius, 0, '#aaddff', 1.2);
 
         Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
         Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
@@ -709,27 +691,155 @@ const Player = {
         }
     },
 
-    draw(ctx) {
-        // Draw death fragments when dead
-        if (!this.alive && this.deathAnimTimer > 0) {
-            const alpha = this.deathAnimTimer / 1.5;
-            for (const f of this.deathFragments) {
-                ctx.save();
-                ctx.translate(f.x, f.y);
-                ctx.rotate(f.rot);
-                ctx.globalAlpha = alpha;
-                ctx.fillStyle = f.color;
-                // Irregular triangle fragment
+    // Neon style ship outlines, in units of this.radius
+    _NEON_HULL: Neon.mirror([0, -1.15, 0.2, -0.6, 0.3, -0.05, 0.95, 0.45, 0.9, 0.62, 0.45, 0.48, 0.32, 0.72, 0.12, 0.62, 0, 0.66]),
+    _NEON_CANOPY: Neon.mirror([0, -0.66, 0.1, -0.42, 0.08, -0.2, 0, -0.14]),
+    _neonBank: 0,
+    _neonLastX: null,
+
+    // Draw an engine trail along pts (ship first). Styles match the Hangar
+    // trails: thrust ribbon, flickering flame, particle scatter, lightning
+    // arc and void (dark core, glowing edges). Also used by the Hangar preview.
+    drawTrail(ctx, pts, style, color, r, t) {
+        const n = pts.length;
+        const calm = Renderer.calm();
+        const ribbon = (fill, widthK, alpha, jitter) => {
+            ctx.fillStyle = fill;
+            for (let i = 0; i < n - 1; i++) {
+                const p0 = pts[i], p1 = pts[i + 1];
+                const j0 = jitter ? 1 + Math.sin(t * 40 + i * 1.7) * jitter : 1;
+                const j1 = jitter ? 1 + Math.sin(t * 40 + (i + 1) * 1.7) * jitter : 1;
+                const w0 = r * widthK * (1 - i / n) * j0, w1 = r * widthK * (1 - (i + 1) / n) * j1;
+                ctx.globalAlpha = (1 - i / n) * alpha;
                 ctx.beginPath();
-                ctx.moveTo(-f.size * 0.5, -f.size * 0.3);
-                ctx.lineTo(f.size * 0.5, 0);
-                ctx.lineTo(-f.size * 0.3, f.size * 0.4);
-                ctx.closePath();
+                ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
+                ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
                 ctx.fill();
-                ctx.restore();
             }
             ctx.globalAlpha = 1;
-            // Still draw bullets even when dead
+        };
+        switch (style) {
+            case 'flame':
+                ribbon(color, 0.6, 0.45, calm ? 0 : 0.25);
+                ribbon('#ffcc33', 0.3, 0.6, calm ? 0 : 0.3);
+                ribbon('#ffffff', 0.1, 0.6, 0);
+                break;
+            case 'scatter':
+                for (let i = 1; i < n; i++) {
+                    const k = 1 - i / n;
+                    for (let j = 0; j < 2; j++) {
+                        const h = Math.sin(i * 12.9 + j * 78.2 + Math.floor(t * 12)) * 43758.5;
+                        const off = (h - Math.floor(h) - 0.5) * r * 1.2 * (1 - k);
+                        Neon.light(ctx, pts[i].x + off, pts[i].y, 1.2 + k * 1.2, color, k);
+                    }
+                }
+                break;
+            case 'lightning': {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < n; i++) {
+                    const h = Math.sin(i * 91.3 + (calm ? 0 : Math.floor(t * 20)) * 7.1) * 43758.5;
+                    ctx.lineTo(pts[i].x + (h - Math.floor(h) - 0.5) * r * 1.1, pts[i].y);
+                }
+                ctx.globalAlpha = 0.9;
+                Neon.stroke(ctx, color, 1.1, false);
+                ctx.globalAlpha = 1;
+                ribbon(color, 0.25, 0.25, 0);
+                break;
+            }
+            case 'void':
+                ribbon('#aa33ff', 0.62, 0.5, 0);
+                ribbon('#05000c', 0.48, 0.95, 0);
+                break;
+            default: // thrust
+                ribbon(color, 0.5, 0.35, 0);
+                ribbon('#ffffff', 0.14, 0.5, 0);
+        }
+    },
+
+    _HEX: Neon.polygon(6, Math.PI / 6),
+    _DRONE: [0, -1, 0.7, 0, 0, 1, -0.7, 0],
+    _bakeDrone(c) {
+        Neon.shape(c, Player._DRONE, 6, '#cc44ff', 0.9, false, 0.3);
+        Neon.detail(c, [-0.7, 0, 0.7, 0], 6, '#ee99ff', 0.6, 0.8);
+    },
+
+    _bakeShipNeon(c, sc, r, surge) {
+        Neon.shape(c, Player._NEON_HULL, r, sc, 1.2, false, 0.2);
+        Neon.detail(c, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
+        Neon.detail(c, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
+        Neon.detail(c, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        Neon.shape(c, Player._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
+    },
+
+    // Neon style ship body (origin already translated to the ship).
+    // Banks into horizontal movement by narrowing the hull.
+    _drawShipNeon(ctx) {
+        const r = this.radius;
+        const surge = Scoring.surgeActive;
+        const skinColor = Hangar.equipped.skin === 'chromatic'
+            ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
+            : Hangar.skinColor;
+        const sc = surge ? '#ffffff' : skinColor;
+        const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
+
+        const dx = this._neonLastX === null ? 0 : this.x - this._neonLastX;
+        this._neonLastX = this.x;
+        const target = Math.max(-1, Math.min(1, dx / 5));
+        this._neonBank += (target - this._neonBank) * 0.2;
+        const bank = this._neonBank;
+
+        ctx.save();
+        ctx.globalAlpha = shipAlpha;
+        ctx.scale(1 - Math.abs(bank) * 0.18, 1);
+
+        // Engine flames (behind the hull): coloured plume with a white core
+        const trailColor = Hangar.trailColor;
+        const len = 0.45 + Math.sin(this.engineFlicker) * 0.08 + Math.sin(this.engineFlicker * 2.7) * 0.05;
+        for (let s = -1; s <= 1; s += 2) {
+            const ex = s * r * 0.22, ey = r * 0.62;
+            ctx.fillStyle = trailColor;
+            ctx.globalAlpha = shipAlpha * 0.55;
+            ctx.beginPath();
+            ctx.moveTo(ex - r * 0.12, ey);
+            ctx.lineTo(ex, ey + r * (len + 0.25));
+            ctx.lineTo(ex + r * 0.12, ey);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.globalAlpha = shipAlpha * 0.9;
+            ctx.beginPath();
+            ctx.moveTo(ex - r * 0.05, ey);
+            ctx.lineTo(ex, ey + r * len);
+            ctx.lineTo(ex + r * 0.05, ey);
+            ctx.fill();
+        }
+        ctx.globalAlpha = shipAlpha;
+
+        // Hull, panel lines and canopy (baked per colour; the chromatic
+        // skin changes colour every frame, so it is drawn live)
+        const key = Hangar.equipped.skin === 'chromatic' && !surge ? null : 'player|' + sc;
+        Neon.sprite(ctx, key, r * 1.25 + 4, this._bakeShipNeon, sc, r, surge);
+        // The wing on the side we're banking towards catches more light
+        if (Math.abs(bank) > 0.05) {
+            const side = bank > 0 ? 1 : -1;
+            ctx.globalAlpha = shipAlpha * Math.min(1, Math.abs(bank)) * 0.25;
+            ctx.fillStyle = sc;
+            Neon.path(ctx, [side * 0.3, -0.05, side * 0.95, 0.45, side * 0.9, 0.62, side * 0.45, 0.48], r, true);
+            ctx.fill();
+            ctx.globalAlpha = shipAlpha;
+        }
+
+        // Wing-tip running lights, blinking out of step
+        const blink = Math.sin(this.engineFlicker * 0.5);
+        Neon.light(ctx, r * 0.9, r * 0.52, 1.4, sc, blink > 0 ? 1 : 0.35);
+        Neon.light(ctx, -r * 0.9, r * 0.52, 1.4, sc, blink > 0 ? 0.35 : 1);
+
+        ctx.restore();
+    },
+
+    draw(ctx) {
+        // Dead: the shattered hull is drawn by Particles; still draw bullets
+        if (!this.alive && this.deathAnimTimer > 0) {
             this.bullets.draw(ctx);
             return;
         }
@@ -741,35 +851,32 @@ const Player = {
 
         const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
 
-        // Engine trail — apply equipped trail color
-        ctx.globalAlpha = 0.3;
-        for (let i = 1; i < this.trailPositions.length; i++) {
-            const t = this.trailPositions[i];
-            const alpha = (1 - i / this.trailPositions.length) * 0.3;
-            ctx.globalAlpha = alpha;
-            ctx.fillStyle = this.dashing ? '#ffffff' : Hangar.trailColor;
-            ctx.beginPath();
-            ctx.arc(t.x, t.y, this.radius * (1 - i * 0.08), 0, Math.PI * 2);
-            ctx.fill();
+        // Engine trail streams down behind the ship (the world scrolls past)
+        // and bends as it moves; its look comes from the equipped trail
+        const trail = this.trailPositions;
+        if (trail.length > 1) {
+            const pts = trail.map((p, i) => ({ x: p.x, y: p.y + this.radius * 0.7 + i * 7 }));
+            this.drawTrail(ctx, pts, this.dashing ? 'thrust' : Hangar.equipped.trail,
+                this.dashing ? '#ffffff' : Hangar.trailColor, this.radius, this.engineFlicker / 20);
         }
-        ctx.globalAlpha = 1;
 
-        // Drones
+        // Drones: small spinning neon diamonds with a hot core
         if (this.droneLevel > 0) {
-            ctx.fillStyle = '#cc44ff';
+            const spin = this.engineFlicker * 0.2;
             for (const d of this.dronePositions()) {
-                ctx.beginPath();
-                ctx.arc(d.x, d.y, 5, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.save();
+                ctx.translate(d.x, d.y);
+                ctx.rotate(spin);
+                Neon.sprite(ctx, 'drone', 10, this._bakeDrone);
+                ctx.restore();
+                Neon.light(ctx, d.x, d.y, 1.6, '#cc44ff', 0.7 + Math.sin(this.engineFlicker * 0.4) * 0.3);
             }
             // Shield pulse ring (Lv2+) — shown while a pulse is cancelling bullets
             if (this.shieldPulseFlash > 0) {
                 const r = this.droneLevel >= 5 ? 55 : 45;
-                ctx.strokeStyle = `rgba(204, 68, 255, ${0.3 + this.shieldPulseFlash * 1.6})`;
-                ctx.lineWidth = this.droneLevel >= 4 ? 3 : 2;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, r * (1 - this.shieldPulseFlash), 0, Math.PI * 2);
-                ctx.stroke();
+                ctx.globalAlpha = Math.min(1, 0.3 + this.shieldPulseFlash * 2.5);
+                Neon.ring(ctx, this.x, this.y, r * (1 - this.shieldPulseFlash), '#cc44ff', this.droneLevel >= 4 ? 1.4 : 1, false);
+                ctx.globalAlpha = 1;
             }
         }
 
@@ -779,117 +886,33 @@ const Player = {
         // GPU glow behind player — engine glow + surge glow
         Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
         if (Scoring.surgeActive) {
-            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
-        }
-
-        // Surge glow
-        if (Scoring.surgeActive && !Settings.values.flashReduction) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.beginPath();
-            ctx.arc(0, 0, this.radius + 10 + Math.sin(this.engineFlicker) * 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Shield HP visual
-        if (this.maxShieldHp > 0 && this.shieldHp > 0) {
-            const shieldAlpha = this.shieldFlashTimer > 0 ? 0.6 : 0.2 + Math.sin(this.engineFlicker * 0.3) * 0.1;
-            const shieldColor = this.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
-            ctx.strokeStyle = shieldColor;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = shieldAlpha;
-            ctx.beginPath();
-            ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
-            ctx.stroke();
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, Renderer.calm() ? 0.2 : 0.5);
+            // Surge aura: counter-rotating arcs
+            const a0 = this.engineFlicker * 0.15;
+            ctx.globalAlpha = 0.7;
+            for (let k = 0; k < 3; k++) {
+                const a = a0 + (Math.PI * 2 / 3) * k;
+                ctx.beginPath(); ctx.arc(0, 0, this.radius + 11, a, a + 1.3);
+                Neon.stroke(ctx, '#ffffff', 0.8, false);
+                ctx.beginPath(); ctx.arc(0, 0, this.radius + 16, -a, -a + 0.8);
+                Neon.stroke(ctx, '#00ffff', 0.6, false);
+            }
             ctx.globalAlpha = 1;
         }
 
-        // Ship body — apply equipped skin
-        const skinColor = Hangar.equipped.skin === 'chromatic'
-            ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
-            : Hangar.skinColor;
-        const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
-        ctx.globalAlpha = shipAlpha;
-        const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
-        ctx.fillStyle = sc;
-        const r = this.radius;
+        // Shield: a hexagonal barrier that brightens when it takes a hit
+        if (this.maxShieldHp > 0 && this.shieldHp > 0) {
+            const hit = this.shieldFlashTimer > 0;
+            ctx.globalAlpha = hit ? 0.9 : 0.35 + Math.sin(this.engineFlicker * 0.3) * 0.1;
+            ctx.save();
+            ctx.rotate(this.engineFlicker * 0.03);
+            Neon.path(ctx, this._HEX, this.radius + 7, true);
+            Neon.stroke(ctx, hit ? '#ffffff' : '#4488ff', 0.8, false);
+            ctx.restore();
+            ctx.globalAlpha = 1;
+        }
 
-        // Main fuselage
-        ctx.beginPath();
-        ctx.moveTo(0, -r * 1.1);         // Nose
-        ctx.lineTo(r * 0.25, -r * 0.5);  // Right nose taper
-        ctx.lineTo(r * 0.3, r * 0.1);    // Right body
-        ctx.lineTo(r * 0.25, r * 0.7);   // Right rear
-        ctx.lineTo(-r * 0.25, r * 0.7);  // Left rear
-        ctx.lineTo(-r * 0.3, r * 0.1);   // Left body
-        ctx.lineTo(-r * 0.25, -r * 0.5); // Left nose taper
-        ctx.closePath();
-        ctx.fill();
-
-        // Wings
-        ctx.beginPath();
-        ctx.moveTo(r * 0.3, -r * 0.1);   // Right wing root
-        ctx.lineTo(r * 0.9, r * 0.4);    // Right wing tip
-        ctx.lineTo(r * 0.85, r * 0.6);   // Right wing trailing edge
-        ctx.lineTo(r * 0.3, r * 0.3);    // Right wing back to body
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(-r * 0.3, -r * 0.1);  // Left wing root
-        ctx.lineTo(-r * 0.9, r * 0.4);   // Left wing tip
-        ctx.lineTo(-r * 0.85, r * 0.6);  // Left wing trailing edge
-        ctx.lineTo(-r * 0.3, r * 0.3);   // Left wing back to body
-        ctx.closePath();
-        ctx.fill();
-
-        // Cockpit canopy
-        ctx.fillStyle = Scoring.surgeActive ? '#ffffff' : '#aaddff';
-        ctx.globalAlpha = shipAlpha * 0.7;
-        ctx.beginPath();
-        ctx.ellipse(0, -r * 0.35, r * 0.12, r * 0.25, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = shipAlpha;
-
-        // Wing tip accents
-        ctx.fillStyle = sc;
-        ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
-        ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
-
-        // Outline
-        ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
-        ctx.lineWidth = 1;
-        // Fuselage outline
-        ctx.beginPath();
-        ctx.moveTo(0, -r * 1.1);
-        ctx.lineTo(r * 0.25, -r * 0.5);
-        ctx.lineTo(r * 0.3, r * 0.1);
-        ctx.lineTo(r * 0.9, r * 0.4);
-        ctx.lineTo(r * 0.85, r * 0.6);
-        ctx.lineTo(r * 0.25, r * 0.7);
-        ctx.lineTo(-r * 0.25, r * 0.7);
-        ctx.lineTo(-r * 0.85, r * 0.6);
-        ctx.lineTo(-r * 0.9, r * 0.4);
-        ctx.lineTo(-r * 0.3, r * 0.1);
-        ctx.lineTo(-r * 0.25, -r * 0.5);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-
-        // Engine glow — twin engines at wing roots
-        const trailColor = Hangar.trailColor;
-        const flicker = Math.sin(this.engineFlicker) * 2;
-        ctx.fillStyle = trailColor;
-        // Left engine
-        ctx.beginPath();
-        ctx.moveTo(-r * 0.35, r * 0.65);
-        ctx.lineTo(-r * 0.25, r * 0.95 + flicker);
-        ctx.lineTo(-r * 0.15, r * 0.65);
-        ctx.fill();
-        // Right engine
-        ctx.beginPath();
-        ctx.moveTo(r * 0.15, r * 0.65);
-        ctx.lineTo(r * 0.25, r * 0.95 + flicker);
-        ctx.lineTo(r * 0.35, r * 0.65);
-        ctx.fill();
+        this._drawShipNeon(ctx);
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
@@ -897,14 +920,19 @@ const Player = {
             ctx.beginPath();
             ctx.arc(0, 0, this.hitboxRadius + 1, 0, Math.PI * 2);
             ctx.fill();
+            ctx.globalAlpha = 0.9;
+            Neon.ring(ctx, 0, 0, this.hitboxRadius + 2.5, '#ff2266', 0.6, false);
+            ctx.globalAlpha = 1;
             // Graze zone indicator
             if (GameConfig.graze.enabled) {
                 const gz = this.grazeRadius * (GameConfig.graze.zoneMultiplier || 1);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
                 ctx.lineWidth = 1;
+                ctx.setLineDash([3, 5]);
                 ctx.beginPath();
                 ctx.arc(0, 0, gz, 0, Math.PI * 2);
                 ctx.stroke();
+                ctx.setLineDash([]);
             }
         }
 
@@ -913,40 +941,22 @@ const Player = {
         // Draw player bullets
         this.bullets.draw(ctx);
 
-        // Bomb effect
-        if (this.bombActive && !Settings.values.flashReduction) {
-            const bombAlpha = this.bombTimer / 1.5;
-            // GPU glow at bomb centre
-            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
-            // Screen-filling flash
-            ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
-            ctx.fillRect(0, 0, PLAY_W, PLAY_H);
-            // White-hot centre
-            ctx.fillStyle = `rgba(255, 255, 255, ${bombAlpha * 0.12})`;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, 80 * bombAlpha, 0, Math.PI * 2);
-            ctx.fill();
-            // Expanding shockwave ring
+        // Bomb: two expanding neon rings with a brief cyan wash (no wash with Flash Reduction)
+        if (this.bombActive) {
+            const k = this.bombTimer / 1.5;
+            const calm = Renderer.calm();
             const ringR = (1.5 - this.bombTimer) * 400;
-            ctx.strokeStyle = `rgba(0, 255, 255, ${bombAlpha * 0.5})`;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
-            ctx.stroke();
-            // Secondary inner ring
-            ctx.strokeStyle = `rgba(255, 255, 255, ${bombAlpha * 0.3})`;
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
-            ctx.stroke();
-        } else if (this.bombActive) {
-            // Reduced flash — just the ring, dimmer
-            const ringR = (1.5 - this.bombTimer) * 400;
-            ctx.strokeStyle = `rgba(0, 255, 255, 0.15)`;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
-            ctx.stroke();
+            if (!calm) {
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * k, k * 0.7);
+                ctx.fillStyle = `rgba(0, 255, 255, ${k * 0.06})`;
+                ctx.fillRect(0, 0, PLAY_W, PLAY_H);
+            }
+            ctx.globalAlpha = k * (calm ? 0.4 : 1);
+            ctx.beginPath(); ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+            Neon.stroke(ctx, '#00ffff', 2.2, false);
+            ctx.beginPath(); ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
+            Neon.stroke(ctx, '#88ffff', 1, false);
+            ctx.globalAlpha = 1;
         }
     }
 };

@@ -2,9 +2,12 @@
 //  BULLET POOL — optimised with hand-drawn glow
 // ============================================================
 class BulletPool {
-    constructor(maxSize = 500) {
+    // enemy: enemy bullets get a dark shadow, orb/needle shapes and a spawn pop;
+    // player bullets are streaks and missiles pointing along their velocity
+    constructor(maxSize = 500, enemy = false) {
         this.pool = [];
         this.maxSize = maxSize;
+        this.enemy = enemy;
     }
 
     spawn(x, y, vx, vy, opts = {}) {
@@ -22,32 +25,103 @@ class BulletPool {
             pierce: !!opts.pierce,          // passes through enemies (hits each once)
             harmless: opts.harmless || 0,   // seconds of telegraph before it can hit
             turnRate: opts.turnRate || 5.0, // homing turn rate (rad/s)
-            _p: null,   // Pixi outer glow Particle
+            age: 0,
+            _hex: Renderer.colorToHex(opts.color || '#00ffff'),
+            _p: null,   // Pixi body Particle
             _pc: null,  // Pixi white-core Particle
+            _ps: null,  // Pixi shadow Particle (enemy bullets)
         };
-        if (Renderer.usePixi && Renderer.bulletLayer && Renderer.glowTex) {
-            const hexColor = Renderer.colorToHex(bullet.color);
-            const outerScale = (bullet.radius * 5) / 32;
-            const coreScale  = (bullet.radius * 0.8) / 32;
-            bullet._p = new PIXI.Particle({
-                texture: Renderer.glowTex,
-                x: bullet.x, y: bullet.y,
-                scaleX: outerScale, scaleY: outerScale,
-                anchorX: 0.5, anchorY: 0.5,
-                tint: hexColor, alpha: 0.8,
-            });
-            bullet._pc = new PIXI.Particle({
-                texture: Renderer.glowTex,
-                x: bullet.x, y: bullet.y,
-                scaleX: coreScale, scaleY: coreScale,
-                anchorX: 0.5, anchorY: 0.5,
-                tint: 0xffffff, alpha: 0.95,
-            });
-            Renderer.bulletLayer.addParticle(bullet._p);
-            Renderer.bulletLayer.addParticle(bullet._pc);
-        }
+        if (Renderer.usePixi && Renderer.bulletLayer && Renderer.fx) this._addParticles(bullet);
         this.pool.push(bullet);
         return bullet;
+    }
+
+    _addParticles(b) {
+        const fx = Renderer.fx;
+        const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
+        let body = fx.orb, core = fx.core, ay = 0.5;
+        if (this.enemy) {
+            b._shape = speed >= 300 ? 'needle' : (b.radius >= 5 ? 'heavy' : 'orb');
+            if (b._shape === 'needle') body = fx.needle;
+            b._ps = new PIXI.Particle({ texture: fx.shadow, x: b.x, y: b.y, anchorX: 0.5, anchorY: 0.5, tint: 0xffffff, alpha: 1 });
+            Renderer.bulletShadowLayer.addParticle(b._ps);
+        } else {
+            // Regular shots take the Hangar bullet style; missiles and laser keep their own
+            const style = { plasma: 'plasma', retro: 'pixel', shards: 'shard' }[Hangar.equipped.bullet] || 'streak';
+            b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : style);
+            const bodies = { missile: fx.missile, beam: fx.glow, plasma: fx.orb, pixel: fx.pixel, shard: fx.needle, streak: fx.streak };
+            const cores = { missile: fx.core, beam: fx.core, plasma: fx.core, pixel: fx.pixel, shard: fx.core, streak: fx.streak };
+            body = bodies[b._shape];
+            core = cores[b._shape];
+            ay = b._shape === 'streak' ? 0.18 : 0.5;   // streak head sits on the bullet
+        }
+        b._p = new PIXI.Particle({ texture: body, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: b._hex, alpha: 0.9 });
+        b._pc = new PIXI.Particle({ texture: core, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: 0xffffff, alpha: 0.95 });
+        Renderer.bulletLayer.addParticle(b._p);
+        Renderer.bulletLayer.addParticle(b._pc);
+        this._syncParticles(b);
+    }
+
+    _removeParticles(b) {
+        if (b._p)  { Renderer.bulletLayer.removeParticle(b._p);  b._p  = null; }
+        if (b._pc) { Renderer.bulletLayer.removeParticle(b._pc); b._pc = null; }
+        if (b._ps) { Renderer.bulletShadowLayer.removeParticle(b._ps); b._ps = null; }
+    }
+
+    _syncParticles(b) {
+        const r = b.radius;
+        const rot = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+        const p = b._p, pc = b._pc;
+        p.x = pc.x = b.x;
+        p.y = pc.y = b.y;
+        if (this.enemy) {
+            // Pop in over the first 0.1 s so new bullets catch the eye
+            const pop = b.age < 0.1 ? 1 + (1 - b.age / 0.1) * 0.8 : 1;
+            const faint = b.harmless > 0;
+            let k = pop;
+            if (b._shape === 'heavy') k *= 1 + Math.sin(b.age * 14) * 0.1;
+            if (b._shape === 'needle') {
+                p.scaleX = r * 0.24 * k; p.scaleY = r * 0.11 * k;
+                pc.scaleX = r * 0.06 * k; pc.scaleY = r * 0.3 * k;
+                p.rotation = pc.rotation = rot;
+            } else {
+                p.scaleX = p.scaleY = r * 0.14 * k;
+                pc.scaleX = pc.scaleY = r * 0.1 * k;
+            }
+            p.alpha = faint ? 0.25 : 0.95;
+            pc.alpha = faint ? 0.2 : 1;
+            const ps = b._ps;
+            ps.x = b.x; ps.y = b.y;
+            ps.scaleX = ps.scaleY = r * 0.13 * k;
+            ps.alpha = faint ? 0.3 : 1;
+            return;
+        }
+        p.rotation = pc.rotation = rot;
+        if (b._shape === 'missile') {
+            p.scaleX = p.scaleY = r * 0.5;
+            pc.scaleX = pc.scaleY = r * 0.12;
+            pc.x = b.x - b.vx * 0.012; pc.y = b.y - b.vy * 0.012;   // hot exhaust at the tail
+        } else if (b._shape === 'plasma') {
+            const k = 1 + Math.sin(b.age * 30) * 0.12;
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.17 * k;
+            pc.scaleX = pc.scaleY = r * 0.1;
+        } else if (b._shape === 'pixel') {
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.36;
+            pc.scaleX = pc.scaleY = r * 0.14;
+        } else if (b._shape === 'shard') {
+            p.rotation = pc.rotation = b.age * 14;
+            p.scaleX = r * 0.32; p.scaleY = r * 0.1;
+            pc.scaleX = pc.scaleY = r * 0.06;
+        } else if (b._shape === 'beam') {
+            p.scaleX = r * 0.075; p.scaleY = 2.4;
+            pc.scaleX = r * 0.05; pc.scaleY = 11;
+            p.alpha = 0.55; pc.alpha = 0.7;
+        } else {
+            p.scaleX = r * 0.2; p.scaleY = r * 0.14;
+            pc.scaleX = r * 0.08; pc.scaleY = r * 0.112;
+        }
     }
 
     update(dt, homingTargets) {
@@ -80,23 +154,15 @@ class BulletPool {
             b.x += b.vx * dt;
             b.y += b.vy * dt;
             b.life -= dt;
+            b.age += dt;
             if (b.x < -20 || b.x > PLAY_W + 20 || b.y < -20 || b.y > PLAY_H + 20 || b.life <= 0 || !b.active) {
-                if (b._p)  { Renderer.bulletLayer.removeParticle(b._p);  b._p  = null; }
-                if (b._pc) { Renderer.bulletLayer.removeParticle(b._pc); b._pc = null; }
+                this._removeParticles(b);
                 this.pool.splice(i, 1);
             } else if (b._p) {
-                // Sync Pixi particle positions each frame
-                const outerScale = (b.radius * 5) / 32;
-                const coreScale  = (b.radius * 0.8) / 32;
-                b._p.x = b.x;  b._p.y = b.y;
-                b._p.scaleX = outerScale; b._p.scaleY = b.type === 'laser' ? outerScale * 3 : outerScale;
-                b._pc.x = b.x; b._pc.y = b.y;
-                b._pc.scaleX = coreScale; b._pc.scaleY = b.type === 'laser' ? coreScale * 3 : coreScale;
-                // Telegraphed bullets stay faint until they become dangerous
-                b._p.alpha = b.harmless > 0 ? 0.25 : 0.8;
-                b._pc.alpha = b.harmless > 0 ? 0.2 : 0.95;
-                if (b.type === 'homing') {
-                    b._p.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+                this._syncParticles(b);
+                // Homing missiles leave a short exhaust trail
+                if (b._shape === 'missile' && (b.age * 60 | 0) % 2 === 0) {
+                    Particles.flash(b.x - b.vx * 0.015, b.y - b.vy * 0.015, 3, b.color, 0.18);
                 }
             }
         }
@@ -106,7 +172,7 @@ class BulletPool {
         // In Pixi mode the particles are synced in update(); only keep addGlow for bloom source
         if (Renderer.usePixi) {
             for (const b of this.pool) {
-                Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 7, 0.5);
+                Renderer.addGlow(b.x, b.y, b._hex, b.radius * 7, this.enemy ? 0.4 : 0.5);
             }
             return;
         }
@@ -243,10 +309,7 @@ class BulletPool {
 
     clear() {
         if (Renderer.usePixi && Renderer.bulletLayer) {
-            for (const b of this.pool) {
-                if (b._p)  Renderer.bulletLayer.removeParticle(b._p);
-                if (b._pc) Renderer.bulletLayer.removeParticle(b._pc);
-            }
+            for (const b of this.pool) this._removeParticles(b);
         }
         this.pool.length = 0;
     }

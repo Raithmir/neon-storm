@@ -45,7 +45,8 @@ const Asteroids = {
                         });
                     }
                 }
-                Particles.spawn(a.x, a.y, 8, { color: '#886644', speed: 80, life: 0.3, size: 2 });
+                Particles.spawn(a.x, a.y, 8, { color: '#ddaa77', speed: 80, life: 0.3, size: 2 });
+                Particles.shatter(a.x, a.y, this._shape(Math.round(a.radius)), a.radius, a.rotation, '#ddaa77', 0.8);
                 Scoring.score += Math.floor(50 * GameConfig.scoreMultiplier);
                 Audio.playAsteroidBreak();
                 this.list.splice(i, 1);
@@ -53,30 +54,49 @@ const Asteroids = {
         }
     },
 
+    // Neon rocks: an irregular outline with facet lines, baked per size.
+    // Destructible rocks are warm; the indestructible ones are steel blue.
+    _shapes: new Map(),
+    _shape(R) {
+        let pts = this._shapes.get(R);
+        if (!pts) {
+            pts = [];
+            for (let j = 0; j < 9; j++) {
+                const ang = (Math.PI * 2 / 9) * j;
+                const h = Math.sin(j * 12.9898 + R * 78.233) * 43758.5453;
+                const k = 0.72 + (h - Math.floor(h)) * 0.3;
+                pts.push(Math.cos(ang) * k, Math.sin(ang) * k);
+            }
+            this._shapes.set(R, pts);
+        }
+        return pts;
+    },
+    _bake(c, R, hard) {
+        const pts = Asteroids._shape(R);
+        const color = hard ? '#8899ff' : '#ddaa77';
+        Neon.shape(c, pts, R, color, 1.1, false, hard ? 0.22 : 0.16);
+        // Facets meet at an off-centre point
+        const fx = R * 0.15, fy = -R * 0.1;
+        c.strokeStyle = color;
+        c.lineWidth = 0.8;
+        c.globalAlpha = 0.45;
+        c.beginPath();
+        for (let j = 0; j < pts.length; j += 6) { c.moveTo(fx, fy); c.lineTo(pts[j] * R * 0.95, pts[j + 1] * R * 0.95); }
+        c.stroke();
+        if (hard) {
+            c.globalAlpha = 0.6;
+            c.beginPath(); c.arc(0, 0, R * 0.45, 0, Math.PI * 2); c.stroke();
+        }
+        c.globalAlpha = 1;
+    },
+
     draw(ctx) {
         for (const a of this.list) {
+            const R = Math.round(a.radius);
             ctx.save();
             ctx.translate(a.x, a.y);
             ctx.rotate(a.rotation);
-            ctx.fillStyle = a.destructible ? '#665544' : '#444455';
-            ctx.strokeStyle = a.destructible ? '#887766' : '#6666aa';
-            ctx.lineWidth = 1.5;
-            // Irregular polygon
-            ctx.beginPath();
-            for (let j = 0; j < 7; j++) {
-                const ang = (Math.PI * 2 / 7) * j;
-                const r = a.radius * (0.7 + ((j * 13 + a.radius * 7) % 10) / 25);
-                ctx.lineTo(Math.cos(ang) * r, Math.sin(ang) * r);
-            }
-            ctx.closePath();
-            ctx.fill(); ctx.stroke();
-            if (!a.destructible) {
-                ctx.strokeStyle = '#8888cc';
-                ctx.lineWidth = 1;
-                ctx.beginPath();
-                ctx.arc(0, 0, a.radius * 0.5, 0, Math.PI);
-                ctx.stroke();
-            }
+            Neon.sprite(ctx, 'rock|' + R + (a.destructible ? '' : '|h'), R + 5, this._bake, R, !a.destructible);
             ctx.restore();
         }
     },
@@ -145,6 +165,7 @@ const Escort = {
                 if (this.hp <= 0) {
                     this.alive = false;
                     Particles.spawn(this.x, this.y, 40, { color: '#88ff88', speed: 200, life: 0.8, size: 3 });
+                    Particles.shatter(this.x, this.y, this._HULL, 30, 0, '#44ff88', 1.5);
                     Audio.playExplosionLarge();
                     ScreenShake.trigger(12, 0.8);
                 }
@@ -152,21 +173,36 @@ const Escort = {
         }
     },
 
+    // Neon style allied carrier, nose up (flying with the player)
+    _HULL: Neon.mirror([0, -1.0, 0.22, -0.7, 0.34, -0.2, 1.0, 0.25, 0.95, 0.45, 0.4, 0.5, 0.3, 0.8, 0.12, 0.72]),
+    _CANOPY: Neon.mirror([0, -0.72, 0.1, -0.5, 0.09, -0.3, 0, -0.26]),
+    _bake(c, flash) {
+        const S = 30, col = '#44ff88';
+        Neon.shape(c, Escort._HULL, S, col, 1.5, flash, 0.2);
+        Neon.path(c, Escort._HULL, S * 0.6, true);
+        c.strokeStyle = col; c.globalAlpha = 0.35; c.lineWidth = 1; c.stroke();
+        c.globalAlpha = 1;
+        Neon.detail(c, [0, -0.2, 0, 0.6], S, '#ccffdd', 0.5, 1);                 // flight deck
+        for (const y of [-0.05, 0.15, 0.35]) Neon.detail(c, [-0.06, y, 0.06, y], S, '#ccffdd', 0.7, 1);
+        Neon.detail(c, [0.36, 0.05, 0.9, 0.36], S, col, 0.55, 1);
+        Neon.detail(c, [-0.36, 0.05, -0.9, 0.36], S, col, 0.55, 1);
+        Neon.shape(c, Escort._CANOPY, S, '#aaffcc', 0.8, flash, 0.4);
+    },
+
     draw(ctx) {
         if (!this.active || !this.alive) return;
+        const flash = this.flashTimer > 0;
+        const t = WaveSystem.levelTimer || 0;
+        Renderer.addGlow(this.x, this.y, 0x44ff88, 70, flash ? 0.7 : 0.25);
         ctx.save();
         ctx.translate(this.x, this.y);
-        // Allied ship — green tinted
-        const flash = this.flashTimer > 0;
-        ctx.fillStyle = flash ? '#ffffff' : '#44aa44';
-        ctx.beginPath();
-        ctx.moveTo(0, -25); ctx.lineTo(30, 10); ctx.lineTo(20, 20);
-        ctx.lineTo(-20, 20); ctx.lineTo(-30, 10);
-        ctx.closePath(); ctx.fill();
-        ctx.strokeStyle = '#88ff88'; ctx.lineWidth = 1.5; ctx.stroke();
-        // Engine
-        ctx.fillRect(-12, 20, 8, 6 + Math.random() * 3);
-        ctx.fillRect(4, 20, 8, 6 + Math.random() * 3);
+        const f = Math.sin(t * 35) * 1.5;
+        Neon.flame(ctx, -9, 23, 4, 8 + f, '#44ff88', 0.9);
+        Neon.flame(ctx, 9, 23, 4, 8 - f, '#44ff88', 0.9);
+        Neon.sprite(ctx, 'escort' + (flash ? '|f' : ''), 38, this._bake, flash);
+        const blink = Math.sin(t * 5) > 0;
+        Neon.light(ctx, -28, 10, 1.6, '#44ff88', blink ? 1 : 0.3);
+        Neon.light(ctx, 28, 10, 1.6, '#ffffff', blink ? 0.3 : 1);
         ctx.restore();
 
         // HP bar
