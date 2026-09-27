@@ -8,6 +8,7 @@ const Input = {
     prevGamepadState: null,
     listeningForKey: null,    // Action name when waiting for key press
     listeningForButton: null, // Action name when waiting for gamepad button
+    lastDevice: 'keyboard',   // 'keyboard' | 'pad' — whichever was used last (for on-screen prompts)
 
     // Default key bindings
     defaultBindings: {
@@ -63,6 +64,7 @@ const Input = {
 
         window.addEventListener('keydown', e => {
             this.keys[e.code] = true;
+            this.lastDevice = 'keyboard';
             // If listening for a rebind, capture the key
             if (this.listeningForKey) {
                 const action = this.listeningForKey;
@@ -92,6 +94,7 @@ const Input = {
                 axes: [...gp.axes],
                 buttons: gp.buttons.map(b => b.pressed)
             };
+            if (this.gamepadState.buttons.some(b => b) || gp.axes.some(a => Math.abs(a) > 0.5)) this.lastDevice = 'pad';
             // If listening for a gamepad rebind, capture the button
             if (this.listeningForButton) {
                 for (let i = 0; i < gp.buttons.length; i++) {

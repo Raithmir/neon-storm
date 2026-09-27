@@ -477,6 +477,41 @@ const checks = {
             pass: r.maxEnemies <= r.cap + 5, evidence: r };
     },
 
+    // --- Save data ------------------------------------------------------------
+
+    async saveMigrationKeepsProgress(g) {
+        const r = await g.ev(async () => {
+            const put = (k, v) => localStorage.setItem('neonstorm_' + k, JSON.stringify(v));
+            const get = (k) => JSON.parse(localStorage.getItem('neonstorm_' + k));
+            // A pre-versioning (β) save
+            localStorage.clear();
+            put('settings', { sfxVolume: 40, musicVolume: 20 });
+            put('highscores', { casual: [], normal: [{ name: 'OLD', score: 999999 }], hardcore: [], endless: [] });
+            put('campaign', { levelsUnlocked: 4, secretUnlocked: true, levelBests: { normal_L0: { score: 500000 } } });
+            put('neonCredits', 321);
+            put('hangar_unlocked', { skins: ['cyan_viper', 'ghost'], trails: ['thrust'], bullets: ['neon'], explosions: ['burst'] });
+            await SaveData.migrate();
+            const first = { migrated: SaveData.migrated, version: get('saveVersion'), highscores: get('highscores'),
+                archivedScores: !!get('highscores_v1'), campaign: get('campaign'), archivedBests: !!get('levelBests_v1'),
+                credits: get('neonCredits'), settings: get('settings'), hangar: get('hangar_unlocked') };
+            // Booting again changes nothing
+            SaveData.migrated = null;
+            await SaveData.migrate();
+            const again = SaveData.migrated;
+            // A fresh install is stamped with the current version and not "migrated"
+            localStorage.clear();
+            await SaveData.migrate();
+            return { first, again, fresh: { migrated: SaveData.migrated, version: get('saveVersion') }, current: SAVE_VERSION };
+        });
+        const f = r.first;
+        const pass = f.version === r.current && f.migrated && f.migrated.from === 1 && f.highscores === null && f.archivedScores &&
+            f.campaign.levelsUnlocked === 4 && f.campaign.secretUnlocked === true && Object.keys(f.campaign.levelBests).length === 0 &&
+            f.archivedBests && f.credits === 321 && f.settings.sfxVolume === 40 && f.hangar.skins.includes('ghost') &&
+            r.again === null && r.fresh.version === r.current && r.fresh.migrated === null;
+        return { section: 'γ', expect: 'An old save is upgraded once: scores archived and reset, progress/credits/cosmetics/settings kept; fresh installs start current',
+            pass, evidence: r };
+    },
+
     // --- Boss patterns --------------------------------------------------------
 
     async architectSweepSpreads(g) {

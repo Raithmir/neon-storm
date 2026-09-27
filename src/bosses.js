@@ -848,7 +848,7 @@ const Boss = {
         Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
         Renderer.triggerFlash(0xffffff, 0.2);
         Renderer.triggerGlitch(0.55);
-        Audio.playExplosionLarge();
+        Audio.playBossPhase();
         if (awardBonus) Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
     },

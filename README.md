@@ -14,6 +14,10 @@ Neon Storm γ is a full visual overhaul: everything is redrawn in a **neon vecto
 - **New UI:** neon title, menus, briefing (with the level's backdrop and boss preview), results screens, hangar with live previews, and a redesigned HUD (`src/ui-kit.js`).
 - **Cosmetics that look different:** Hangar bullet styles, trails and explosions each have their own shapes, not just colours.
 - **Settings:** GRAPHICS QUALITY (auto/high/medium/low, renders up to 2× on high-DPI screens), and FLASH REDUCTION now covers every flash, glitch and pulse.
+- **Soundtrack:** procedural synthwave generated live (`src/music.js`): a menu theme, a track for each level, boss tracks, Endless, and victory / game-over stings. It builds with the action (drums join after the briefing, a lead comes in for mid-bosses and bosses, fills for the final phase and Neon Surge), muffles on pause and ducks under bombs. MUSIC VOLUME now works.
+- **Sound effects:** reworked to match the visuals: layered explosions with glassy shatter, a heavier bomb, a laser hum, missile launches, a boss WARNING siren, phase-change glitches and an extra-life fanfare.
+- **Gamepad prompts:** menus show controller buttons when you're playing with a gamepad.
+- **Save versioning:** older saves are upgraded automatically. High scores and level records from before the rebalance are archived and reset; unlocks, credits, cosmetics and achievements are kept.
 
 ## What Was New in β
 
@@ -50,7 +54,7 @@ neon-storm/
 │   ├── renderer.js          — PixiJS pipeline + offscreen Canvas 2D bridge
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
-│   ├── audio.js             — Procedural SFX (Web Audio API)
+│   ├── audio.js             — Procedural SFX + mix (Web Audio API)
 │   ├── storage.js           — Persistence, high scores, settings, NC, achievements, end-of-level bonuses
 │   ├── ui-systems.js        — Custom difficulty, hangar/shop, tutorial
 │   ├── neon.js              — Neon line-art helpers + sprite atlas
@@ -68,6 +72,7 @@ neon-storm/
 │   ├── hud.js               — HUD panels (left + right)
 │   ├── menus.js             — All menu screens
 │   ├── game.js              — Main game state machine
+│   ├── music.js             — Procedural synthwave soundtrack
 │   └── main.js              — Game loop & initialization
 ├── tools/sim/               — Headless gameplay simulation + regression checks (see its README)
 └── docs/                    — Documentation
@@ -130,6 +135,7 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 | `GameConfig` | config.js | Current difficulty settings (mutable) |
 | `Input` | input.js | Keyboard/gamepad state |
 | `Audio` | audio.js | Sound effects |
+| `Music` | music.js | Soundtrack |
 | `Player` | player.js | Player ship state |
 | `Enemies` | enemies.js | Enemy manager |
 | `Boss` | bosses.js | Boss state machine |
@@ -153,6 +159,6 @@ See the `docs/` folder:
 
 - **Rendering:** PixiJS v8 (WebGPU/WebGL) for gameplay, HTML5 Canvas 2D for UI
 - **Language:** Vanilla JavaScript (no frameworks)
-- **Audio:** Web Audio API (procedural SFX)
+- **Audio:** Web Audio API (procedural SFX and soundtrack)
 - **Fonts:** Google Fonts (Share Tech Mono)
 - **Persistence:** localStorage / Artifact Storage API
