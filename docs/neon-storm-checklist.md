@@ -6,14 +6,27 @@
 
 ---
 
-## Recommended Next Steps (priority order)
+## Roadmap
 
-1. **Music and SFX** — the biggest gap now the game looks the part: there is no music at all (the `playMusic`/`stopMusic`/`crossfadeMusic` hooks in `audio.js` are empty and the MUSIC VOLUME slider does nothing). Suggested approach: procedural synthwave generated with Web Audio (keeps the single offline HTML, no licensing) — a menu theme, per-level variations, a boss track, victory/game-over stings, reacting to play (boss intensity, Surge filter sweep). Then upgrade the ~17 procedural SFX to match the new visuals (weightier explosions, graze, boss warning siren, shatter/impact sounds).
-2. **Act on play-test results** — the gameplay review follow-ups below, plus anything found in γ's visuals. Use Settings → SHOW FPS for performance reports.
-3. **Save-data versioning** — add a save version now so future balance or format changes can migrate or reset old data cleanly (see Gameplay Review Follow-ups).
-4. **Gamepad button prompts** — small with the UI kit; see UI / UX Polish.
-5. **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
-6. **More to play, reusing existing systems** — Boss Rush / Boss Practice (all bosses exist), an adaptive rank system, ship selection (neon art makes new ships cheap).
+### γ Gamma — finish (in progress)
+
+1. **Music and SFX** — procedural synthwave with Web Audio (keeps the single offline HTML, no licensing): a menu theme, per-level variations, a boss track, victory/game-over stings, reacting to play (boss intensity, Surge filter sweep). Then upgrade the ~17 procedural SFX to match the new visuals (weightier explosions, graze, boss warning siren, shatter/impact sounds). See Audio.
+2. **Play-test fixes** — the gameplay review follow-ups below, plus anything found in γ's visuals. Use Settings → SHOW FPS for performance reports.
+3. **Save-data versioning** — must land before δ, whose new levels, modes and balance changes will change saved data; a version lets old saves migrate or reset cleanly.
+4. **Gamepad button prompts** (optional, can slip to δ) — small with the UI kit; see UI / UX Polish.
+
+### δ Delta — renderer and content (next)
+
+1. **Native Pixi sprites for entities** — Renderer Phase 7. First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
+2. **three.js 3D backdrops** — Renderer Phase 8. Prototype the sky city, then decide how far to take it.
+3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
+
+If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
+
+### Later / undecided
+
+- **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
+- Platform items (co-op, online leaderboards, replays, modding) — see Platform & Infrastructure.
 
 **One-time setup:** repo Settings → Pages → Source: **GitHub Actions**, so pushes to main publish to https://raithmir.github.io/neon-storm/.
 
