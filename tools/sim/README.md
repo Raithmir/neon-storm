@@ -7,7 +7,7 @@ level simulates in well under a minute.
 ## Setup
 
 ```bash
-node build.js                     # produces dist/neon-storm-beta.html
+node build.js                     # produces dist/neon-storm-gamma.html
 npm install --no-save playwright  # dev-only; the game itself has no dependencies
 npx playwright install chromium   # skip if you already have a Chromium (see CHROMIUM_PATH)
 ```
@@ -16,7 +16,7 @@ Environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GAME_HTML` | `dist/neon-storm-beta.html` | Build to test |
+| `GAME_HTML` | `dist/neon-storm-gamma.html` | Build to test |
 | `CHROMIUM_PATH` | Playwright's bundled Chromium | Use a specific Chromium executable |
 
 ## Scripts

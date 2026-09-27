@@ -11,7 +11,7 @@ npx http-server . -p 8080 -c-1
 
 # Build single-file distributable (downloads PixiJS on first run)
 node build.js
-# Output: dist/neon-storm-beta.html (offline-capable), dist/neon-storm.js (debug)
+# Output: dist/neon-storm-gamma.html (offline-capable), dist/neon-storm.js (debug)
 ```
 
 There are no unit tests, no lint, and no transpilation — vanilla JS only.
