@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Neon Storm γ — Build Script
 // Concatenates source modules into a single distributable HTML file.
-// Downloads PixiJS and bundles it inline for offline/file:// use.
+// Downloads PixiJS and pixi-filters and bundles them inline for offline/file:// use.
 // Usage: node build.js
 
 const fs = require('fs');
@@ -11,8 +11,12 @@ const https = require('https');
 const SRC = path.join(__dirname, 'src');
 const DIST = path.join(__dirname, 'dist');
 const VENDOR = path.join(__dirname, 'vendor');
-const PIXI_URL = 'https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js';
-const PIXI_CACHE = path.join(VENDOR, 'pixi.min.js');
+// Libraries bundled into the HTML: cached in vendor/ (committed), downloaded on first build.
+// pixi-filters v6 is the PixiJS v8 line; it registers itself as PIXI.filters.
+const VENDOR_LIBS = [
+    { name: 'pixi.min.js', url: 'https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js' },
+    { name: 'pixi-filters.min.js', url: 'https://cdn.jsdelivr.net/npm/pixi-filters@6.1.5/dist/pixi-filters.min.js' },
+];
 
 const SOURCE_FILES = [
     'constants.js',
@@ -71,23 +75,25 @@ async function build() {
     if (!fs.existsSync(DIST)) fs.mkdirSync(DIST, { recursive: true });
     if (!fs.existsSync(VENDOR)) fs.mkdirSync(VENDOR, { recursive: true });
 
-    // Get PixiJS — use cached copy, or download, or fall back to CDN tag
-    let pixiJS = '';
-    let pixiMode = 'cdn';
-    if (fs.existsSync(PIXI_CACHE)) {
-        pixiJS = fs.readFileSync(PIXI_CACHE, 'utf8');
-        pixiMode = 'inline';
-        console.log('  \u2713 pixi.min.js (cached, ' + Math.round(pixiJS.length / 1024) + ' KB)');
-    } else {
-        try {
-            console.log('  \u21bb Downloading pixi.min.js...');
-            await downloadFile(PIXI_URL, PIXI_CACHE);
-            pixiJS = fs.readFileSync(PIXI_CACHE, 'utf8');
-            pixiMode = 'inline';
-            console.log('  \u2713 pixi.min.js (downloaded, ' + Math.round(pixiJS.length / 1024) + ' KB)');
-        } catch (e) {
-            console.log('  \u26a0 Could not download PixiJS: ' + e.message);
-            console.log('    Build will use CDN link (requires internet to play)');
+    // Get each library — use the cached copy, or download it, or fall back to a CDN tag
+    const libTags = [];
+    for (const lib of VENDOR_LIBS) {
+        const cache = path.join(VENDOR, lib.name);
+        if (!fs.existsSync(cache)) {
+            try {
+                console.log('  \u21bb Downloading ' + lib.name + '...');
+                await downloadFile(lib.url, cache);
+            } catch (e) {
+                console.log('  \u26a0 Could not download ' + lib.name + ': ' + e.message);
+                console.log('    Build will use a CDN link (requires internet to play)');
+            }
+        }
+        if (fs.existsSync(cache)) {
+            const js = fs.readFileSync(cache, 'utf8');
+            libTags.push('<script>\n' + js + '\n<\/script>');
+            console.log('  \u2713 ' + lib.name + ' (' + Math.round(js.length / 1024) + ' KB)');
+        } else {
+            libTags.push('<script src="' + lib.url + '"><\/script>');
         }
     }
 
@@ -108,10 +114,6 @@ async function build() {
         console.log('  \u2713 ' + file + ' (' + lineCount + ' lines)');
     }
 
-    const pixiTag = pixiMode === 'inline'
-        ? '<script>\n' + pixiJS + '\n<\/script>'
-        : '<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"><\/script>';
-
     const html = '<!DOCTYPE html>\n'
         + '<html lang="en">\n<head>\n'
         + '<meta charset="UTF-8">\n'
@@ -126,7 +128,7 @@ async function build() {
         + '#game { position: relative; z-index: 2; display: block; }\n'
         + '</style>\n</head>\n<body>\n'
         + '<div id="game-container">\n<canvas id="game"></canvas>\n</div>\n'
-        + pixiTag + '\n'
+        + libTags.join('\n') + '\n'
         + '<script>\n'
         + combinedJS
         + '\n</script>\n</body>\n</html>';
@@ -135,7 +137,7 @@ async function build() {
     fs.writeFileSync(path.join(DIST, 'neon-storm-gamma.html'), html);
 
     console.log('\nBuild complete: ' + SOURCE_FILES.length + ' modules, ' + totalLines + ' total lines');
-    console.log('PixiJS: ' + (pixiMode === 'inline' ? 'bundled inline (' + Math.round(pixiJS.length / 1024) + ' KB)' : 'CDN link'));
+    console.log('Libraries: ' + VENDOR_LIBS.map((l, i) => l.name + (libTags[i].includes(' src=') ? ' (CDN link)' : ' (inline)')).join(', '));
     console.log('Output: dist/neon-storm-gamma.html');
     console.log('Debug:  dist/neon-storm.js');
 }

@@ -696,7 +696,7 @@ const Renderer = {
             this._initChromaFilter();
             this._initCRTFilter();
 
-            // --- pixi-filters effects (guarded — no-ops if PIXIFilters not loaded) ---
+            // --- pixi-filters effects (guarded — no-ops if pixi-filters isn't loaded) ---
             this._initShockwaveFilter();
             this._initGodrayFilter();
             this._initGlitchFilter();
@@ -979,11 +979,18 @@ const Renderer = {
 
     // --- pixi-filters effects ---
 
+    // pixi-filters v6 (bundled by build.js) registers itself as PIXI.filters
+    _filtersLib() {
+        return (typeof PIXI !== 'undefined' && PIXI.filters && PIXI.filters.ShockwaveFilter) ? PIXI.filters : null;
+    },
+
     _initShockwaveFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._shockwaveFilter = new PIXIFilters.ShockwaveFilter({
-                center: [0.5, 0.5],
+            // Centre and sizes are in play-area pixels
+            this._shockwaveFilter = new F.ShockwaveFilter({
+                center: { x: PLAY_W / 2, y: PLAY_H / 2 },
                 time: 0,
                 amplitude: 35,
                 wavelength: 90,
@@ -998,16 +1005,17 @@ const Renderer = {
     },
 
     _initGodrayFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._godrayFilter = new PIXIFilters.GodrayFilter({
+            // Point light (not parallel rays) just above the top-centre of the play area
+            this._godrayFilter = new F.GodrayFilter({
                 angle: 30,
                 gain: 0.55,
                 lacunarity: 2.5,
                 time: 0,
                 parallel: false,
-                x: 0.5,
-                y: 0.0,
+                center: { x: PLAY_W / 2, y: -40 },
                 alpha: 0,
             });
             this._godrayFilter.enabled = false;
@@ -1017,9 +1025,10 @@ const Renderer = {
     },
 
     _initGlitchFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._glitchFilter = new PIXIFilters.GlitchFilter({
+            this._glitchFilter = new F.GlitchFilter({
                 slices: 6,
                 offset: 55,
                 fillMode: 0,
@@ -1491,7 +1500,7 @@ const Renderer = {
     triggerShockwave(normX, normY) {
         this.bgPulse = this.calm() ? 0.15 : 1;
         if (!this._shockwaveFilter) return;
-        this._shockwaveFilter.center = [normX, normY];
+        this._shockwaveFilter.center = { x: normX * PLAY_W, y: normY * PLAY_H };
         this._shockwaveFilter.time = 0;
         this._shockwaveActive = true;
         this._shockwaveTimer = 1.1;
@@ -2376,6 +2385,7 @@ const Settings = {
         screenShake: 'high',    // 'off', 'low', 'high'
         particleDensity: 'high', // 'low', 'medium', 'high'
         showHitbox: false,
+        showFps: false,
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
@@ -2390,6 +2400,7 @@ const Settings = {
         { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
+        { key: 'showFps', label: 'SHOW FPS', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },
         { key: 'colorblind', label: 'COLORBLIND MODE', type: 'toggle' },
         { key: 'fireMode', label: 'FIRE MODE', type: 'cycle', options: ['manual', 'auto'] },
@@ -10671,6 +10682,56 @@ const HUD = {
     }
 };
 
+// ============================================================
+//  FPS METER (Settings → SHOW FPS)
+//  Top-left readout for play-testing: frames per second, average and
+//  worst frame time over the last second, graphics quality/resolution,
+//  and live object counts (enemies, bullets, particles).
+// ============================================================
+const FpsMeter = {
+    _frames: [],      // recent frame durations (ms)
+    _acc: 0,
+    _shown: { fps: 0, avg: 0, worst: 0 },
+
+    // Called once per animation frame with the real (uncapped) frame time
+    tick(frameMs) {
+        if (!(frameMs > 0) || frameMs > 1000) return;
+        this._frames.push(frameMs);
+        this._acc += frameMs;
+        if (this._acc >= 500) {
+            // Refresh the readout twice a second so it's readable
+            const recent = this._frames.slice(-120);
+            const sum = recent.reduce((a, b) => a + b, 0);
+            this._shown.avg = sum / recent.length;
+            this._shown.fps = 1000 / this._shown.avg;
+            this._shown.worst = Math.max(...recent);
+            this._frames = recent.slice(-60);
+            this._acc = 0;
+        }
+    },
+
+    draw(ctx) {
+        if (!Settings.values.showFps) return;
+        const s = this._shown;
+        const color = s.fps >= 55 ? '#00ff88' : s.fps >= 40 ? '#ffee33' : '#ff3355';
+        const q = (Renderer.quality || '').toUpperCase() + (Renderer._autoQuality ? ' (AUTO)' : '');
+        const lines = [
+            [Math.round(s.fps) + ' FPS', color, 20],
+            ['AVG ' + s.avg.toFixed(1) + ' ms   WORST ' + s.worst.toFixed(1) + ' ms', UI.TEXT, 13],
+            [q + '   ' + (Renderer.playScale || 1) + '×' + (Renderer.usePixi ? '' : '   CANVAS 2D'), UI.DIM, 13],
+            ['ENEMIES ' + Enemies.list.length + '   BULLETS ' + Enemies.enemyBullets.pool.length + '/' + Player.bullets.pool.length +
+                '   PARTICLES ' + Particles.particles.length, UI.DIM, 13],
+        ];
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(8, 8, 360, 94);
+        let y = 32;
+        for (const [text, c, size] of lines) {
+            Neon.text(ctx, text, 18, y, c, size, { align: 'left', halo: 0, weight: size > 14 ? 'bold' : '' });
+            y += size > 14 ? 24 : 19;
+        }
+    },
+};
+
 
 // === menus.js ===
 // ============================================================
@@ -11850,6 +11911,7 @@ const Game = {
 
         // Transition overlay — always drawn on top of everything
         Transition.draw(ctx);
+        FpsMeter.draw(ctx);
     }
 };
 
@@ -11859,6 +11921,7 @@ const Game = {
 //  GAME LOOP
 // ============================================================
 function gameLoop(timestamp) {
+    FpsMeter.tick(timestamp - Game.lastTime);
     const dt = Math.min((timestamp - Game.lastTime) / 1000, 0.05); // Cap delta to prevent spiral
     Game.lastTime = timestamp;
 

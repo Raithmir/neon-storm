@@ -2,6 +2,7 @@
 //  GAME LOOP
 // ============================================================
 function gameLoop(timestamp) {
+    FpsMeter.tick(timestamp - Game.lastTime);
     const dt = Math.min((timestamp - Game.lastTime) / 1000, 0.05); // Cap delta to prevent spiral
     Game.lastTime = timestamp;
 
