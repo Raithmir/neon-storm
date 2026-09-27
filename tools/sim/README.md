@@ -27,7 +27,9 @@ Environment variables:
 | `node tools/sim/checks.js dashKeepsBombInvulnerability,laserPierces` | Run selected checks only | |
 | `npm run sim:weapons` | Measured DPS for every weapon and level vs boss- and scout-sized targets | ~3 min |
 | `npm run sim:boss-ttk` | Boss time-to-kill for 6 loadouts (optionally `node tools/sim/boss-ttk.js 0,5` for chosen levels) | ~10 min |
-| `node tools/sim/playthrough.js <level 0-5> [casual\|normal\|hardcore] [weapon] [level]` | Full level played by a dodging bot | 1–3 min |
+| `node tools/sim/playthrough.js <level 0-5> [casual\|normal\|hardcore] [weapon] [level] [--human]` | One full level with a fixed loadout. Default: perfect bot, hits counted. `--human`: human-like bot, real deaths | 1–3 min |
+| `node tools/sim/campaign.js [difficulty] [label]` | Whole campaign as one run with the human-like bot: deaths, lives, extends, weapon progress, chain, Surge, mid-boss outcomes per level | 15–30 min |
+| `node tools/sim/perf.js` | Game-logic cost per frame in a heavy late-Endless scene, with and without Surge | ~5 min |
 
 Results are written to `tools/sim/out/` (git-ignored) as JSON.
 
@@ -60,9 +62,12 @@ encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNot
 
 ## Caveats
 
-- The play-through bot knows every bullet's exact velocity, so its hit counts **do not** reflect human
-  difficulty. Use it to find stalls, escort/level failures and undodgeable situations, and
-  `maxBulletsOnScreen` as a density measure.
+- The perfect bot (default) knows every bullet's exact velocity, so its hit counts **do not** reflect human
+  difficulty; use it for stalls, escort/level failures and undodgeable situations. The human-like bot
+  (`--human`, `campaign.js`) has a 180 ms reaction time, perception noise and limited attention, but it is
+  still better than a typical player — treat its death counts as a lower bound. It rarely bombs, so the
+  bomb economy is not well measured.
+- `perf.js` times game logic only; rendering (PixiJS) is not representative in headless software WebGL.
 - The simulation runs at a fixed 60 fps, so it cannot show frame-rate-dependent effects such as bullet
   tunnelling; `asteroidRateIndependentOfFps` calls the update function directly at both rates instead.
 - Checks and tools reach into game globals (`Player`, `Boss`, `WaveSystem`…). Renaming those will need the

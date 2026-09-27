@@ -16,29 +16,24 @@ const { launch, writeResult } = require('./harness');
         Player.primaryWeapon = 'spread'; Player.primaryLevel = 5; Player.droneLevel = 5;
         Input.keys.Space = true;
         const update = Game.update.bind(Game);
-        window.__times = [];
-        Game.update = (dt) => {
-            Player.invincible = true; Player.invincibleTimer = 99;
-            const t0 = performance.now();
-            update(dt);
-            window.__times.push({ ms: performance.now() - t0, bullets: Enemies.enemyBullets.pool.length, shots: Player.bullets.pool.length, surge: Scoring.surgeActive });
-        };
+        Game.update = (dt) => { Player.invincible = true; Player.invincibleTimer = 99; update(dt); };
     });
     await g.run(600000); // 10 minutes of Endless to build a heavy scene
+
+    // The fake clock freezes performance.now() during synchronous code, so time a batch of
+    // frames with Node's real clock instead: FRAMES logic updates run back-to-back in the page.
+    const FRAMES = 300;
     const measure = async (surge) => {
-        await g.ev((surge) => {
-            window.__times = [];
+        const scene = await g.ev((surge) => {
             if (surge) { Scoring.surgeActive = true; Scoring.surgeDuration = 1e9; } else { Scoring.surgeActive = false; }
+            return { enemyBullets: Enemies.enemyBullets.pool.length, poolCap: Enemies.enemyBullets.maxSize, enemies: Enemies.list.length };
         }, surge);
-        await g.run(10000);
-        return g.ev(() => {
-            const t = window.__times.map(x => x.ms).sort((a, b) => a - b);
-            const pct = p => +t[Math.min(t.length - 1, Math.floor(t.length * p))].toFixed(2);
-            const b = window.__times.map(x => x.bullets);
-            return { frames: t.length, medianMs: pct(0.5), p95Ms: pct(0.95), maxMs: pct(1), avgEnemyBullets: Math.round(b.reduce((a, x) => a + x, 0) / b.length), maxEnemyBullets: Math.max(...b), maxPlayerShots: Math.max(...window.__times.map(x => x.shots)) };
-        });
+        const t0 = process.hrtime.bigint();
+        await g.ev((n) => { for (let i = 0; i < n; i++) Game.update(1 / 60); }, FRAMES);
+        const ms = Number(process.hrtime.bigint() - t0) / 1e6;
+        return { ...scene, avgLogicMsPerFrame: +(ms / FRAMES).toFixed(2) };
     };
-    const result = { normal: await measure(false), surge: await measure(true) };
+    const result = { normal: await measure(false), surge: await measure(true), budgetMs: 16.7 };
     await g.close();
     console.log(JSON.stringify(result, null, 2));
     writeResult('perf.json', result);

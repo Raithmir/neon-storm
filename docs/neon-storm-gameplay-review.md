@@ -375,3 +375,63 @@ The first round of measurements after the fixes exposed five further problems, a
 
 - **Human play-testing.** The bot dodges with perfect information, so it can't judge feel: movement speed (§9), the readability of fast patterns, or whether the new boss lengths feel right.
 - **The GDD** (`docs/neon-storm-gdd.md`) still describes some superseded values, such as Surge activation, weapon levels and Casual density. It should be updated once the tuning above is accepted.
+
+---
+
+## 13. Third pass: human-like simulation, mid-bosses and stage length
+
+### Design decisions
+
+- **Weapon pickups stay random** (the original behaviour: the same weapon levels up, a different one switches to Lv1). The colour-cycling pickups from the first fix pass were reverted. Measured with the human-like bot, which collects its own colour and drones and steers around other colours, random pickups give a sensible power curve: Lv3 during Level 1, and Lv5 by Level 1–2. §12's note on Raiden-style pickups is superseded.
+- **Mid-bosses and longer stages** were added (see below), bringing stages from 2.8–3.3 min to the genre's 3–5 min range.
+
+### New simulation tools
+
+- `tools/sim/bot.js` — a shared bot with a **human-like mode**:
+  - a 180 ms reaction time (new bullets are invisible for that long)
+  - ±5 px perception noise, and attention on only the nearest 24 threats
+  - decisions every 100 ms
+  - real deaths
+  - bombs when cornered, death-bombs within its reaction time, dashes, and Surge in busy moments
+  - pickup etiquette
+- `tools/sim/campaign.js` — plays the whole campaign as one run, carrying lives, bombs, weapons, score and extends as the game does, with power-ups on. It reports per level: deaths, bombs, lives, extends, weapon progress, chain, Surge use and mid-boss outcomes.
+- `tools/sim/perf.js` — game-logic cost per frame in a heavy late-Endless scene.
+
+### Changes
+
+| Area | Change | Why (measured) |
+|---|---|---|
+| Chain | Timer 2.5 → 3.0 s; tiers 10/25/50/100 → 10/20/35/60 | Longest chain in full campaigns was 29, so the 5× and 8× tiers were unreachable. Now 5× is common for good play and 8× was reached once in 8 campaigns |
+| Surge | Charge per kill 3 → 1.5 | Surge fired 4–6 times per short stage, making it a constant rather than a graze reward. Now 2–6 per 4-minute stage |
+| Mid-bosses | New: one per level (`src/midbosses.js`), wave clock paused while alive, 35 s escape timer, 8,000 bonus + bullet cancel + 2 power-ups | Genre convention; part of the stage-length target |
+| Mid-boss tuning | Sits at y≈190 (below the boss), moves ≤ ~140 px/s, 250 base HP (Strike Leader 150) | First version (y≈150, sway 120 px/s, 480 HP) was never destroyed: shots take ~1 s to reach it, so a fast target at the top can't be hit |
+| Stage length | A six-wave finale section per level | 2.8–3.3 min → 3.1–4.3 min |
+| Escort | 50 HP, regeneration 0.4/s | The longer Level 4 pushed it to 14/40 HP; now its minimum is 21–34/50 |
+| Endless | Enemy HP capped ×3, fire frequency ×1.6 | HP grew without limit; uncapped fire filled the 800-bullet pool |
+
+### Results (8 full campaigns with the human-like bot, final build)
+
+| | Casual ×2 | Normal ×3 | Hardcore ×3 |
+|---|---|---|---|
+| Levels cleared | 5/5, 5/5 | 6/6, 6/6, 6/6 | 2, 1, 0 (game over on L3, L2, L1) |
+| Deaths per campaign | 0, 0 | 3, 2, 1 | — |
+| Stage length (level timer) | 3.3–4.0 min | 3.1–4.3 min | 3.4–3.7 min |
+| Mid-bosses destroyed | 10/10, 9–23 s | 18/18, 9–22 s | 5/5, 8–15 s |
+| Weapon Lv3 / Lv5 reached | Level 1 / Level 2 | Level 1 / Level 1–2 | Level 1 / Level 1 |
+| Best chain multiplier | 5× (8× once) | 5× | 2× |
+| Extends per campaign | 2 | 2 | 0–1 |
+| Surges per level | 2–6 | 2–6 | 2–4 |
+
+Performance (`perf.js`, 10 min into Hardcore Endless with an invincible ship: 718–799 enemy bullets, 65–81 enemies): **0.19 ms of game logic per frame, 0.22 ms with Surge's bullet-cancel loop** — about 1% of a 60 fps frame budget.
+
+### Reading the results
+
+- **Casual and Normal** are cleared by the bot with 0 and 1–3 deaths respectively. The bot is still stronger than a typical player (perfect trajectory prediction for everything it sees), so real players should expect more deaths. The extends (2 per campaign) and persistent lives give Normal a comfortable safety margin for this bot.
+- **Hardcore** now ends in the first half of the campaign. On the shorter stages the same bot usually reached Levels 4–6. With one life, no bombs and full weapon loss on death, longer stages mean more exposure. That may be right for a mode aimed at experts, but it is the clearest thing to confirm with human play-testers.
+- **The bot almost never bombs** (once in 8 campaigns): its "cornered" test rarely fires before a hit. So the bomb and death-bomb economy is still effectively unmeasured.
+
+### Still open
+
+- **Human play-testing:** feel, readability, whether Hardcore's curve is right, and the bomb economy.
+- **Rendering performance:** `perf.js` measures logic only, and PixiJS in headless software WebGL is not representative. Profile in a real browser, especially late Endless.
+- **Late Endless floods the screen:** with an invincible ship it still reaches the 800-bullet pool cap after about 10 minutes, as enemies accumulate faster than a Lv5 weapon clears them. Real players are overwhelmed well before then, which is how Endless is meant to end, but a cap on concurrent enemies would keep it readable.

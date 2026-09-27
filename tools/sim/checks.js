@@ -419,9 +419,10 @@ const checks = {
         await g.ev(() => { Game.startEndless('normal'); Player.invincible = true; Player.invincibleTimer = 999; WaveSystem.levelTimer = 3600; });
         await g.run(200);
         const r = await g.ev(() => ({ rank: +EndlessMode.rank.toFixed(1), hpScale: +GameConfig._levelHpScale.toFixed(2),
-            densityVsBase: +(GameConfig.bulletDensity / GameConfig._baseDensity).toFixed(2), bulletSpeed: +GameConfig._levelSpeedScale.toFixed(2) }));
-        return { section: '§4.2', expect: 'Late Endless keeps HP ≤ 3×, density ≤ 2.2× and bullet speed ≤ 1.2×',
-            pass: r.hpScale <= 3 && r.densityVsBase <= 2.2 && r.bulletSpeed <= 1.2, evidence: r };
+            densityVsBase: +(GameConfig.bulletDensity / GameConfig._baseDensity).toFixed(2), bulletSpeed: +GameConfig._levelSpeedScale.toFixed(2),
+            fireRate: +GameConfig._levelFireRateScale.toFixed(2) }));
+        return { section: '§4.2', expect: 'Late Endless keeps HP ≤ 3×, density ≤ 2.2×, fire rate ≤ 1.6× and bullet speed ≤ 1.2×',
+            pass: r.hpScale <= 3 && r.densityVsBase <= 2.2 && r.fireRate <= 1.6 && r.bulletSpeed <= 1.2, evidence: r };
     },
 
     async midBossPausesStageAndEscapes(g) {
