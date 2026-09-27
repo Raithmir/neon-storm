@@ -270,6 +270,12 @@ const MidBoss = {
         echoCanopy: Neon.mirror([0, 0.66, 0.1, 0.42, 0.08, 0.2, 0, 0.14]),
     },
 
+    _OUTLINES: { sentinel: 'sentinel', forge_walker: 'forge', debris_hauler: 'hauler', strike_leader: 'striker', core_warden: 'wardenOuter', glitch_echo: 'echoHull' },
+    outline(e) {
+        const key = this._OUTLINES[e.type];
+        return key ? { pts: this._NEON_SHAPES[key], scale: e.type === 'glitch_echo' ? e.radius * 0.9 : e.radius } : null;
+    },
+
     _glow(e, size, flash, alpha) {
         if (e._glowHex === undefined) e._glowHex = Renderer.colorToHex(e.color);
         Renderer.addGlow(e.x, e.y, e._glowHex, size, flash ? 0.7 : (alpha || 0.3));

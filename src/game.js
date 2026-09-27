@@ -95,24 +95,24 @@ const Game = {
 
         // Bloom intensity per level theme
         const bloomPresets = {
-            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
-            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
-            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
-            storm:     { bloomScale: 1.1,  threshold: 0.32 },
-            frozen:    { bloomScale: 0.85, threshold: 0.4  },
-            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+            synthwave:  { bloomScale: 0.9,  threshold: 0.4  },
+            industrial: { bloomScale: 1.3,  threshold: 0.28 },
+            space:      { bloomScale: 1.0,  threshold: 0.35 },
+            sky:        { bloomScale: 0.85, threshold: 0.4  },
+            digital:    { bloomScale: 1.1,  threshold: 0.32 },
+            void:       { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
         };
         const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
         Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
 
         // Per-level colour grade for distinct mood
         const colorGradePresets = {
-            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
-            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
-            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
-            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
-            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
-            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+            synthwave:  { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            industrial: { hue:  6,   saturate:  0.3,  contrast: 0.15, brightness:  0.04 },
+            space:      { hue:  0,   saturate:  0.15, contrast: 0.12, brightness:  0    },
+            sky:        { hue: -6,   saturate:  0.1,  contrast: 0.1,  brightness:  0.03 },
+            digital:    { hue:  0,   saturate:  0.25, contrast: 0.12, brightness:  0    },
+            void:       { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
         };
         const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
         Renderer.setColorGrade(cg);
@@ -506,7 +506,7 @@ const Game = {
                         if (dx * dx + dy * dy < (b.radius + a.radius) * (b.radius + a.radius)) {
                             a.hp -= b.damage;
                             b.active = false;
-                            Particles.spawn(b.x, b.y, 3, { color: '#886644', speed: 50, life: 0.15 });
+                            Particles.impact(b);
                             break;
                         }
                     }

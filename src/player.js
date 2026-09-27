@@ -21,7 +21,6 @@ const Player = {
     deathAnimTimer: 0,
     deathX: 0,
     deathY: 0,
-    deathFragments: [],
 
     // Weapons
     primaryWeapon: 'none', // 'none', 'spread', 'homing', 'laser'
@@ -122,15 +121,6 @@ const Player = {
         if (!this.alive) {
             this.respawnTimer -= dt;
             this.deathAnimTimer = Math.max(0, this.deathAnimTimer - dt);
-            // Animate death fragments
-            for (const f of this.deathFragments) {
-                f.x += f.vx * dt;
-                f.y += f.vy * dt;
-                f.vy += 30 * dt; // slight gravity
-                f.rot += f.rotSpeed * dt;
-                f.vx *= 0.98;
-                f.vy *= 0.98;
-            }
             if (this.respawnTimer <= 0 && this.lives > 0) this._respawn();
             // Keep bullets moving even while dead
             this.bullets.update(dt, Enemies.list);
@@ -320,7 +310,7 @@ const Player = {
                 if (Boss.hitTest(b)) {
                     b.active = false;
                     Scoring.onHit();
-                    Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
+                    Particles.impact(b);
                     continue;
                 }
             }
@@ -336,7 +326,7 @@ const Player = {
                     const playerDist = Math.sqrt(pdx * pdx + pdy * pdy);
                     Enemies.hit(e, b.damage, playerDist);
                     Scoring.onHit();
-                    Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
+                    Particles.impact(b);
                     if (b.pierce) {
                         (b.hitSet || (b.hitSet = new Set())).add(e);
                         continue;
@@ -452,6 +442,7 @@ const Player = {
     // Base shot: always available, on its own timer so weapons never slow it down
     _fireBaseShot() {
         this.bullets.spawn(this.x, this.y - this.radius, 0, -700, { color: Hangar.bulletColor, radius: 3, damage: 1 });
+        Particles.flash(this.x, this.y - this.radius - 2, 9, Hangar.bulletColor, 0.05);
         Audio.playShot();
     },
 
@@ -506,6 +497,8 @@ const Player = {
                 break;
             }
         }
+        const flashColor = colors[this.primaryWeapon];
+        if (flashColor) Particles.flash(this.x, this.y - this.radius - 2, 12, flashColor, 0.06);
     },
 
     // Drones Lv3+: each drone fires at the nearest target, including the boss
@@ -641,24 +634,13 @@ const Player = {
                 break;
         }
 
-        // Death animation — spawn ship fragments
+        // Death animation — the ship's outline shatters
         this.deathX = this.x;
         this.deathY = this.y;
         this.deathAnimTimer = 1.5;
-        this.deathFragments = [];
-        const skinColor = Hangar.skinColor;
-        for (let i = 0; i < 8; i++) {
-            const angle = (Math.PI * 2 / 8) * i + Math.random() * 0.3;
-            this.deathFragments.push({
-                x: this.x, y: this.y,
-                vx: Math.cos(angle) * (60 + Math.random() * 80),
-                vy: Math.sin(angle) * (60 + Math.random() * 80),
-                rot: Math.random() * Math.PI * 2,
-                rotSpeed: (Math.random() - 0.5) * 8,
-                size: 4 + Math.random() * 6,
-                color: i % 2 === 0 ? skinColor : '#88eeff'
-            });
-        }
+        const skinColor = Hangar.skinColor || '#00ffff';
+        Particles.shatter(this.x, this.y, this._NEON_HULL, this.radius, 0, skinColor, 1.6);
+        Particles.shatter(this.x, this.y, this._NEON_CANOPY, this.radius, 0, '#aaddff', 1.2);
 
         Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
         Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
@@ -789,26 +771,8 @@ const Player = {
     },
 
     draw(ctx) {
-        // Draw death fragments when dead
+        // Dead: the shattered hull is drawn by Particles; still draw bullets
         if (!this.alive && this.deathAnimTimer > 0) {
-            const alpha = this.deathAnimTimer / 1.5;
-            for (const f of this.deathFragments) {
-                ctx.save();
-                ctx.translate(f.x, f.y);
-                ctx.rotate(f.rot);
-                ctx.globalAlpha = alpha;
-                ctx.fillStyle = f.color;
-                // Irregular triangle fragment
-                ctx.beginPath();
-                ctx.moveTo(-f.size * 0.5, -f.size * 0.3);
-                ctx.lineTo(f.size * 0.5, 0);
-                ctx.lineTo(-f.size * 0.3, f.size * 0.4);
-                ctx.closePath();
-                ctx.fill();
-                ctx.restore();
-            }
-            ctx.globalAlpha = 1;
-            // Still draw bullets even when dead
             this.bullets.draw(ctx);
             return;
         }

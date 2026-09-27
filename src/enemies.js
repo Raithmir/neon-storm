@@ -3,7 +3,7 @@
 // ============================================================
 const Enemies = {
     list: [],
-    enemyBullets: new BulletPool(800),
+    enemyBullets: new BulletPool(800, true),
 
     // Enemy type definitions (data-driven)
     types: {
@@ -344,9 +344,7 @@ const Enemies = {
         }
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
-        // Impact spark burst at hit point
-        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
-        // GPU glow flash
+        // GPU glow flash (impact sparks are spawned by the bullet: Particles.impact)
         Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
@@ -368,7 +366,10 @@ const Enemies = {
             color2: '#ffffff',
         });
         // Extra accent-coloured sparks for visual variety
-        Particles.spawn(enemy.x, enemy.y, isBig ? 20 : 10, { color: accent, speed: 180, life: 0.7, size: 3 });
+        Particles.spawn(enemy.x, enemy.y, isBig ? 12 : 6, { color: accent, speed: 180, life: 0.7, size: 3 });
+        // The ship's neon outline breaks apart
+        const outline = MidBoss.isType(enemy.type) ? MidBoss.outline(enemy) : this.outline(enemy);
+        if (outline) Particles.shatter(enemy.x, enemy.y, outline.pts, outline.scale, enemy.rotation || 0, enemy.color, isBig ? 1.3 : 1);
         if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
@@ -432,6 +433,16 @@ const Enemies = {
         carrier: Neon.mirror([0, -0.6, 0.6, -0.4, 0.9, 0, 0.8, 0.5, 0.4, 0.7]),
         carrierBay: [-0.25, 0.3, 0.25, 0.3, 0.2, 0.66, -0.2, 0.66],
         wall: [-1, -0.3, 1, -0.3, 1, 0.3, -1, 0.3],
+    },
+
+    // Outline used when the enemy shatters: flat points in units of the radius
+    _OUTLINES: {
+        scout_drone: 'scout', gunship: 'gunship', missile_turret: 'turretBase', phase_shifter: 'star',
+        shielded_cruiser: 'cruiser', bomber: 'bomber', sniper: 'sniperBody', carrier: 'carrier', shield_wall: 'wall',
+    },
+    outline(e) {
+        const key = this._OUTLINES[e.type];
+        return key ? { pts: this._NEON_SHAPES[key], scale: e.radius } : null;
     },
 
     _neonGlow(e, size, flash, alpha) {
@@ -796,14 +807,21 @@ const Enemies = {
         MidBoss.drawBar(ctx);
 
         // Apply colorblind override to enemy bullets before drawing
+        // (colour change also re-tints the GPU bullet)
         if (Settings.values.colorblind) {
             for (const b of this.enemyBullets.pool) {
-                b._origColor = b._origColor || b.color;
+                if (b._origColor) continue;
+                b._origColor = b.color;
                 b.color = '#ffcc00';
+                b._hex = 0xffcc00;
+                if (b._p) b._p.tint = b._hex;
             }
         } else {
             for (const b of this.enemyBullets.pool) {
-                if (b._origColor) { b.color = b._origColor; b._origColor = null; }
+                if (!b._origColor) continue;
+                b.color = b._origColor; b._origColor = null;
+                b._hex = Renderer.colorToHex(b.color);
+                if (b._p) b._p.tint = b._hex;
             }
         }
         this.enemyBullets.draw(ctx);

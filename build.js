@@ -16,6 +16,7 @@ const PIXI_CACHE = path.join(VENDOR, 'pixi.min.js');
 
 const SOURCE_FILES = [
     'constants.js',
+    'backdrops.js',
     'renderer.js',
     'config.js',
     'input.js',

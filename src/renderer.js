@@ -166,8 +166,17 @@ const Renderer = {
             this._glowSprite.blendMode = 'add';
             this._glowSprite.alpha = 1.3;
 
-            // --- Shared glow texture for native Pixi particles ---
-            this.glowTex = this._createGlowTexture(64);
+            // --- Shared FX sheet for native Pixi particles (see _createFxTextures) ---
+            this.fx = this._createFxTextures();
+            this.glowTex = this.fx.glow;
+
+            // --- Enemy bullet shadows (normal blend, under the additive bullets) ---
+            // A dark disc behind every enemy bullet keeps it readable over bright backgrounds
+            this.bulletShadowLayer = new PIXI.ParticleContainer({
+                texture: this.fx.shadow,
+                dynamicProperties: { vertex: true, position: true, rotation: false, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+            });
 
             // --- Bullet ParticleContainer (additive, GPU-batched) ---
             this.bulletLayer = new PIXI.ParticleContainer({
@@ -195,9 +204,11 @@ const Renderer = {
             // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
             this.gameLayer = new PIXI.Container();
             this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
-            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (sky + all Canvas 2D)
-            this._initStarLayers();                         // 2-3. GPU star tiles
+            this._initBackdrop();                           // 0. GPU shader background
+            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (all Canvas 2D drawing)
+            this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
+            this.gameLayer.addChild(this.bulletShadowLayer); // 5. Enemy bullet shadows
             this.gameLayer.addChild(this.bulletLayer);      // 5. Native bullets
             this.gameLayer.addChild(this.particleLayer);    // 6. Native particles
             this.gameLayer.addChild(this._explosionLayer);  // 7. Fireball sprites
@@ -262,11 +273,131 @@ const Renderer = {
         return c;
     },
 
-    // Convert the glow canvas into a PIXI.Texture for ParticleContainer use
-    _createGlowTexture(size) {
-        const canvas = this._createGlowImage(size);
-        const src = new PIXI.CanvasSource({ resource: canvas, width: size, height: size });
-        return new PIXI.Texture(src);
+    // One canvas holds every particle shape, because a ParticleContainer's
+    // particles must all share a texture source. Shapes are white so tint
+    // colours them; elongated ones point up (-y), so rotate by angle + PI/2.
+    //   glow    soft radial falloff (bloom dots, fireballs)
+    //   orb     enemy bullet body: solid disc with a soft rim
+    //   core    small hot centre for bullets
+    //   shadow  dark disc drawn behind enemy bullets (normal blend)
+    //   streak  player shot: capsule, bright head fading to the tail
+    //   needle  fast enemy shot: long thin diamond
+    //   missile homing shot: arrowhead with fins
+    //   spark   thin line for sparks and debris
+    _createFxTextures() {
+        const W = 256, H = 64;
+        const c = document.createElement('canvas');
+        c.width = W; c.height = H;
+        const g = c.getContext('2d');
+        const radial = (cx, cy, r, stops) => {
+            const grad = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+            for (const [o, col] of stops) grad.addColorStop(o, col);
+            g.fillStyle = grad;
+            g.fillRect(cx - r, cy - r, r * 2, r * 2);
+        };
+        g.drawImage(this._createGlowImage(64), 0, 0);
+        radial(80, 16, 16, [[0, '#fff'], [0.62, '#fff'], [0.72, 'rgba(255,255,255,0.55)'], [1, 'rgba(255,255,255,0)']]);
+        radial(112, 16, 16, [[0, '#fff'], [0.35, '#fff'], [0.55, 'rgba(255,255,255,0.4)'], [1, 'rgba(255,255,255,0)']]);
+        radial(144, 16, 16, [[0, 'rgba(0,0,0,0.85)'], [0.75, 'rgba(0,0,0,0.7)'], [1, 'rgba(0,0,0,0)']]);
+        // streak (160..176 x 0..64): tapered capsule, head at the top
+        let grad = g.createLinearGradient(0, 2, 0, 62);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(0.25, 'rgba(255,255,255,0.9)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.beginPath();
+        g.moveTo(168, 1); g.quadraticCurveTo(175, 4, 174, 12); g.lineTo(169.5, 63);
+        g.lineTo(166.5, 63); g.lineTo(162, 12); g.quadraticCurveTo(161, 4, 168, 1);
+        g.fill();
+        // needle (176..192): long diamond
+        g.fillStyle = '#fff';
+        g.beginPath(); g.moveTo(184, 1); g.lineTo(189, 24); g.lineTo(184, 63); g.lineTo(179, 24); g.closePath(); g.fill();
+        // missile (192..208 x 0..32): arrowhead with fins
+        g.beginPath();
+        g.moveTo(200, 1); g.lineTo(204, 12); g.lineTo(204, 22); g.lineTo(207, 30); g.lineTo(193, 30);
+        g.lineTo(196, 22); g.lineTo(196, 12); g.closePath(); g.fill();
+        // spark (208..216 x 0..32): thin line, soft at both ends
+        grad = g.createLinearGradient(0, 0, 0, 32);
+        grad.addColorStop(0, 'rgba(255,255,255,0)');
+        grad.addColorStop(0.3, 'rgba(255,255,255,1)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(210.5, 0, 3, 32);
+
+        const src = new PIXI.CanvasSource({ resource: c, width: W, height: H });
+        const tex = (x, y, w, h) => new PIXI.Texture({ source: src, frame: new PIXI.Rectangle(x, y, w, h) });
+        return {
+            glow: tex(0, 0, 64, 64), orb: tex(64, 0, 32, 32), core: tex(96, 0, 32, 32),
+            shadow: tex(128, 0, 32, 32), streak: tex(160, 0, 16, 64), needle: tex(176, 0, 16, 64),
+            missile: tex(192, 0, 16, 32), spark: tex(208, 0, 8, 32),
+        };
+    },
+
+    // --- Backdrop: full-screen shader background (see backdrops.js) ---
+
+    _initBackdrop() {
+        try {
+            const geometry = new PIXI.Geometry({
+                attributes: {
+                    aPosition: [0, 0, PLAY_W, 0, PLAY_W, PLAY_H, 0, PLAY_H],
+                    aUV: [0, 0, 1, 0, 1, 1, 0, 1],
+                },
+                indexBuffer: [0, 1, 2, 0, 2, 3],
+            });
+            this._bgUniforms = new PIXI.UniformGroup({
+                uTime:  { value: 0, type: 'f32' },
+                uRes:   { value: new Float32Array([PLAY_W, PLAY_H]), type: 'vec2<f32>' },
+                uPulse: { value: 0, type: 'f32' },
+                uBoss:  { value: 0, type: 'f32' },
+                uSurge: { value: 0, type: 'f32' },
+                uDim:   { value: 0, type: 'f32' },
+            });
+            this._bgShaders = {};
+            this._bgGeometry = geometry;
+            this.backdropTheme = null;
+            this.bgPulse = 0;
+            this.setBackdrop('synthwave');
+            this.gameLayer.addChild(this._bgMesh);
+            this.backdropActive = true;
+        } catch (e) {
+            console.warn('[Renderer] Shader backdrop unavailable — using Canvas 2D background:', e);
+            this._bgMesh = null;
+            this.backdropActive = false;
+        }
+    },
+
+    setBackdrop(theme) {
+        if (theme === this.backdropTheme || !this._bgGeometry) return;
+        const src = BACKDROP_SHADERS[theme] || BACKDROP_SHADERS.synthwave;
+        let shader = this._bgShaders[theme];
+        if (!shader) {
+            shader = PIXI.Shader.from({
+                gl: { vertex: BACKDROP_VERTEX, fragment: BACKDROP_COMMON + src },
+                resources: { bgUniforms: this._bgUniforms },
+            });
+            this._bgShaders[theme] = shader;
+        }
+        if (!this._bgMesh) this._bgMesh = new PIXI.Mesh({ geometry: this._bgGeometry, shader });
+        else this._bgMesh.shader = shader;
+        this.backdropTheme = theme;
+    },
+
+    // Per-frame uniforms: follows the level theme and reacts to bombs, bosses, Surge and bullet density
+    _updateBackdrop(dt) {
+        if (!this._bgMesh) return;
+        this.setBackdrop(Background.bgType);
+        const u = this._bgUniforms.uniforms;
+        const approach = (cur, target, rate) => cur + (target - cur) * Math.min(1, dt * rate);
+        this.bgPulse = Math.max(0, this.bgPulse - dt * 1.6);
+        const bossOn = typeof Boss !== 'undefined' && Boss.active && Boss.entered && !Boss.defeated ? 1 : 0;
+        const surgeOn = typeof Scoring !== 'undefined' && Scoring.surgeActive ? 1 : 0;
+        const bullets = typeof Enemies !== 'undefined' ? Enemies.enemyBullets.pool.length : 0;
+        u.uTime = Background.time;
+        u.uPulse = this.bgPulse;
+        u.uBoss = approach(u.uBoss, bossOn, 1.5);
+        u.uSurge = approach(u.uSurge, surgeOn, 4);
+        u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
+        if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
     // --- Star field (TilingSprite) ---
@@ -649,6 +780,9 @@ const Renderer = {
     // Fallback mode: composite glow additively into compCanvas for blitToOverlay
     endFrame() {
         if (this.usePixi) {
+            const now = performance.now();
+            this._updateBackdrop(Math.min(0.1, (now - (this._lastFrameTime || now)) / 1000));
+            this._lastFrameTime = now;
             this._canvasSource.update();
             this._glowCanvasSource.update();
             this.app.renderer.render(this.app.stage);
@@ -786,6 +920,7 @@ const Renderer = {
     },
 
     triggerFlash(color, duration) {
+        this.bgPulse = Math.max(this.bgPulse || 0, 0.6);
         if (!this.usePixi) return;
         this._flashColor = color || 0xffffff;
         this._flashDuration = duration || 0.3;
@@ -803,6 +938,7 @@ const Renderer = {
 
     // Shockwave ripple expanding from a normalised position (0-1 range)
     triggerShockwave(normX, normY) {
+        this.bgPulse = 1;
         if (!this._shockwaveFilter) return;
         this._shockwaveFilter.center = [normX, normY];
         this._shockwaveFilter.time = 0;

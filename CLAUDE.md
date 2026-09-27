@@ -27,11 +27,12 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 22 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 23 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
 ```
+Level backdrop shader (backdrops.js) → PixiJS Mesh at the bottom of gameLayer
 All .draw(ctx) calls → Offscreen Canvas 2D (720×960)
                                ↓
                     PixiJS GPU texture upload
@@ -44,6 +45,8 @@ Menus / HUD / transitions → Overlay Canvas 2D (1920×1080) directly
 - `Renderer.getPlayCtx()` — returns the offscreen Canvas 2D context for gameplay drawing
 - `Renderer.beginFrame()` / `Renderer.endFrame()` — frame lifecycle; `endFrame()` uploads to GPU
 - `Renderer.setShake(x, y)` — screen shake via PixiJS sprite offset
+- Each level's background is a GPU fragment shader in `backdrops.js` (`BACKDROP_SHADERS[bgType]`), drawn by `Renderer.setBackdrop()` under everything else. Its uniforms (`Renderer._updateBackdrop`) react to bombs/flashes (`bgPulse`), bosses, Surge and bullet density (it dims under dense patterns). When it is active, `Background.draw()` skips the painted Canvas 2D background, which remains the no-WebGL fallback
+- Bullets and particles are native Pixi particles using shapes from one FX texture sheet (`Renderer.fx`: glow, orb, core, shadow, streak, needle, missile, spark). Enemy bullets get a dark shadow (normal blend) under an additive orb/needle and core; player shots are streaks/missiles pointing along their velocity. `Particles.flash/impact/spawnExplosion/shatter` build effects; `shatter` breaks an entity's neon outline (`Enemies.outline`, `MidBoss.outline`, `Boss.outlines`) into spinning line segments
 - When PixiJS is unavailable, `endFrame()` is a no-op and `Game.draw()` blits the offscreen canvas directly to the overlay canvas — all draw code works identically in both paths
 
 ### State Machine (`game.js`)

@@ -167,6 +167,9 @@ const Boss = {
             // Stage 3 (2.5-3.5s): Boss-specific mega final effect
             if (this.defeatTimer >= 2.5 && this.defeatTimer < 3.5) {
                 if (this.defeatTimer - dt < 2.5) {
+                    // The hull shatters and stops being drawn
+                    const col = this.colors[this.phase - 1] || '#ffffff';
+                    for (const o of this.outlines()) Particles.shatter(this.x + o.ox, this.y, o.pts, o.scale, 0, col, 2.2);
                     Audio.playExplosionLarge();
                     ScreenShake.trigger(20, 1.0);
                     Renderer.triggerFlash(0xffffff, 0.7);
@@ -874,6 +877,26 @@ const Boss = {
         fighterCanopy: Neon.mirror([0, -0.5, 0.07, -0.36, 0.06, -0.24, 0, -0.2]),
     },
 
+    // Outlines the boss breaks into when destroyed: [{ pts, scale, ox }]
+    outlines() {
+        const S = this._NEON_SHAPES, r = this.radius;
+        switch (this.bossType) {
+            case 'furnace': return [{ pts: S.furnace, scale: r, ox: 0 }];
+            case 'leviathan': return [{ pts: Neon.polygon(14, 0, 0.85, 0.6), scale: r, ox: 0 }];
+            case 'interceptor_duo': {
+                const sep = this.phase === 1 ? 45 : 18;
+                return [{ pts: S.fighter, scale: r, ox: -sep }, { pts: S.fighter, scale: r, ox: sep }];
+            }
+            case 'nexus': return [{ pts: Neon.polygon(12, 0, 0.55), scale: r, ox: 0 }, { pts: Neon.polygon(16, 0, 0.9), scale: r, ox: 0 }];
+            case 'echo': return [{ pts: MidBoss._NEON_SHAPES.echoHull, scale: r, ox: 0 }];
+            default: {
+                const pod = S.archPod, flipped = pod.slice();
+                for (let i = 0; i < flipped.length; i += 2) flipped[i] = -flipped[i];
+                return [{ pts: S.archHull, scale: r, ox: 0 }, { pts: pod, scale: r, ox: 0 }, { pts: flipped, scale: r, ox: 0 }];
+            }
+        }
+    },
+
     // Mirror a right-side detail line to the left and draw both
     _pair(ctx, pts, r, color, alpha, width) {
         Neon.detail(ctx, pts, r, color, alpha, width);
@@ -1175,6 +1198,8 @@ const Boss = {
             ctx.restore();
             return;
         }
+
+        if (this.defeated && this.defeatTimer >= 2.5) return;   // shattered
 
         ctx.save();
         ctx.translate(this.x, this.y);
