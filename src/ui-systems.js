@@ -156,7 +156,7 @@ const Hangar = {
             { id: 'flame', name: 'Flame Trail', cost: 60, color: '#ff4400' },
             { id: 'scatter', name: 'Particle Scatter', cost: 120, color: '#00ff88' },
             { id: 'lightning', name: 'Lightning Arc', cost: 80, color: '#ffff00' },
-            { id: 'void', name: 'Void Trail', cost: 120, color: '#220044' }
+            { id: 'void', name: 'Void Trail', cost: 120, color: '#aa33ff' }
         ],
         bullets: [
             { id: 'neon', name: 'Standard Neon', cost: 0, color: '#00ffff' },
@@ -295,10 +295,10 @@ const Hangar = {
                     { align: 'left', halo: selected ? 0.3 : 0, weight: selected ? 'bold' : '' });
                 let status, statusColor;
                 if (isEquipped) { status = 'EQUIPPED'; statusColor = '#00ff88'; }
-                else if (owned) { status = selected ? 'ENTER TO EQUIP' : 'OWNED'; statusColor = selected ? UI.CYAN : UI.DIM; }
+                else if (owned) { status = selected ? UI.keys('ENTER TO EQUIP') : 'OWNED'; statusColor = selected ? UI.CYAN : UI.DIM; }
                 else {
                     const afford = NeonCredits.balance >= item.cost;
-                    status = item.cost + ' NC' + (selected ? (afford ? '  •  ENTER TO BUY' : '  •  NOT ENOUGH NC') : '');
+                    status = item.cost + ' NC' + (selected ? (afford ? UI.keys('  •  ENTER TO BUY') : '  •  NOT ENOUGH NC') : '');
                     statusColor = afford ? '#ffaa00' : '#ff3355';
                 }
                 UI.label(ctx, status, lx + 100, y + 32, statusColor, 15, 'left');

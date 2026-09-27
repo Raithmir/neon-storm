@@ -25,6 +25,61 @@ const Storage = {
 
 
 // ============================================================
+//  SAVE VERSIONING
+// ============================================================
+// SAVE_VERSION goes up whenever saved data changes meaning. SaveData.migrate()
+// runs before anything loads (Game.init) and upgrades an older save one step
+// at a time. A save with no version is from before versioning (α/β = 1).
+// To change the save format: bump SAVE_VERSION and add a step that upgrades
+// the previous version; keep steps small and never drop progress silently.
+const SAVE_VERSION = 2;
+
+const SaveData = {
+    migrated: null,     // { from, to } when this boot upgraded a save (noted on the title screen)
+
+    async migrate() {
+        let v = await Storage.get('saveVersion');
+        if (!v) {
+            const old = await Storage.get('settings') || await Storage.get('highscores') || await Storage.get('campaign');
+            v = old ? 1 : SAVE_VERSION;
+        }
+        if (v > SAVE_VERSION) {
+            console.warn('[SaveData] save is from a newer build (v' + v + '); leaving it untouched');
+            return;
+        }
+        const from = v;
+        while (v < SAVE_VERSION) {
+            await this.steps[v]();
+            v++;
+        }
+        await Storage.set('saveVersion', v);
+        if (from < v) this.migrated = { from, to: v };
+    },
+
+    // steps[n] upgrades a version-n save to n + 1
+    steps: {
+        // 1 → 2 (γ): the gameplay rebalance changed scoring, and per-level records now
+        // hold that level's score rather than the run total, so old scores can't be
+        // compared. High scores and level records are archived (…_v1) and reset;
+        // unlocks, credits, cosmetics, achievements, settings and controls are kept.
+        async 1() {
+            const hs = await Storage.get('highscores');
+            if (hs) {
+                await Storage.set('highscores_v1', hs);
+                await Storage.set('highscores', null);
+            }
+            const camp = await Storage.get('campaign');
+            if (camp && camp.levelBests && Object.keys(camp.levelBests).length) {
+                await Storage.set('levelBests_v1', camp.levelBests);
+                camp.levelBests = {};
+                await Storage.set('campaign', camp);
+            }
+        },
+    },
+};
+
+
+// ============================================================
 //  HIGH SCORE SYSTEM
 // ============================================================
 const HighScores = {
@@ -142,7 +197,7 @@ const HighScores = {
                 Neon.text(ctx, '▼', cx, y + 132, UI.CYAN, 14, { halo: 0 });
             }
         }
-        UI.label(ctx, '↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM', x, y + 160, UI.DIM, 14);
+        UI.label(ctx, UI.keys('↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM'), x, y + 160, UI.DIM, 14);
     },
 
     drawBoard(ctx, difficulty, x, y, w) {

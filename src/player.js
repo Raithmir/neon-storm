@@ -209,6 +209,7 @@ const Player = {
         if (this.primaryWeapon === 'laser' && this.alive) {
             const laserColor = Hangar.equipped.bullet === 'neon' ? '#4488ff' : Hangar.bulletColor;
             Renderer.updateLaserBeam(this.x, this.y - this.radius, laserColor, shouldFire);
+            Audio.laserHum(shouldFire && this.primaryLevel > 0);
         } else {
             Renderer.updateLaserBeam(0, 0, null, false);
         }
@@ -466,6 +467,7 @@ const Player = {
                 break;
             }
             case 'homing': {
+                Audio.playMissile();
                 const count = lvl + 1; // Lv1: 2 … Lv5: 6 missiles
                 const spd = lvl >= 4 ? 0.7 : lvl >= 2 ? 0.65 : 0.6;
                 for (let j = 0; j < count; j++) {

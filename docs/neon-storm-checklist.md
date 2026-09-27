@@ -6,14 +6,29 @@
 
 ---
 
-## Recommended Next Steps (priority order)
+## Roadmap
 
-1. **Music and SFX** — the biggest gap now the game looks the part: there is no music at all (the `playMusic`/`stopMusic`/`crossfadeMusic` hooks in `audio.js` are empty and the MUSIC VOLUME slider does nothing). Suggested approach: procedural synthwave generated with Web Audio (keeps the single offline HTML, no licensing) — a menu theme, per-level variations, a boss track, victory/game-over stings, reacting to play (boss intensity, Surge filter sweep). Then upgrade the ~17 procedural SFX to match the new visuals (weightier explosions, graze, boss warning siren, shatter/impact sounds).
-2. **Act on play-test results** — the gameplay review follow-ups below, plus anything found in γ's visuals. Use Settings → SHOW FPS for performance reports.
-3. **Save-data versioning** — add a save version now so future balance or format changes can migrate or reset old data cleanly (see Gameplay Review Follow-ups).
-4. **Gamepad button prompts** — small with the UI kit; see UI / UX Polish.
-5. **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
-6. **More to play, reusing existing systems** — Boss Rush / Boss Practice (all bosses exist), an adaptive rank system, ship selection (neon art makes new ships cheap).
+### γ Gamma — finish (in progress)
+
+1. ~~**Music and SFX**~~ — done: procedural soundtrack and upgraded SFX (see Audio). Tune by ear after play-testing.
+2. **Play-test fixes** — the gameplay review follow-ups below, plus anything found in γ's visuals and audio. Use Settings → SHOW FPS for performance reports.
+3. ~~**Save-data versioning**~~ — done: `SAVE_VERSION` / `SaveData.migrate()` in `storage.js`; the γ step archives and resets score tables and keeps everything else.
+4. ~~**Gamepad button prompts**~~ — done: menus show [A]/[B]/D-PAD when a controller was used last.
+
+γ is feature-complete once the play-test fixes are in.
+
+### δ Delta — renderer and content (next)
+
+1. **Native Pixi sprites for entities** — Renderer Phase 7. First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
+2. **three.js 3D backdrops** — Renderer Phase 8. Prototype the sky city, then decide how far to take it.
+3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
+
+If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
+
+### Later / undecided
+
+- **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
+- Platform items (co-op, online leaderboards, replays, modding) — see Platform & Infrastructure.
 
 **One-time setup:** repo Settings → Pages → Source: **GitHub Actions**, so pushes to main publish to https://raithmir.github.io/neon-storm/.
 
@@ -30,7 +45,7 @@
 - [x] High-DPI rendering with GRAPHICS QUALITY (auto/high/medium/low); FLASH REDUCTION covers every effect
 - [x] pixi-filters v6 bundled: bomb shockwave, boss god-rays and phase glitch now work
 - [x] SHOW FPS counter; CI (build + dist check, gameplay checks, render smoke test); GitHub Pages hosting from main
-- [ ] Hangar swatch for Void Trail still shows its dark catalogue colour rather than the glowing purple trail
+- [x] Void Trail uses its glowing purple for the Hangar swatch and engine flames (was a near-black catalogue colour)
 
 ---
 
@@ -50,13 +65,13 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 
 ## Gameplay Review Follow-ups
 
-The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 30 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
+The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 31 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
 
 - [ ] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
 - [ ] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
 - [ ] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
 - [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS)
-- [ ] Save-data versioning: per-level records now store level score (previously run score) and high scores were set under the old balance — reset or migrate old saves
+- [x] Save-data versioning: old saves get their high scores and per-level records archived (`highscores_v1`, `levelBests_v1`) and reset, since both changed meaning; everything else is kept (check `saveMigrationKeepsProgress`)
 
 ---
 
@@ -70,7 +85,7 @@ Small-to-medium effort items that would improve existing features.
 - [ ] Asteroid vs enemy bullet collision — enemy bullets should destroy/damage asteroids too
 
 ### UI / UX Polish
-- [ ] Gamepad button prompts — when a controller is detected, show gamepad button labels in menus and HUD instead of keyboard keys
+- [x] Gamepad button prompts — menu hints switch to [A]/[B]/D-PAD when a controller was used last (`Input.lastDevice`, `UI.keys()`)
 
 ### Hangar Bonus Content
 These are listed as purchasable items in the Hangar shop but have no implementation behind them:
@@ -111,8 +126,9 @@ Features that add entirely new ways to play.
 
 ## Audio
 
-- [ ] Music tracks — original or royalty-free synthwave music for: menu theme, per-level gameplay (6 tracks), boss theme, victory sting, game over sting. Music system hooks already exist (playMusic/stopMusic/crossfadeMusic)
-- [ ] SFX upgrade to match the γ visuals — weightier layered explosions, distinct graze sound, boss WARNING siren, shatter/impact sounds, UI sounds for the new menus
+- [x] Procedural synthwave soundtrack (`music.js`): menu theme, a track per level, boss track in each level's key, Endless, victory and game-over stings; intensity layers follow play (mid-boss, boss phases, Surge); pause muffles, bombs/deaths duck; `npm run sim:audio` in CI
+- [ ] Tune the music by ear after play-testing (levels, tempos, which layers play when)
+- [x] SFX upgrade — layered explosions with glass pings for the shattering ships, heavier bomb, softer base shot, distinct graze, laser hum, missile whoosh, boss WARNING siren, mid-boss alert, boss phase glitch, extra-life fanfare, per-sound throttling for mass kills; loudness matched to the old set
 
 ---
 

@@ -84,7 +84,7 @@ const MidBoss = {
         e.onScreenTime = 0;
         e.dartTarget = PLAY_W / 2;
         Scoring.spawnPopup('WARNING — ' + def.name, '#ff4466', 22);
-        Audio.playExplosionLarge();
+        Audio.playMidbossAlert();
         return e;
     },
 

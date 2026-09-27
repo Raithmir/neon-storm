@@ -33,6 +33,10 @@ const Menu = {
             UI.item(ctx, this.items[i], cx, 358 + i * 54, i === this.selectedIndex, { w: 440 });
         }
 
+        if (SaveData.migrated) {
+            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 752, '#ffdd44', 14);
+            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 774, UI.DIM, 13);
+        }
         UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
         UI.label(ctx, 'GAMMA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
     },
@@ -189,7 +193,7 @@ const Menu = {
 
         // Start prompt with an auto-start countdown
         ctx.globalAlpha = inK * (Renderer.calm() ? 1 : 0.7 + Math.sin(t * 5) * 0.3);
-        Neon.text(ctx, 'PRESS ENTER OR FIRE TO LAUNCH', cx, 850, '#ffffff', 22, { halo: 0.3 });
+        Neon.text(ctx, UI.keys('PRESS ENTER OR FIRE TO LAUNCH'), cx, 850, '#ffffff', 22, { halo: 0.3 });
         ctx.globalAlpha = inK;
         Neon.bar(ctx, cx - 180, 880, 360, 4, Math.min(1, t / 8), UI.CYAN, 0);
         ctx.globalAlpha = 1;
@@ -360,7 +364,7 @@ const Menu = {
             const action = Game.pauseConfirm === 'restart' ? 'RESTART LEVEL' : 'QUIT TO MENU';
             Neon.text(ctx, 'ARE YOU SURE?', cx, 480, '#ffaa00', 26);
             UI.label(ctx, action, cx, 520, UI.TEXT, 19);
-            UI.label(ctx, 'ENTER = YES    ESC = NO', cx, 600, UI.DIM, 16);
+            UI.label(ctx, UI.keys('ENTER = YES    ESC = NO'), cx, 600, UI.DIM, 16);
         } else {
             this.items = ['RESUME', 'RESTART', 'MAIN MENU'];
             for (let i = 0; i < this.items.length; i++) {
