@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Neon Storm β — Build Script
+// Neon Storm γ — Build Script
 // Concatenates source modules into a single distributable HTML file.
 // Downloads PixiJS and bundles it inline for offline/file:// use.
 // Usage: node build.js
@@ -16,12 +16,15 @@ const PIXI_CACHE = path.join(VENDOR, 'pixi.min.js');
 
 const SOURCE_FILES = [
     'constants.js',
+    'backdrops.js',
     'renderer.js',
     'config.js',
     'input.js',
     'audio.js',
     'storage.js',
     'ui-systems.js',
+    'neon.js',
+    'ui-kit.js',
     'particles.js',
     'bullets.js',
     'scoring.js',
@@ -63,7 +66,7 @@ function downloadFile(url, dest) {
 }
 
 async function build() {
-    console.log('Building Neon Storm \u03b2...\n');
+    console.log('Building Neon Storm \u03b3...\n');
 
     if (!fs.existsSync(DIST)) fs.mkdirSync(DIST, { recursive: true });
     if (!fs.existsSync(VENDOR)) fs.mkdirSync(VENDOR, { recursive: true });
@@ -113,7 +116,7 @@ async function build() {
         + '<html lang="en">\n<head>\n'
         + '<meta charset="UTF-8">\n'
         + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
-        + '<title>NEON STORM \u03b2</title>\n'
+        + '<title>NEON STORM \u03b3</title>\n'
         + '<style>\n'
         + "@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');\n"
         + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
@@ -129,11 +132,11 @@ async function build() {
         + '\n</script>\n</body>\n</html>';
 
     fs.writeFileSync(path.join(DIST, 'neon-storm.js'), combinedJS);
-    fs.writeFileSync(path.join(DIST, 'neon-storm-beta.html'), html);
+    fs.writeFileSync(path.join(DIST, 'neon-storm-gamma.html'), html);
 
     console.log('\nBuild complete: ' + SOURCE_FILES.length + ' modules, ' + totalLines + ' total lines');
     console.log('PixiJS: ' + (pixiMode === 'inline' ? 'bundled inline (' + Math.round(pixiJS.length / 1024) + ' KB)' : 'CDN link'));
-    console.log('Output: dist/neon-storm-beta.html');
+    console.log('Output: dist/neon-storm-gamma.html');
     console.log('Debug:  dist/neon-storm.js');
 }
 

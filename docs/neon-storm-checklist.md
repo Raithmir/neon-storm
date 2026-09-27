@@ -1,4 +1,4 @@
-# NEON STORM β — Remaining Work
+# NEON STORM γ — Remaining Work
 
 *All completed items removed. This is the single tracker for what's left to do.*
 
@@ -115,4 +115,6 @@ Gameplay review additions:
 
 ---
 
-*Last updated: Neon Storm β — gameplay review, mid-bosses and simulation tooling*
+Gamma additions: neon vector art for every entity with a sprite atlas, GPU shader backgrounds for all six levels, shaped bullets and shattering explosions, a neon UI kit (title, menus, briefing, results, hangar previews, HUD), distinct cosmetic styles, high-DPI rendering with a GRAPHICS QUALITY setting, and FLASH REDUCTION covering every flash and pulse.
+
+*Last updated: Neon Storm γ — graphics overhaul*

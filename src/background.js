@@ -254,6 +254,8 @@ const Background = {
     },
 
     draw(ctx) {
+        // The GPU shader backdrop (backdrops.js) replaces this painted background
+        if (Renderer.backdropActive && Renderer.usePixi) return;
         const t = this._theme();
         this._drawSky(ctx, t);
         this._drawStars(ctx, t);

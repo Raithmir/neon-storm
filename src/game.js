@@ -95,24 +95,24 @@ const Game = {
 
         // Bloom intensity per level theme
         const bloomPresets = {
-            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
-            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
-            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
-            storm:     { bloomScale: 1.1,  threshold: 0.32 },
-            frozen:    { bloomScale: 0.85, threshold: 0.4  },
-            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+            synthwave:  { bloomScale: 0.9,  threshold: 0.4  },
+            industrial: { bloomScale: 1.3,  threshold: 0.28 },
+            space:      { bloomScale: 1.0,  threshold: 0.35 },
+            sky:        { bloomScale: 0.85, threshold: 0.4  },
+            digital:    { bloomScale: 1.1,  threshold: 0.32 },
+            void:       { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
         };
         const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
         Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
 
         // Per-level colour grade for distinct mood
         const colorGradePresets = {
-            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
-            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
-            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
-            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
-            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
-            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+            synthwave:  { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            industrial: { hue:  6,   saturate:  0.3,  contrast: 0.15, brightness:  0.04 },
+            space:      { hue:  0,   saturate:  0.15, contrast: 0.12, brightness:  0    },
+            sky:        { hue: -6,   saturate:  0.1,  contrast: 0.1,  brightness:  0.03 },
+            digital:    { hue:  0,   saturate:  0.25, contrast: 0.12, brightness:  0    },
+            void:       { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
         };
         const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
         Renderer.setColorGrade(cg);
@@ -176,6 +176,10 @@ const Game = {
         this.briefingText = level.briefing || '';
         this.briefingTimer = 0;
         this.currentLevelIndex = levelIndex;
+        // Clear the last level's GPU particles/bullets so the briefing backdrop is clean
+        Particles.clear();
+        Enemies.enemyBullets.clear();
+        Player.bullets.clear();
         this.state = 'briefing';
     },
 
@@ -442,6 +446,7 @@ const Game = {
 
             case 'briefing':
                 this.briefingTimer += dt;
+                Background.update(dt);   // keep the briefing backdrop moving
                 if (Input.isPressed('confirm') || Input.isPressed('fire') || this.briefingTimer > 8) {
                     Audio.playMenuSelect();
                     const lvlIdx = this.currentLevelIndex;
@@ -506,7 +511,7 @@ const Game = {
                         if (dx * dx + dy * dy < (b.radius + a.radius) * (b.radius + a.radius)) {
                             a.hp -= b.damage;
                             b.active = false;
-                            Particles.spawn(b.x, b.y, 3, { color: '#886644', speed: 50, life: 0.15 });
+                            Particles.impact(b);
                             break;
                         }
                     }
@@ -694,58 +699,9 @@ const Game = {
                 Menu.drawHighScores(ctx);
                 break;
 
-            case 'achievements': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#ffaa00'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#ffaa00'; ctx.shadowBlur = 10;
-                ctx.fillText('ACHIEVEMENTS', SCREEN_W / 2, 70); ctx.shadowBlur = 0;
-                const prog = Achievements.getProgress();
-                ctx.fillStyle = '#aaaaaa'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(prog.unlocked + ' / ' + prog.total + ' UNLOCKED', SCREEN_W / 2, 100);
-                // Grid of achievements
-                const cols = 2;
-                const colW = 400;
-                const startX = SCREEN_W / 2 - colW;
-                const startY = 135;
-                const rowH = 48;
-                Achievements.defs.forEach((def, i) => {
-                    const col = i % cols;
-                    const row = Math.floor(i / cols);
-                    const x = startX + col * colW;
-                    const y = startY + row * rowH;
-                    const done = Achievements.isUnlocked(def.id);
-                    // Background
-                    if (done) {
-                        ctx.fillStyle = 'rgba(255, 170, 0, 0.08)';
-                        ctx.fillRect(x + 5, y, colW - 10, rowH - 4);
-                    }
-                    // Icon
-                    ctx.font = '18px sans-serif';
-                    ctx.textAlign = 'left';
-                    ctx.fillStyle = done ? '#ffffff' : '#333344';
-                    ctx.fillText(def.icon, x + 15, y + 22);
-                    // Name
-                    ctx.font = (done ? 'bold ' : '') + '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillStyle = done ? '#ffaa00' : '#556677';
-                    ctx.fillText(def.name, x + 45, y + 17);
-                    // Description
-                    ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                    ctx.fillStyle = done ? '#999999' : '#445566';
-                    ctx.fillText(def.desc, x + 45, y + 34);
-                    // Reward
-                    ctx.textAlign = 'right';
-                    ctx.fillStyle = done ? '#00ff88' : '#445566';
-                    ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText((done ? '✓ ' : '') + def.reward + ' NC', x + colW - 15, y + 22);
-                });
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('ESC / ENTER TO RETURN', SCREEN_W / 2, SCREEN_H - 40);
+            case 'achievements':
+                Menu.drawAchievements(ctx);
                 break;
-            }
 
             case 'custom_difficulty':
                 CustomDifficulty.draw(ctx);
@@ -759,81 +715,21 @@ const Game = {
                 Tutorial.draw(ctx);
                 break;
 
-            case 'level_select': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#00ffff'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-                ctx.fillText('SELECT LEVEL', SCREEN_W / 2, 100); ctx.shadowBlur = 0;
-                ctx.fillStyle = '#aaaaaa'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 135);
-                const lvlCount = Campaign.getLevelCount();
-                const startY = 200;
-                for (let i = 0; i <= lvlCount; i++) {
-                    const y = startY + i * 55;
-                    const selected = i === Menu.selectedIndex;
-                    if (i === lvlCount) {
-                        ctx.fillStyle = selected ? '#00ffff' : '#667788';
-                        ctx.font = selected ? 'bold 18px Share Tech Mono, Consolas, monospace' : '16px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText(selected ? '▸ BACK ◂' : 'BACK', SCREEN_W / 2, y);
-                    } else {
-                        const lvl = ALL_LEVELS[i];
-                        const available = Campaign.isLevelAvailable(i, false);
-                        const best = Campaign.getLevelBest(i, GameConfig.difficulty);
-                        if (selected && available) {
-                            ctx.strokeStyle = '#00ffff'; ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 8;
-                            ctx.lineWidth = 1.5; ctx.strokeRect(SCREEN_W / 2 - 320, y - 22, 640, 44); ctx.shadowBlur = 0;
-                        }
-                        // Level name
-                        ctx.textAlign = 'left';
-                        ctx.fillStyle = !available ? '#334455' : selected ? '#ffffff' : '#99aabb';
-                        ctx.font = selected ? 'bold 17px Share Tech Mono, Consolas, monospace' : '15px Share Tech Mono, Consolas, monospace';
-                        const lockText = available ? '' : ' [LOCKED]';
-                        ctx.fillText((i + 1) + ': ' + (lvl ? lvl.name.toUpperCase() : '') + lockText, SCREEN_W / 2 - 300, y);
-                        // Best score (right-aligned)
-                        if (best && available) {
-                            ctx.textAlign = 'right';
-                            ctx.fillStyle = selected ? '#ffff00' : '#888866';
-                            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                            ctx.fillText(best.score.toLocaleString(), SCREEN_W / 2 + 200, y - 5);
-                            ctx.fillStyle = selected ? '#888888' : '#556655';
-                            ctx.font = '11px Share Tech Mono, Consolas, monospace';
-                            const extras = [];
-                            if (best.maxChain > 0) extras.push('CHAIN:' + best.maxChain);
-                            if (best.perfect) extras.push('★PERFECT');
-                            ctx.fillText(extras.join('  '), SCREEN_W / 2 + 200, y + 10);
-                        } else if (available) {
-                            ctx.textAlign = 'right';
-                            ctx.fillStyle = '#445555';
-                            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                            ctx.fillText('NO RECORD', SCREEN_W / 2 + 200, y);
-                        }
-                        ctx.textAlign = 'center';
-                    }
-                }
-                ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('ESC BACK', SCREEN_W / 2, SCREEN_H - 50);
+            case 'level_select':
+                Menu.drawLevelSelect(ctx);
                 break;
-            }
 
             case 'briefing': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
+                // The level's backdrop plays in the play area behind the briefing
                 const lvl = ALL_LEVELS[this.currentLevelIndex];
-                ctx.fillStyle = '#888888'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('LEVEL ' + (this.currentLevelIndex + 1), SCREEN_W / 2, 350);
-                ctx.fillStyle = '#00ffff'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-                ctx.fillText(lvl.name.toUpperCase(), SCREEN_W / 2, 390); ctx.shadowBlur = 0;
-                const lines = (this.briefingText || '').split('\n');
-                ctx.fillStyle = '#cccccc'; ctx.font = '15px Share Tech Mono, Consolas, monospace';
-                lines.forEach((line, i) => ctx.fillText(line, SCREEN_W / 2, 440 + i * 24));
-                ctx.fillStyle = '#778899'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('PRESS ENTER OR FIRE TO BEGIN', SCREEN_W / 2, 580);
+                Background.bgType = (lvl && lvl.bgType) || 'synthwave';
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                Menu.drawBriefing(ctx);
                 break;
             }
 
@@ -898,97 +794,9 @@ const Game = {
                 break;
             }
 
-            case 'campaign_complete': {
-                // Animated celebration background
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620');
-                grad.addColorStop(0.5, '#1a0a3e');
-                grad.addColorStop(1, '#0a0620');
-                ctx.fillStyle = grad;
-                ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-                // Animated particles in background
-                const cTime = Game.briefingTimer;
-                for (let i = 0; i < 30; i++) {
-                    const px = (Math.sin(cTime * 0.5 + i * 1.7) * 0.5 + 0.5) * SCREEN_W;
-                    const py = (Math.cos(cTime * 0.3 + i * 2.3) * 0.5 + 0.5) * SCREEN_H;
-                    const hue = (cTime * 30 + i * 12) % 360;
-                    ctx.fillStyle = `hsla(${hue}, 100%, 70%, 0.15)`;
-                    ctx.beginPath();
-                    ctx.arc(px, py, 2 + Math.sin(cTime + i) * 1.5, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-
-                ctx.textAlign = 'center';
-                const isSecret = Game.currentLevelIndex === 5;
-
-                // Title
-                const titleHue = (cTime * 40) % 360;
-                ctx.fillStyle = isSecret ? `hsl(${titleHue}, 100%, 70%)` : '#ffff00';
-                ctx.shadowColor = isSecret ? `hsl(${titleHue}, 100%, 50%)` : '#ffff00';
-                ctx.shadowBlur = 20 + Math.sin(cTime * 3) * 8;
-                ctx.font = 'bold 48px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(isSecret ? 'SIGNAL TERMINATED' : 'CAMPAIGN COMPLETE', SCREEN_W / 2, 250);
-                ctx.shadowBlur = 0;
-
-                // Subtitle
-                ctx.fillStyle = '#cccccc';
-                ctx.font = '18px Share Tech Mono, Consolas, monospace';
-                if (isSecret) {
-                    ctx.fillText('You silenced the relay. The void is quiet...', SCREEN_W / 2, 300);
-                    ctx.fillText('For now.', SCREEN_W / 2, 325);
-                } else {
-                    ctx.fillText('The threat has been neutralized.', SCREEN_W / 2, 300);
-                    ctx.fillText('Outstanding work, pilot.', SCREEN_W / 2, 325);
-                }
-
-                // Stats
-                ctx.fillStyle = '#888888';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 390);
-
-                ctx.fillStyle = '#00ffff';
-                ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('TOTAL SCORE: ' + Scoring.score.toLocaleString(), SCREEN_W / 2, 430);
-
-                ctx.fillStyle = '#ffaa00';
-                ctx.font = '16px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NEON CREDITS: ' + NeonCredits.balance, SCREEN_W / 2, 465);
-
-                // Secret level hint
-                if (!isSecret && !Campaign.secretUnlocked) {
-                    ctx.fillStyle = '#555566';
-                    ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('Something else is out there... beat all levels on Normal to find it.', SCREEN_W / 2, 520);
-                } else if (!isSecret && Campaign.secretUnlocked) {
-                    ctx.fillStyle = '#ff00ff';
-                    ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('SECRET LEVEL UNLOCKED: SIGNAL LOST', SCREEN_W / 2, 520);
-                }
-
-                // Thank you
-                ctx.fillStyle = '#667788';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
-                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
-
-                // Menu options
-                const items = ['PLAY AGAIN', 'MAIN MENU'];
-                const startY = 680;
-                for (let i = 0; i < items.length; i++) {
-                    const selected = i === Menu.selectedIndex;
-                    if (selected) {
-                        ctx.fillStyle = '#00ffff';
-                        ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText('▸ ' + items[i] + ' ◂', SCREEN_W / 2, startY + i * 45);
-                    } else {
-                        ctx.fillStyle = '#667788';
-                        ctx.font = '16px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText(items[i], SCREEN_W / 2, startY + i * 45);
-                    }
-                }
+            case 'campaign_complete':
+                Menu.drawCampaignComplete(ctx);
                 break;
-            }
         }
 
         // Transition overlay — always drawn on top of everything

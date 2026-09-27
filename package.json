@@ -1,7 +1,7 @@
 {
   "name": "neon-storm",
-  "version": "0.2.0-beta",
-  "description": "Neon Storm β — Vertical scrolling bullet hell shooter with PixiJS renderer",
+  "version": "0.3.0-gamma",
+  "description": "Neon Storm γ — Vertical scrolling bullet hell shooter with a neon vector look and PixiJS renderer",
   "scripts": {
     "build": "node build.js",
     "dev": "npx http-server . -p 8080 -c-1",

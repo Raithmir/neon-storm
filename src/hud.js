@@ -1,353 +1,195 @@
 // ============================================================
 //  HUD RENDERER
+//  Two side panels either side of the play area, built from UI kit cards:
+//    left:  pilot (lives, bombs, shield), armament (weapon, drones), Surge, dash
+//    right: score, chain, run stats, mission (level, time, escort), controls
 // ============================================================
 const HUD = {
+    _bgCache: null,
+
+    // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
+    _bakeBackground() {
+        const k = Renderer.uiScale || 1;
+        const c = document.createElement('canvas');
+        c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
+        c._scale = k;
+        const g = c.getContext('2d');
+        g.scale(k, k);
+        const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
+        grad.addColorStop(0, '#07020f');
+        grad.addColorStop(1, '#10031f');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, HUD_LEFT_W, SCREEN_H);
+        g.fillRect(HUD_RIGHT_X, 0, HUD_RIGHT_W, SCREEN_H);
+        g.fillStyle = 'rgba(255, 43, 214, 0.035)';
+        for (let y = 0; y < SCREEN_H; y += 4) {
+            g.fillRect(0, y, HUD_LEFT_W, 1);
+            g.fillRect(HUD_RIGHT_X, y, HUD_RIGHT_W, 1);
+        }
+        // Glowing frame around the play area
+        for (const [x, dir] of [[PLAY_X, -1], [PLAY_X + PLAY_W, 1]]) {
+            const glow = g.createLinearGradient(x, 0, x + dir * 40, 0);
+            glow.addColorStop(0, 'rgba(255, 43, 214, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 43, 214, 0)');
+            g.fillStyle = glow;
+            g.fillRect(dir < 0 ? x - 40 : x, 0, 40, SCREEN_H);
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(x - 1, 0, 2, SCREEN_H);
+        }
+        return c;
+    },
+
     draw(ctx) {
-        // HUD backgrounds
-        ctx.fillStyle = '#0a0612';
-        ctx.fillRect(0, 0, HUD_LEFT_W, SCREEN_H);
-        ctx.fillRect(HUD_RIGHT_X, 0, HUD_RIGHT_W, SCREEN_H);
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
+        // Only the side panels: the middle of the overlay stays clear for the play area
+        const k = this._bgCache._scale;
+        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
+        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        this._drawLeft(ctx);
+        this._drawRight(ctx);
+        this._drawDanger(ctx);
+    },
 
-        // Border lines
-        ctx.strokeStyle = '#ff00ff';
-        ctx.lineWidth = 2;
-        ctx.shadowColor = '#ff00ff';
-        ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.moveTo(PLAY_X - 1, 0);
-        ctx.lineTo(PLAY_X - 1, SCREEN_H);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(PLAY_X + PLAY_W + 1, 0);
-        ctx.lineTo(PLAY_X + PLAY_W + 1, SCREEN_H);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+    _drawLeft(ctx) {
+        const x = 60, w = HUD_LEFT_W - 120, cx = x + w / 2;
+        const t = UI.time();
+        Neon.text(ctx, 'NEON STORM', cx, 70, UI.CYAN, 34, { core: 0.4, halo: 0.45 });
 
-        // Subtle grid on HUD panels
-        ctx.strokeStyle = 'rgba(255, 0, 255, 0.05)';
-        ctx.lineWidth = 1;
-        for (let y = 0; y < SCREEN_H; y += 30) {
-            ctx.beginPath();
-            ctx.moveTo(0, y); ctx.lineTo(HUD_LEFT_W, y); ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(HUD_RIGHT_X, y); ctx.lineTo(SCREEN_W, y); ctx.stroke();
-        }
-
-        const leftCenter = HUD_LEFT_W / 2;
-        const rightCenter = HUD_RIGHT_X + HUD_RIGHT_W / 2;
-        let leftY = 60;
-        let rightY = 60;
-
-        // === LEFT HUD ===
-
-        // Title
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
-        ctx.shadowBlur = 0;
-        leftY += 50;
-
-        // Lives
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('LIVES', leftCenter, leftY);
-        leftY += 20;
-        for (let i = 0; i < Player.lives; i++) {
-            const lx = leftCenter - (Player.lives - 1) * 12 + i * 24;
-            ctx.fillStyle = '#00ffff';
-            ctx.shadowColor = '#00ffff';
-            ctx.shadowBlur = 0;
-            ctx.beginPath();
-            ctx.moveTo(lx, leftY - 6);
-            ctx.lineTo(lx + 6, leftY + 3);
-            ctx.lineTo(lx, leftY + 8);
-            ctx.lineTo(lx - 6, leftY + 3);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.shadowBlur = 0;
-        leftY += 30;
-
-        // Shield HP
-        if (Player.maxShieldHp > 0) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('SHIELD', leftCenter, leftY);
-            leftY += 14;
-            const shieldBarW = 120;
-            const shieldBarH = 10;
-            const shieldBarX = leftCenter - shieldBarW / 2;
-            ctx.fillStyle = '#1a1a3e';
-            ctx.fillRect(shieldBarX, leftY, shieldBarW, shieldBarH);
-            const shieldPct = Player.maxShieldHp > 0 ? Player.shieldHp / Player.maxShieldHp : 0;
-            ctx.fillStyle = Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
-            ctx.shadowColor = '#4488ff';
-            ctx.shadowBlur = 0;
-            ctx.fillRect(shieldBarX, leftY, shieldBarW * shieldPct, shieldBarH);
-            ctx.shadowBlur = 0;
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Player.shieldHp + '/' + Player.maxShieldHp, leftCenter, leftY + shieldBarH + 12);
-            leftY += 35;
-        }
-
-        // Bombs
+        // Pilot: lives, bombs, shield
+        let y = 110;
+        const pilotH = 150 + (Player.maxShieldHp > 0 ? 44 : 0);
+        UI.panel(ctx, x, y, w, pilotH, UI.CYAN, { title: 'PILOT' });
+        UI.label(ctx, 'LIVES', x + 20, y + 62, UI.DIM, 14, 'left');
+        const lives = Math.min(Player.lives, 8);
+        for (let i = 0; i < lives; i++) UI.ship(ctx, x + 140 + i * 38, y + 54, 13);
+        if (Player.lives > 8) UI.label(ctx, '+' + (Player.lives - 8), x + 140 + 8 * 38, y + 60, UI.CYAN, 16, 'left');
         if (GameConfig.bombs.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('BOMBS', leftCenter, leftY);
-            leftY += 20;
+            UI.label(ctx, 'BOMBS', x + 20, y + 112, UI.DIM, 14, 'left');
             for (let i = 0; i < Player.bombs; i++) {
-                const bx = leftCenter - (Player.bombs - 1) * 10 + i * 20;
-                ctx.fillStyle = '#ff8800';
-                ctx.shadowColor = '#ff8800';
-                ctx.shadowBlur = 0;
-                ctx.beginPath();
-                ctx.arc(bx, leftY, 6, 0, Math.PI * 2);
-                ctx.fill();
+                const bx = x + 150 + i * 34, by = y + 106;
+                ctx.save(); ctx.translate(bx, by);
+                Neon.path(ctx, Neon.polygon(6, Math.PI / 6), 10, true);
+                ctx.fillStyle = '#ff8800'; ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1;
+                Neon.stroke(ctx, '#ff8800', 0.9, false);
+                ctx.restore();
+                Neon.light(ctx, bx, by, 2.5, '#ffcc66', 1);
             }
-            ctx.shadowBlur = 0;
-            leftY += 30;
         }
-
-        // Weapon
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('WEAPON', leftCenter, leftY);
-        leftY += 18;
-        const weaponColors = { none: '#666666', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
-        const weaponNames = { none: 'BASE', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
-        ctx.fillStyle = weaponColors[Player.primaryWeapon];
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(weaponNames[Player.primaryWeapon], leftCenter, leftY);
-        if (Player.primaryLevel > 0) {
-            leftY += 16;
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '13px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('LV ' + '█'.repeat(Player.primaryLevel) + '░'.repeat(5 - Player.primaryLevel), leftCenter, leftY);
+        if (Player.maxShieldHp > 0) {
+            UI.label(ctx, 'SHIELD', x + 20, y + 160, UI.DIM, 14, 'left');
+            Neon.bar(ctx, x + 140, y + 148, w - 220, 14, Player.shieldHp / Player.maxShieldHp,
+                Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff', Player.maxShieldHp);
+            UI.label(ctx, Player.shieldHp + '/' + Player.maxShieldHp, x + w - 20, y + 160, UI.TEXT, 15, 'right');
         }
-        leftY += 30;
+        y += pilotH + 24;
 
-        // Drones
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('DRONES', leftCenter, leftY);
-        leftY += 18;
-        ctx.fillStyle = Player.droneLevel > 0 ? '#cc44ff' : '#333333';
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Player.droneLevel > 0 ? 'LV ' + '█'.repeat(Player.droneLevel) + '░'.repeat(5 - Player.droneLevel) : 'NONE', leftCenter, leftY);
-        leftY += 35;
+        // Armament: weapon with its power-up badge, level pips, drones
+        const weaponColors = { none: '#8899aa', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
+        const weaponNames = { none: 'BASE SHOT', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
+        const wc = weaponColors[Player.primaryWeapon] || '#8899aa';
+        UI.panel(ctx, x, y, w, 190, wc, { title: 'ARMAMENT' });
+        if (Player.primaryWeapon !== 'none') {
+            ctx.save(); ctx.translate(x + 60, y + 88); ctx.scale(2.2, 2.2);
+            ctx.save(); ctx.rotate(t * 0.3);
+            Neon.sprite(ctx, 'pu_badge|' + wc, 15, PowerUps._bakeBadge, wc, 10);
+            ctx.restore();
+            Neon.sprite(ctx, 'pu_icon|' + Player.primaryWeapon, 14, PowerUps._bakeIcon, Player.primaryWeapon, wc);
+            ctx.restore();
+        }
+        Neon.text(ctx, weaponNames[Player.primaryWeapon] || 'BASE SHOT', x + 120, y + 82, wc, 30, { align: 'left', core: 0.35 });
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x + 132 + i * 30, y + 108, 8, wc, i < Player.primaryLevel);
+        UI.label(ctx, 'DRONES', x + 20, y + 162, UI.DIM, 14, 'left');
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x + 132 + i * 30, y + 156, 8, '#cc44ff', i < Player.droneLevel);
+        y += 214;
 
         // Surge meter
         if (GameConfig.graze.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('SURGE', leftCenter, leftY);
-            leftY += 12;
-            const barW = 140;
-            const barH = 12;
-            const barX = leftCenter - barW / 2;
-            ctx.fillStyle = '#1a0a2e';
-            ctx.fillRect(barX, leftY, barW, barH);
             const pct = Scoring.surgeCharge / Scoring.surgeMax;
-            const surgeColor = Scoring.surgeActive ? '#ffffff' : (pct >= 1 ? '#ffff00' : '#00ffff');
-            ctx.fillStyle = surgeColor;
-            ctx.shadowColor = surgeColor;
-            ctx.shadowBlur = 0;
-            ctx.fillRect(barX, leftY, barW * pct, barH);
-            ctx.shadowBlur = 0;
-            if (Scoring.surgeActive) {
-                leftY += barH + 8;
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-                const surgeTimeText = 'ACTIVE ' + Scoring.surgeDuration.toFixed(1) + 's';
-                ctx.fillText(surgeTimeText, leftCenter, leftY);
-            } else if (pct >= 1) {
-                leftY += barH + 8;
-                ctx.fillStyle = '#ffff00';
-                ctx.font = 'bold 13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('READY!', leftCenter, leftY);
-            }
-            leftY += 25;
+            const ready = pct >= 1 && !Scoring.surgeActive;
+            const sc = Scoring.surgeActive ? '#ffffff' : (ready ? '#ffee33' : UI.CYAN);
+            UI.panel(ctx, x, y, w, 120, sc, { title: 'NEON SURGE' });
+            Neon.bar(ctx, x + 20, y + 50, w - 40, 20, Scoring.surgeActive ? Scoring.surgeDuration / Scoring.surgeMaxDuration : pct, sc, 10);
+            let msg = Math.floor(pct * 100) + '%', mc = UI.TEXT;
+            if (Scoring.surgeActive) { msg = 'ACTIVE  ' + Scoring.surgeDuration.toFixed(1) + 's'; mc = '#ffffff'; }
+            else if (ready) { msg = 'READY — ' + Input.getKeyBindDisplay('surge'); mc = '#ffee33'; }
+            ctx.globalAlpha = ready && !Renderer.calm() ? 0.7 + Math.sin(t * 6) * 0.3 : 1;
+            Neon.text(ctx, msg, cx, y + 100, mc, 20, { halo: ready || Scoring.surgeActive ? 0.4 : 0 });
+            ctx.globalAlpha = 1;
+            y += 144;
         }
 
-        // Dash cooldown
+        // Dash
         if (GameConfig.dash.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('DASH', leftCenter, leftY);
-            leftY += 12;
-            const dashReady = Player.dashCooldown <= 0;
-            ctx.fillStyle = dashReady ? '#00ff88' : '#333333';
-            ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(dashReady ? 'READY' : Player.dashCooldown.toFixed(1) + 's', leftCenter, leftY);
+            const ready = Player.dashCooldown <= 0;
+            UI.panel(ctx, x, y, w, 70, ready ? '#00ff88' : UI.DIM, { title: 'DASH' });
+            const cd = GameConfig.dash.cooldown || 1;
+            Neon.bar(ctx, x + 20, y + 44, w - 170, 10, ready ? 1 : 1 - Player.dashCooldown / cd, ready ? '#00ff88' : '#4a5a70', 0);
+            Neon.text(ctx, ready ? 'READY' : Player.dashCooldown.toFixed(1) + 's', x + w - 20, y + 54, ready ? '#00ff88' : UI.DIM, 18,
+                { align: 'right', halo: ready ? 0.3 : 0 });
         }
+    },
 
-        // === RIGHT HUD ===
+    _drawRight(ctx) {
+        const x = HUD_RIGHT_X + 60, w = HUD_RIGHT_W - 120, cx = x + w / 2;
 
-        // Score
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('SCORE', rightCenter, rightY);
-        rightY += 22;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 22px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 0;
-        ctx.fillText(Scoring.score.toLocaleString(), rightCenter, rightY);
-        ctx.shadowBlur = 0;
-        rightY += 40;
+        // Score (with the best on this board for reference)
+        let y = 40;
+        UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
+        Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
+        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
+        y += 154;
 
-        // Chain combo
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('CHAIN', rightCenter, rightY);
-        rightY += 20;
+        // Chain: count, multiplier, and the time left to extend it
+        const mult = Scoring.multiplier;
+        const chainColor = mult >= 5 ? '#ffee33' : mult >= 3 ? '#ff8800' : UI.CYAN;
+        UI.panel(ctx, x, y, w, 130, chainColor, { title: 'CHAIN' });
         if (Scoring.chain > 0) {
-            ctx.fillStyle = Scoring.multiplier >= 5 ? '#ffff00' : Scoring.multiplier >= 3 ? '#ff8800' : '#ffffff';
-            ctx.font = 'bold 18px Share Tech Mono, Consolas, monospace';
-            ctx.shadowColor = ctx.fillStyle;
-            ctx.shadowBlur = 0;
-            ctx.fillText(Scoring.chain + ' HITS', rightCenter, rightY);
-            rightY += 18;
-            ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Scoring.multiplier + 'x', rightCenter, rightY);
-            ctx.shadowBlur = 0;
-            // Chain timer bar
-            rightY += 10;
-            const timerBarW = 120;
+            Neon.text(ctx, Scoring.chain + '', x + 30, y + 90, chainColor, 48, { align: 'left', core: 0.3 });
+            UI.label(ctx, 'HITS', x + 34 + String(Scoring.chain).length * 29, y + 88, UI.DIM, 15, 'left');
+            Neon.text(ctx, mult + 'x', x + w - 30, y + 90, chainColor, 44, { align: 'right', core: 0.4 });
             const timerPct = Scoring.chainTimer / (Scoring.chainTimerMax / GameConfig.chainTimerSpeed);
-            ctx.fillStyle = '#1a0a2e';
-            ctx.fillRect(rightCenter - timerBarW / 2, rightY, timerBarW, 4);
-            ctx.fillStyle = timerPct > 0.3 ? '#00ff88' : '#ff4444';
-            ctx.fillRect(rightCenter - timerBarW / 2, rightY, timerBarW * timerPct, 4);
+            Neon.bar(ctx, x + 20, y + 108, w - 40, 6, timerPct, timerPct > 0.3 ? '#00ff88' : '#ff3355', 0);
         } else {
-            ctx.fillStyle = '#333333';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('---', rightCenter, rightY);
+            UI.label(ctx, 'KILL QUICKLY TO BUILD A CHAIN', cx, y + 80, '#4a5468', 16);
         }
-        rightY += 35;
+        y += 154;
 
-        // Multiplier info
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('MULTIPLIER', rightCenter, rightY);
-        rightY += 20;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(GameConfig.scoreMultiplier + 'x BASE', rightCenter, rightY);
-        rightY += 35;
-
-        // Graze count with threshold progress
+        // Run stats
+        UI.panel(ctx, x, y, w, 150, UI.MAGENTA, { title: 'RUN' });
+        const stat = (label, value, color, row, col) => {
+            const sx = x + 24 + col * (w / 2);
+            UI.label(ctx, label, sx, y + 58 + row * 50, UI.DIM, 13, 'left');
+            Neon.text(ctx, value, sx, y + 82 + row * 50, color, 21, { align: 'left', halo: 0 });
+        };
+        stat('BASE MULTIPLIER', GameConfig.scoreMultiplier + 'x', '#ffffff', 0, 0);
+        stat('MAX CHAIN', Scoring.maxChain.toString(), '#ffaa00', 0, 1);
         if (GameConfig.graze.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('GRAZE', rightCenter, rightY);
-            rightY += 20;
-            ctx.fillStyle = '#cc88ff';
-            ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Scoring.grazeCount.toString(), rightCenter, rightY);
-            // Show next threshold
-            if (Scoring.nextGrazeThreshold < Scoring.grazeThresholds.length) {
-                const next = Scoring.grazeThresholds[Scoring.nextGrazeThreshold];
-                ctx.fillStyle = '#666688';
-                ctx.font = '10px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NEXT: ' + next, rightCenter, rightY + 14);
-                rightY += 12;
-            }
-            rightY += 28;
+            const next = Scoring.nextGrazeThreshold < Scoring.grazeThresholds.length ? ' / ' + Scoring.grazeThresholds[Scoring.nextGrazeThreshold] : '';
+            stat('GRAZE', Scoring.grazeCount + next, '#cc88ff', 1, 0);
         }
+        if (Scoring.isPerfect) stat('NO HITS', '★ PERFECT', '#00ff88', 1, 1);
+        y += 174;
 
-        // Max chain
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('MAX CHAIN', rightCenter, rightY);
-        rightY += 20;
-        ctx.fillStyle = '#ffaa00';
-        ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Scoring.maxChain.toString(), rightCenter, rightY);
-        rightY += 28;
-
-        // Perfect run indicator
-        if (Scoring.isPerfect) {
-            ctx.fillStyle = '#00ff88';
-            ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('★ PERFECT ★', rightCenter, rightY);
-            rightY += 22;
-        }
-        rightY += 14;
-
-        // Difficulty
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('DIFFICULTY', rightCenter, rightY);
-        rightY += 18;
-        const diffColors = { casual: '#00ff88', normal: '#ffff00', hardcore: '#ff4444', custom: '#cc44ff' };
-        ctx.fillStyle = diffColors[GameConfig.difficulty] || '#ffffff';
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(GameConfig.difficulty.toUpperCase(), rightCenter, rightY);
-        rightY += 35;
-
-        // Level timer
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('TIME', rightCenter, rightY);
-        rightY += 18;
+        // Mission
+        const isEndless = Game.currentLevelIndex === -1;
+        const lvlData = ALL_LEVELS[Game.currentLevelIndex];
+        const escort = Escort.active && Escort.alive;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
+        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
         const mins = Math.floor(WaveSystem.levelTimer / 60);
         const secs = Math.floor(WaveSystem.levelTimer % 60);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(`${mins}:${secs.toString().padStart(2, '0')}`, rightCenter, rightY);
-        rightY += 30;
-
-        // Level / Mode name
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        const isEndless = Game.currentLevelIndex === -1;
-        if (isEndless) {
-            ctx.fillText('ENDLESS', rightCenter, rightY);
-            rightY += 18;
-            ctx.fillStyle = '#ffaa00';
-            ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('WAVE ' + EndlessMode.wave, rightCenter, rightY);
-        } else {
-            ctx.fillText('LEVEL', rightCenter, rightY);
-            rightY += 18;
-            const lvlData = ALL_LEVELS[Game.currentLevelIndex];
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText((Game.currentLevelIndex + 1) + ': ' + (lvlData ? lvlData.name : '').toUpperCase(), rightCenter, rightY);
-        }
-        rightY += 25;
-
-        // Escort status (if active)
-        if (Escort.active && Escort.alive) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('ESCORT', rightCenter, rightY);
-            rightY += 14;
-            const eBarW = 120;
-            const eBarH = 8;
-            const eBarX = rightCenter - eBarW / 2;
-            ctx.fillStyle = '#002200';
-            ctx.fillRect(eBarX, rightY, eBarW, eBarH);
+        const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
+        UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
+        Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });
+        if (escort) {
             const ePct = Escort.hp / Escort.maxHp;
-            ctx.fillStyle = ePct > 0.3 ? '#44aa44' : '#ff4444';
-            ctx.fillRect(eBarX, rightY, eBarW * ePct, eBarH);
-            ctx.fillStyle = '#88ff88';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('AURORA', rightCenter, rightY + eBarH + 12);
+            UI.label(ctx, 'AURORA', x + 24, y + 144, '#44ff88', 14, 'left');
+            Neon.bar(ctx, x + 110, y + 134, w - 140, 12, ePct, ePct > 0.3 ? '#44ff88' : '#ff3355', 10);
         }
 
-        // Controls reference at bottom — shows actual bindings
-        const controlsY = SCREEN_H - 180;
-        ctx.fillStyle = '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
+        // Controls reference (actual bindings)
         const controls = [
             ['MOVE', Input.getKeyBindDisplay('up').split(' / ')[0] + '/' + Input.getKeyBindDisplay('down').split(' / ')[0]],
             ['FIRE', Input.getKeyBindDisplay('fire')],
@@ -355,32 +197,29 @@ const HUD = {
             ['DASH', Input.getKeyBindDisplay('dash')],
             ['BOMB', Input.getKeyBindDisplay('bomb')],
             ['SURGE', Input.getKeyBindDisplay('surge')],
-            ['PAUSE', Input.getKeyBindDisplay('pause')]
+            ['PAUSE', Input.getKeyBindDisplay('pause')],
         ];
+        const cy = SCREEN_H - 40 - controls.length * 24;
         controls.forEach((c, i) => {
-            ctx.fillStyle = '#778899';
-            ctx.fillText(c[0], rightCenter - 35, controlsY + i * 18);
-            ctx.fillStyle = '#888888';
-            ctx.fillText(c[1], rightCenter + 35, controlsY + i * 18);
+            UI.label(ctx, c[0], x + 24, cy + i * 24, UI.DIM, 14, 'left');
+            UI.label(ctx, c[1], x + w - 24, cy + i * 24, '#8a9ab8', 14, 'right');
         });
+    },
 
-        // Last-life danger indicator — pulsing red edge strips (cheap, no radial gradient)
-        if (Player.alive && Player.lives <= 1 && Player.maxShieldHp === 0) {
-            const pulse = 0.08 + Math.sin(Date.now() * 0.005) * 0.05;
-            const edgeW = 30;
-            ctx.fillStyle = `rgba(255, 0, 0, ${pulse})`;
-            // Left edge
-            const lg = ctx.createLinearGradient(PLAY_X, 0, PLAY_X + edgeW, 0);
-            lg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
-            lg.addColorStop(1, 'rgba(255, 0, 0, 0)');
-            ctx.fillStyle = lg;
-            ctx.fillRect(PLAY_X, PLAY_Y, edgeW, PLAY_H);
-            // Right edge
-            const rg = ctx.createLinearGradient(PLAY_X + PLAY_W, 0, PLAY_X + PLAY_W - edgeW, 0);
-            rg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
-            rg.addColorStop(1, 'rgba(255, 0, 0, 0)');
-            ctx.fillStyle = rg;
-            ctx.fillRect(PLAY_X + PLAY_W - edgeW, PLAY_Y, edgeW, PLAY_H);
-        }
+    // Last life: pulsing red strips on the play-area edges
+    _drawDanger(ctx) {
+        if (!(Player.alive && Player.lives <= 1 && Player.maxShieldHp === 0)) return;
+        const pulse = Renderer.calm() ? 0.08 : 0.08 + Math.sin(Date.now() * 0.005) * 0.05;
+        const edgeW = 30;
+        const lg = ctx.createLinearGradient(PLAY_X, 0, PLAY_X + edgeW, 0);
+        lg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
+        lg.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = lg;
+        ctx.fillRect(PLAY_X, PLAY_Y, edgeW, PLAY_H);
+        const rg = ctx.createLinearGradient(PLAY_X + PLAY_W, 0, PLAY_X + PLAY_W - edgeW, 0);
+        rg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
+        rg.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = rg;
+        ctx.fillRect(PLAY_X + PLAY_W - edgeW, PLAY_Y, edgeW, PLAY_H);
     }
 };
