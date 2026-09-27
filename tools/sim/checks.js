@@ -460,6 +460,23 @@ const checks = {
             pass: !r.alive && r.powerUps === 2 && r.bulletsLeft === 0 && r.bonus >= 8000, evidence: r };
     },
 
+    async endlessEnemyCap(g) {
+        await g.ev(() => {
+            Game.startEndless('hardcore');
+            Player.primaryWeapon = 'none'; Player.primaryLevel = 0; // can't clear the screen
+            const update = Game.update.bind(Game);
+            window.__maxEnemies = 0;
+            Game.update = (dt) => { Player.invincible = true; Player.invincibleTimer = 99; update(dt);
+                window.__maxEnemies = Math.max(window.__maxEnemies, Enemies.list.length); };
+        });
+        await g.run(300000); // 5 minutes
+        const r = await g.ev(() => ({ maxEnemies: window.__maxEnemies, cap: EndlessMode.MAX_ENEMIES,
+            enemyBullets: Enemies.enemyBullets.pool.length, bulletPoolCap: Enemies.enemyBullets.maxSize }));
+        // Enemies already in flight (entering/retreating) can briefly overshoot by a handful
+        return { section: '§4.2', expect: 'Endless keeps concurrent enemies at its cap even when nothing is killed',
+            pass: r.maxEnemies <= r.cap + 5, evidence: r };
+    },
+
     // --- Boss patterns --------------------------------------------------------
 
     async architectSweepSpreads(g) {

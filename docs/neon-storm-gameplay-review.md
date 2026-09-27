@@ -434,4 +434,4 @@ Performance (`perf.js`, 10 min into Hardcore Endless with an invincible ship: 71
 
 - **Human play-testing:** feel, readability, whether Hardcore's curve is right, and the bomb economy.
 - **Rendering performance:** `perf.js` measures logic only, and PixiJS in headless software WebGL is not representative. Profile in a real browser, especially late Endless.
-- **Late Endless floods the screen:** with an invincible ship it still reaches the 800-bullet pool cap after about 10 minutes, as enemies accumulate faster than a Lv5 weapon clears them. Real players are overwhelmed well before then, which is how Endless is meant to end, but a cap on concurrent enemies would keep it readable.
+- ~~Late Endless floods the screen~~ — **resolved**: Endless now caps concurrent enemies at 30 (`EndlessMode.MAX_ENEMIES`; the spawn timer holds while the screen is full). Ten minutes into Hardcore Endless the scene now holds 27 enemies and ~390–430 bullets (previously 65–81 enemies and the full 800-bullet pool), at 0.15–0.19 ms of logic per frame. Guarded by the `endlessEnemyCap` check.

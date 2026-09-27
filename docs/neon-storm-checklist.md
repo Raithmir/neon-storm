@@ -8,13 +8,25 @@
 
 ## Renderer Visual Upgrades (Phase 2+)
 
-The PixiJS pipeline is in place (Phase 1 complete). These are the visual upgrade phases — see `neon-storm-beta-roadmap.md` for full details.
+The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 
 - [x] Phase 2: Bloom & Blending — AdvancedBloomFilter with per-level intensity tuning, additive glow layer with 200-sprite GPU pool, bullet/particle/explosion glow halos, particle cap raised to 1500
 - [x] Phase 3: Enhanced Backgrounds — deep star field with alpha twinkle (100 stars), nebula/atmosphere layer with per-theme colours and drift, near foreground speed streaks (25 particles), horizon silhouette gradient fade and horizontal drift on city themes
 - [x] Phase 4: Weapons & Combat VFX — enemy hit spark bursts with GPU glow flash, enhanced death explosions with white-hot flash particles and glow burst, bomb visual upgrade with centre glow + white-hot core + secondary ring, shield hit ripple shockwave with glow
 - [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
 - [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
+
+---
+
+## Gameplay Review Follow-ups
+
+The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 30 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
+
+- [ ] Human play-testing of the tuned balance — feel, bullet readability with bloom, boss/mid-boss timer lengths
+- [ ] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
+- [ ] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
+- [ ] Profile rendering performance in a real browser, especially late Endless
+- [ ] Save-data versioning: per-level records now store level score (previously run score) and high scores were set under the old balance — reset or migrate old saves
 
 ---
 
@@ -48,6 +60,7 @@ Medium-to-large effort features that add new mechanics or depth.
 - [ ] Secondary Fire Mode — each weapon has an alternate fire on a separate button (charge shots, lock-on bursts, concentrated blasts)
 
 ### Enemies
+- [ ] Endless mode mid-bosses (the mid-boss system in `midbosses.js` can be reused)
 - [ ] Additional enemy types — Mimic (disguised as power-up, attacks on approach), Reflector (barrier that bounces player bullets back), Gravity Well (pulls player and bullets toward it), Twin Core (linked pair that shares damage)
 
 ### Systems
@@ -86,12 +99,20 @@ Large effort features for expanding the game's reach or technical foundation.
 
 ## Quick Reference: What's Done
 
-The beta includes everything from the alpha plus the PixiJS rendering pipeline. Alpha features: 6-level campaign with unique bosses, 9 enemy types, 4 weapon types with 3 upgrade levels each, hybrid weapon/drone system, chain combo + graze + surge scoring, 3 difficulty presets + custom difficulty with 15 toggles, shield HP system, asteroid + escort level mechanics, persistent high scores + neon credits + cosmetics shop + achievements (20 challenges), endless survival mode, controls rebinding (keyboard + gamepad), 6 per-theme parallax backgrounds with horizon silhouettes, procedural SFX with pitch randomisation, screen transitions, boss-specific attack patterns + movement + visuals + defeat sequences, and comprehensive developer documentation.
+The beta includes everything from the alpha plus the PixiJS rendering pipeline and the gameplay review work. Alpha features: 6-level campaign with unique bosses, 9 enemy types, 3 primary weapons with 5 upgrade levels plus a drone slot, hybrid weapon/drone system, chain combo + graze + surge scoring, 3 difficulty presets + custom difficulty with 15 toggles, shield HP system, asteroid + escort level mechanics, persistent high scores + neon credits + cosmetics shop + achievements (20 challenges), endless survival mode, controls rebinding (keyboard + gamepad), 6 per-theme parallax backgrounds with horizon silhouettes, procedural SFX with pitch randomisation, screen transitions, boss-specific attack patterns + movement + visuals + defeat sequences, and comprehensive developer documentation.
 
-Beta additions: PixiJS v8 dual-canvas rendering pipeline with offscreen Canvas 2D bridge, automatic WebGPU/WebGL/Canvas fallback, self-contained build with bundled PixiJS.
+Beta additions: PixiJS v8 dual-canvas rendering pipeline with offscreen Canvas 2D bridge, automatic WebGPU/WebGL/Canvas fallback, self-contained build with bundled PixiJS, renderer phases 2–6 (bloom, backgrounds, combat VFX, screen-space effects, dynamic lighting).
 
-**~8200 lines across 20 source modules with concatenation build system.**
+Gameplay review additions:
+- **Bug fixes:** a game-time scheduler (pause-safe), level-flow fixes, and density-correct boss patterns.
+- **Balance:** a rebalanced weapon curve with piercing laser, working drones and Neon Surge, plus boss phase timeouts, positional armor and telegraphs.
+- **Progression:** persistent lives and weapons with score extends, and a death-bomb window.
+- **Mid-bosses and stage length:** six mid-bosses and ~4-minute stages.
+- **Endless caps:** HP, density, fire rate and concurrent enemies.
+- **Simulation tooling:** `tools/sim` (regression checks, balance tools, human-like campaign bot).
+
+**~10,500 lines across 21 source modules with concatenation build system.**
 
 ---
 
-*Last updated: Neon Storm β — Phase 1 renderer migration complete*
+*Last updated: Neon Storm β — gameplay review, mid-bosses and simulation tooling*

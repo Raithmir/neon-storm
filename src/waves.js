@@ -364,6 +364,9 @@ const EndlessMode = {
     spawnTimer: 0,
     spawnInterval: 4.0,
     rank: 1.0, // Difficulty scaling — increases over time
+    // Concurrent enemy ceiling: keeps late Endless readable and under the 800-bullet pool.
+    // Rank still escalates spawn rate, enemy mix and (capped) stats up to this limit.
+    MAX_ENEMIES: 30,
 
     // Enemy pools by difficulty tier
     easyPool: ['scout_drone', 'scout_drone', 'gunship'],
@@ -388,8 +391,8 @@ const EndlessMode = {
         // Rank increases over time
         this.rank = 1.0 + WaveSystem.levelTimer * 0.008; // ~1.5x at 1 min, ~2.0x at 2 min, etc.
 
-        // Spawn waves on timer
-        this.spawnTimer -= dt;
+        // Spawn waves on timer (held while the screen is at the enemy cap)
+        if (Enemies.list.length < this.MAX_ENEMIES) this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
             this._spawnWave();
             this.wave++;
@@ -457,7 +460,9 @@ const EndlessMode = {
                 }
                 const delay = (group.delay || 0) + i * (group.stagger || 200);
                 Scheduler.after(delay / 1000, () => {
-                    Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                    if (Enemies.list.length < EndlessMode.MAX_ENEMIES) {
+                        Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                    }
                 });
             }
         }
