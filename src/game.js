@@ -27,40 +27,59 @@ const Game = {
         Menu.selectedIndex = 0;
     },
 
-    startLevel(levelIndex, difficulty, keepWeapons) {
+    // Level scaling. Genre shooters (Cave, Touhou) mostly escalate density and
+    // pattern complexity; bullet speed stays readable, so it is capped.
+    applyLevelScaling(scale, baseDensity) {
+        const t = Math.max(0, scale - 1);
+        GameConfig.bulletDensity = baseDensity * (1 + 0.5 * t);
+        GameConfig._levelHpScale = 1 + 0.6 * t;
+        GameConfig._levelSpeedScale = Math.min(1.2, 1 + 0.15 * t);   // enemy bullet speed
+        GameConfig._levelFireRateScale = 1 + 0.2 * t;                // enemy fire frequency
+    },
+
+    // continuing: true only when advancing from a victory screen within one campaign run.
+    // Level select, custom start, retry and restart all begin a fresh run.
+    startLevel(levelIndex, difficulty, continuing) {
         if (difficulty !== 'custom') {
             GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
             GameConfig.difficulty = difficulty;
+        } else {
+            GameConfig = CustomDifficulty.getConfig();
         }
-        GameConfig.fireMode = Settings.values.fireMode;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
 
         const levelData = ALL_LEVELS[levelIndex];
         this.currentLevelIndex = levelIndex;
+        this.applyLevelScaling(levelData.levelScale || 1.0, GameConfig.bulletDensity || 1.0);
 
-        // Apply level scaling — affects bullet density, enemy HP, and bullet speed
-        const scale = levelData.levelScale || 1.0;
-        GameConfig.bulletDensity = (GameConfig.bulletDensity || 1.0) * scale;
-        // HP scales slightly faster than linear to compensate for weapon persistence
-        GameConfig._levelHpScale = Math.pow(scale, 1.3);
-        GameConfig._levelSpeedScale = 1 + (scale - 1) * 0.4;
-
-        // Weapon persistence between levels — drop 1 level, keep type
-        const prevWeapon = keepWeapons ? Player.primaryWeapon : 'none';
-        const prevPrimaryLvl = keepWeapons ? Player.primaryLevel : 0;
-        const prevDroneLvl = keepWeapons ? Player.droneLevel : 0;
+        // Carry-over between campaign levels: lives, bombs and weapons persist
+        const carry = continuing ? {
+            weapon: Player.primaryWeapon, level: Player.primaryLevel, drones: Player.droneLevel,
+            lives: Player.lives, bombs: Player.bombs
+        } : null;
         Player.init();
-        if (keepWeapons && prevWeapon !== 'none') {
-            Player.primaryWeapon = prevWeapon;
-            Player.primaryLevel = Math.max(1, prevPrimaryLvl - 1); // Drop 1 level, minimum Lv1
-            Player.droneLevel = Math.max(0, prevDroneLvl - 1);     // Drones also drop 1 level
+        if (carry) {
+            Player.primaryWeapon = carry.weapon;
+            Player.primaryLevel = carry.level;
+            Player.droneLevel = carry.drones;
+            Player.lives = carry.lives;
+            Player.bombs = GameConfig.bombs.enabled ? Math.max(carry.bombs, GameConfig.bombs.startCount) : 0;
+        } else if (this._retryLoadout && this._retryLoadout.levelIndex === levelIndex && levelIndex > 0) {
+            // Retrying a later level after game over: minimum loadout (Raiden-style continue)
+            Player.primaryWeapon = this._retryLoadout.weapon;
+            Player.primaryLevel = this._retryLoadout.weapon === 'none' ? 0 : 2;
+            Player.droneLevel = Math.min(1, this._retryLoadout.drones);
         }
+        this._retryLoadout = null;
 
-        // Score: full reset on fresh start, keep cumulative score when continuing
-        if (keepWeapons) {
-            Scoring.softReset(); // Keep score + max chain, reset per-level state
+        // Score: keep cumulative score only when continuing a run
+        if (continuing) {
+            Scoring.softReset();
         } else {
-            Scoring.reset(); // Full reset for fresh run
+            Scoring.reset();
         }
+        Scoring.beginLevel();
+        Scheduler.clear();
         Enemies.clear();
         Particles.clear();
         PowerUps.clear();
@@ -74,11 +93,41 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
+        // Bloom intensity per level theme
+        const bloomPresets = {
+            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
+            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
+            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
+            storm:     { bloomScale: 1.1,  threshold: 0.32 },
+            frozen:    { bloomScale: 0.85, threshold: 0.4  },
+            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+        };
+        const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
+        Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Per-level colour grade for distinct mood
+        const colorGradePresets = {
+            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
+            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
+            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
+            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
+            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+        };
+        const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
+        Renderer.setColorGrade(cg);
+
+        // Level 6 glitch atmosphere — persistent chromatic aberration
+        Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
+
         // Activate level-specific systems
         if (levelData.hasAsteroids) Asteroids.activate();
         if (levelData.hasEscort) Escort.activate();
 
         this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this._levelStartWeapon = Player.primaryWeapon;
+        this._levelStartDrones = Player.droneLevel;
         this.state = 'playing';
     },
 
@@ -91,12 +140,15 @@ const Game = {
     startEndless(difficulty) {
         GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
         GameConfig.difficulty = difficulty;
-        GameConfig.fireMode = Settings.values.fireMode;
-        GameConfig._levelHpScale = 1;
-        GameConfig._levelSpeedScale = 1;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity;
+        this.applyLevelScaling(1, GameConfig._baseDensity);
         this.currentLevelIndex = -1; // Flag for endless mode
+        this._retryLoadout = null;
         Player.init();
         Scoring.reset();
+        Scoring.beginLevel();
+        Scheduler.clear();
         Enemies.clear();
         Particles.clear();
         PowerUps.clear();
@@ -107,16 +159,19 @@ const Game = {
         WaveSystem.waves = [];
         WaveSystem.currentWaveIndex = 0;
         WaveSystem.levelTimer = 0;
+        WaveSystem.waveTime = 0;
         WaveSystem.bossActive = false;
         EndlessMode.init();
         Background.init();
         Background.bgType = 'synthwave';
         Background._generateNearLayer();
         this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
         this.state = 'playing';
     },
 
-    showBriefing(levelIndex) {
+    showBriefing(levelIndex, continuing = false) {
+        this._continuing = continuing;
         const level = ALL_LEVELS[levelIndex];
         this.briefingText = level.briefing || '';
         this.briefingTimer = 0;
@@ -130,14 +185,15 @@ const Game = {
 
         const isEndless = this.currentLevelIndex === -1;
 
+        // Bonuses count this level only (maxChain/grazeCount are whole-run totals)
+        const noDeaths = Scoring.levelDeaths === 0;
         const bonus = EndRunBonus.calculate(
-            won, Player.lives, Scoring.maxChain, Scoring.grazeCount, WaveSystem.levelTimer
+            won, Player.lives, Scoring.levelMaxChain, Scoring.levelGrazes, WaveSystem.levelTimer, noDeaths
         );
         Scoring.score += bonus;
 
         if (won) {
             Campaign.completeLevel(this.currentLevelIndex, GameConfig.difficulty);
-            const noDeaths = Player.lives === GameConfig.lives;
             Achievements.onLevelComplete(this.currentLevelIndex, GameConfig.difficulty,
                 noDeaths, Scoring.score, Scoring.maxChain, Scoring.grazeCount);
             if (Campaign.secretUnlocked) Achievements.onSecretUnlocked();
@@ -145,8 +201,8 @@ const Game = {
             // Record per-level best score
             if (!isEndless) {
                 const isNewRecord = Campaign.recordLevelScore(
-                    this.currentLevelIndex, Scoring.score, Scoring.maxChain,
-                    Scoring.grazeCount, Scoring.isPerfect, GameConfig.difficulty
+                    this.currentLevelIndex, Scoring.levelScore, Scoring.levelMaxChain,
+                    Scoring.levelGrazes, Scoring.levelDeaths === 0 && Scoring.levelBombs === 0, GameConfig.difficulty
                 );
                 if (isNewRecord) {
                     Scoring.spawnPopup('NEW LEVEL RECORD!', '#00ff88', 20);
@@ -178,6 +234,19 @@ const Game = {
                 HighScores.startInitialEntry(Scoring.score, board, scoreEntry);
             }
         }
+    },
+
+    BOSS_GRACE_SECONDS: 8,
+    _lastWaveClearTimer: null,
+    _continuing: false,
+    _retryLoadout: null,
+
+    // Called on game time (Scheduler), so it only fires while the level is being played
+    _endLevel(won) {
+        if (this.state !== 'playing') return;
+        this._processEndRun(won);
+        this.state = won ? 'victory' : 'game_over';
+        Menu.selectedIndex = 0;
     },
 
     update(dt) {
@@ -377,9 +446,9 @@ const Game = {
                     Audio.playMenuSelect();
                     const lvlIdx = this.currentLevelIndex;
                     const diff = GameConfig.difficulty;
-                    const keep = lvlIdx > 0;
+                    const continuing = this._continuing;
                     Transition.start(() => {
-                        this.startLevel(lvlIdx, diff, keep);
+                        this.startLevel(lvlIdx, diff, continuing);
                     }, 3.0);
                 }
                 if (Input.isPressed('back')) {
@@ -404,16 +473,22 @@ const Game = {
                 Particles.update(dt);
                 Scoring.update(dt);
                 ScreenShake.update(dt);
+                Renderer.updateEffects(dt);
                 WaveSystem.update(dt);
+                Scheduler.update(dt);
                 Asteroids.update(dt);
                 Escort.update(dt);
 
-                // Endless mode wave generation
+                // Endless mode wave generation — rank scales like a level, with density capped
                 if (EndlessMode.active) {
                     EndlessMode.update(dt);
-                    // Apply rank scaling to bullet density dynamically
-                    GameConfig._levelHpScale = EndlessMode.rank;
-                    GameConfig._levelSpeedScale = 1 + (EndlessMode.rank - 1) * 0.4;
+                    this.applyLevelScaling(EndlessMode.rank, GameConfig._baseDensity);
+                    // Caps keep late Endless readable and killable; spawn rate and enemy mix
+                    // keep escalating after these are reached
+                    GameConfig.bulletDensity = Math.min(GameConfig.bulletDensity, GameConfig._baseDensity * 2.2);
+                    GameConfig._levelHpScale = Math.min(GameConfig._levelHpScale, 3);
+                    // Fire frequency too: uncapped, late Endless filled the 800-bullet pool
+                    GameConfig._levelFireRateScale = Math.min(GameConfig._levelFireRateScale, 1.6);
                 }
 
                 // Asteroid collision with player bullets
@@ -444,25 +519,25 @@ const Game = {
 
                 // Escort failure check
                 if (Escort.active && !Escort.alive) {
-                    setTimeout(() => {
-                        if (this.state === 'playing') {
-                            this._processEndRun(false);
-                            this.state = 'game_over';
-                            Menu.selectedIndex = 0;
-                        }
-                    }, 1500);
                     Escort.active = false; // prevent re-triggering
+                    Scheduler.after(1.5, () => this._endLevel(false));
                 }
 
                 // Apply settings dynamically
                 if (Settings.values.screenShake === 'off') { ScreenShake.offsetX = 0; ScreenShake.offsetY = 0; }
                 else if (Settings.values.screenShake === 'low') { ScreenShake.offsetX *= 0.5; ScreenShake.offsetY *= 0.5; }
 
-                // Boss trigger — only in campaign mode
-                if (!EndlessMode.active && WaveSystem.currentWaveIndex >= WaveSystem.waves.length && Enemies.list.length === 0 && !Boss.active && !Boss.defeated) {
-                    const levelData = ALL_LEVELS[this.currentLevelIndex];
-                    Boss.init(levelData.bossType || 'architect');
-                    WaveSystem.bossActive = true;
+                // Boss trigger — campaign only. The boss comes once every wave has spawned and the
+                // field is clear, or after a grace period (stragglers then retreat), so a level can't stall.
+                if (!EndlessMode.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
+                    if (this._lastWaveClearTimer === null) this._lastWaveClearTimer = 0;
+                    this._lastWaveClearTimer += dt;
+                    if (Enemies.list.length === 0 || this._lastWaveClearTimer >= this.BOSS_GRACE_SECONDS) {
+                        Enemies.retreatAll();
+                        const levelData = ALL_LEVELS[this.currentLevelIndex];
+                        Boss.init(levelData.bossType || 'architect');
+                        WaveSystem.bossActive = true;
+                    }
                 }
 
                 // Boss update
@@ -470,27 +545,15 @@ const Game = {
                     Boss.update(dt, Player.x, Player.y);
                     if (!Boss.active && Boss.defeated) {
                         WaveSystem.bossActive = false;
-                        setTimeout(() => {
-                            if (this.state === 'playing') {
-                                this._processEndRun(true);
-                                this.state = 'victory';
-                                Menu.selectedIndex = 0;
-                            }
-                        }, 1500);
+                        Scheduler.after(1.5, () => this._endLevel(true));
                     }
                 }
 
                 // Game over check — only trigger once
-                if (Player.alive === false && Player.lives <= 0 && this.state === 'playing' && !this._gameOverPending) {
+                if (Player.alive === false && Player.lives <= 0 && !this._gameOverPending) {
                     this._gameOverPending = true;
-                    setTimeout(() => {
-                        if (this.state === 'playing') {
-                            this._processEndRun(false);
-                            this.state = 'game_over';
-                            Menu.selectedIndex = 0;
-                        }
-                        this._gameOverPending = false;
-                    }, 1500);
+                    this._retryLoadout = { levelIndex: this.currentLevelIndex, weapon: this._levelStartWeapon || 'none', drones: this._levelStartDrones || 0 };
+                    Scheduler.after(1.5, () => this._endLevel(false));
                 }
                 break;
 
@@ -561,7 +624,7 @@ const Game = {
                         const diff = GameConfig.difficulty;
                         if (hasNextLevel) {
                             switch (Menu.selectedIndex) {
-                                case 0: Transition.start(() => { this.showBriefing(lvlIdx + 1); }); break;
+                                case 0: Transition.start(() => { this.showBriefing(lvlIdx + 1, true); }); break;
                                 case 1: Transition.start(() => { this.startLevel(lvlIdx, diff, false); }); break;
                                 case 2: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; }); break;
                             }
@@ -775,53 +838,65 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Escort.draw(ctx);
-                PowerUps.draw(ctx);
-                Enemies.draw(ctx);
-                Player.draw(ctx);
-                if (Boss.active) Boss.draw(ctx);
-                Particles.draw(ctx);
-                Scoring.drawPopups(ctx);
-                ctx.restore();
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame(); // Still composites glow + game
+                    Renderer.blitToOverlay(ctx, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Enemies.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
@@ -894,8 +969,8 @@ const Game = {
                 // Thank you
                 ctx.fillStyle = '#667788';
                 ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b1', SCREEN_W / 2, 580);
-                ctx.fillText('This is an alpha build — more to come!', SCREEN_W / 2, 605);
+                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
+                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
 
                 // Menu options
                 const items = ['PLAY AGAIN', 'MAIN MENU'];

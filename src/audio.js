@@ -9,18 +9,21 @@ const Audio = {
     enabled: true,
 
     init() {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-        // Resume on user interaction (browser policy)
-        const resume = () => {
-            if (this.ctx.state === 'suspended') this.ctx.resume();
-            window.removeEventListener('click', resume);
-            window.removeEventListener('keydown', resume);
+        // Defer AudioContext creation to first user interaction (browser policy)
+        const createCtx = () => {
+            if (this.ctx) return;
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            window.removeEventListener('click', createCtx);
+            window.removeEventListener('keydown', createCtx);
+            window.removeEventListener('touchstart', createCtx);
         };
-        window.addEventListener('click', resume);
-        window.addEventListener('keydown', resume);
+        window.addEventListener('click', createCtx);
+        window.addEventListener('keydown', createCtx);
+        window.addEventListener('touchstart', createCtx);
     },
 
     _createGain(volume) {
+        if (!this.ctx) return null;
         const gain = this.ctx.createGain();
         gain.gain.value = volume * this.sfxVolume * this.masterVolume;
         gain.connect(this.ctx.destination);

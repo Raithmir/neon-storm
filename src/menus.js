@@ -125,7 +125,7 @@ const Menu = {
         ctx.shadowBlur = glow;
         ctx.font = 'bold 72px Share Tech Mono, Consolas, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('NEON STORM \u03b1', SCREEN_W / 2, 280);
+        ctx.fillText('NEON STORM \u03b2', SCREEN_W / 2, 280);
 
         // Subtitle
         ctx.shadowBlur = 5;

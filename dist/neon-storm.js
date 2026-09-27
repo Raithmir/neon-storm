@@ -1,11 +1,8 @@
 
 // === constants.js ===
 // ============================================================
-//  NEON STORM — Core Engine
+//  NEON STORM — Core Constants & Canvas Setup
 // ============================================================
-
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
 
 // --- Screen / Layout Constants ---
 const SCREEN_W = 1920;
@@ -18,19 +15,885 @@ const HUD_LEFT_W = PLAY_X;
 const HUD_RIGHT_X = PLAY_X + PLAY_W;
 const HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
 
+// Canvas 2D overlay — menus, HUD, transitions
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 canvas.width = SCREEN_W;
 canvas.height = SCREEN_H;
 
-// Scale canvas to fit window
+// Scale canvases to fit window
 function resizeCanvas() {
     const scaleX = window.innerWidth / SCREEN_W;
     const scaleY = window.innerHeight / SCREEN_H;
     const scale = Math.min(scaleX, scaleY);
     canvas.style.width = (SCREEN_W * scale) + 'px';
     canvas.style.height = (SCREEN_H * scale) + 'px';
+
+    // Position the Pixi canvas over the play area within the container
+    if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
+        Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
+    }
 }
 window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
+// Safe initial sizing (Renderer not yet available — just size the overlay canvas)
+(function() {
+    const scaleX = window.innerWidth / SCREEN_W;
+    const scaleY = window.innerHeight / SCREEN_H;
+    const scale = Math.min(scaleX, scaleY);
+    canvas.style.width = (SCREEN_W * scale) + 'px';
+    canvas.style.height = (SCREEN_H * scale) + 'px';
+})();
+
+
+// === renderer.js ===
+// ============================================================
+//  RENDERER — Canvas 2D glow + PixiJS GPU pipeline
+//
+//  Pixi path architecture:
+//    1. Gameplay draws to offCanvas (720×960) via Canvas 2D
+//    2. Glow halos draw to glowCanvas via addGlow()
+//    3. offCanvas  → gameSprite  (game content)
+//    4. _starSlowLayer / _starFastLayer: TilingSprite GPU star fields
+//    5. glowCanvas → _glowSprite + BlurFilter = real GPU bloom
+//    6. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
+//    7. _explosionLayer: fireball PIXI.Sprites for big hits
+//    8. _laserBeamMesh: MeshRope for laser beam visual
+//    9. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
+//   10. _flashSprite sits on app.stage (above colour grade + bloom)
+//   11. app.stage carries chroma + CRT + glitch filters (screen-space)
+//
+//  Canvas 2D fallback: glowCanvas composited additively into
+//  compCanvas, then blitted onto overlay — identical to alpha build.
+// ============================================================
+const Renderer = {
+    app: null,
+    pixiCanvas: null,
+    ready: false,
+    usePixi: false,
+
+    // Offscreen canvases
+    offCanvas: null,     // Gameplay drawing (Canvas 2D)
+    offCtx: null,
+    glowCanvas: null,    // Glow halos → drives GPU bloom in Pixi mode
+    glowCtx: null,
+    compCanvas: null,    // Used only in Canvas 2D fallback
+    compCtx: null,
+
+    // PixiJS container hierarchy
+    gameLayer: null,         // Container: all gameplay Pixi objects
+    bulletLayer: null,       // ParticleContainer (additive) — bullet particles
+    particleLayer: null,     // ParticleContainer (additive) — effect particles
+    _explosionLayer: null,   // Container — fireball sprites for big explosions
+    _explosionSprites: [],
+
+    // Main game canvas sprite
+    gameTexture: null,
+    _canvasSource: null,
+    gameSprite: null,
+
+    // GPU star field — TilingSprites, added additively above gameSprite
+    _starSlowLayer: null,
+    _starFastLayer: null,
+    _starScrollSlow: 0,
+    _starScrollFast: 0,
+
+    // Bloom: glowCanvas uploaded with BlurFilter
+    _glowCanvasSource: null,
+    _glowSprite: null,
+    _blurFilter: null,
+
+    // Laser beam — MeshRope driven from player position
+    _laserBeamMesh: null,
+    _laserBeamPoints: null,
+    _laserBeamTime: 0,
+    _laserBeamTex: null,
+
+    // Per-level colour grade
+    _colorGrade: null,
+
+    // Shared glow radial gradient texture for Pixi particles
+    glowTex: null,
+
+    // Screen flash (on stage, above bloom)
+    _flashSprite: null,
+    _flashTimer: 0,
+    _flashDuration: 0,
+    _flashColor: 0xffffff,
+
+    // Chromatic aberration
+    _chromaFilter: null,
+    _chromaTimer: 0,
+    _chromaDuration: 0,
+    _chromaIntensity: 0,
+    _chromaPersist: false,
+
+    // CRT scanline filter
+    _crtFilter: null,
+    _crtEnabled: false,
+
+    // Shockwave (bomb / surge) — pixi-filters ShockwaveFilter on gameLayer
+    _shockwaveFilter: null,
+    _shockwaveActive: false,
+    _shockwaveTimer: 0,
+
+    // God-ray (boss entrance) — pixi-filters GodrayFilter on gameLayer
+    _godrayFilter: null,
+    _godrayTimer: 0,
+    _godrayDuration: 0,
+
+    // Glitch (boss phase change) — pixi-filters GlitchFilter on app.stage
+    _glitchFilter: null,
+    _glitchTimer: 0,
+
+    // Canvas 2D glow image (used by addGlow fallback)
+    _glowImg: null,
+
+    async init() {
+        this.offCanvas = document.createElement('canvas');
+        this.offCanvas.width = PLAY_W;
+        this.offCanvas.height = PLAY_H;
+        this.offCtx = this.offCanvas.getContext('2d');
+
+        this.glowCanvas = document.createElement('canvas');
+        this.glowCanvas.width = PLAY_W;
+        this.glowCanvas.height = PLAY_H;
+        this.glowCtx = this.glowCanvas.getContext('2d');
+
+        this.compCanvas = document.createElement('canvas');
+        this.compCanvas.width = PLAY_W;
+        this.compCanvas.height = PLAY_H;
+        this.compCtx = this.compCanvas.getContext('2d');
+
+        this._glowImg = this._createGlowImage(64);
+
+        if (typeof PIXI === 'undefined') {
+            console.warn('[Renderer] PixiJS not loaded — Canvas 2D only');
+            this.ready = true;
+            return;
+        }
+
+        try {
+            this.app = new PIXI.Application();
+            await this.app.init({
+                width: PLAY_W,
+                height: PLAY_H,
+                backgroundAlpha: 0,
+                antialias: false,
+                preference: 'webgl',
+            });
+
+            this.pixiCanvas = this.app.canvas;
+            this.pixiCanvas.id = 'pixi-play';
+
+            const container = document.getElementById('game-container');
+            if (container) {
+                container.insertBefore(this.pixiCanvas, canvas);
+            } else {
+                canvas.parentNode.insertBefore(this.pixiCanvas, canvas);
+            }
+
+            // --- Game canvas sprite ---
+            this._canvasSource = new PIXI.CanvasSource({
+                resource: this.offCanvas,
+                width: PLAY_W,
+                height: PLAY_H,
+            });
+            this.gameTexture = new PIXI.Texture(this._canvasSource);
+            this.gameSprite = new PIXI.Sprite(this.gameTexture);
+
+            // --- GPU Bloom: glowCanvas → sprite with BlurFilter + additive blend ---
+            this._glowCanvasSource = new PIXI.CanvasSource({
+                resource: this.glowCanvas,
+                width: PLAY_W,
+                height: PLAY_H,
+            });
+            const glowTex = new PIXI.Texture(this._glowCanvasSource);
+            this._glowSprite = new PIXI.Sprite(glowTex);
+            this._blurFilter = new PIXI.BlurFilter({ strength: 8, quality: 3 });
+            this._glowSprite.filters = [this._blurFilter];
+            this._glowSprite.blendMode = 'add';
+            this._glowSprite.alpha = 1.3;
+
+            // --- Shared glow texture for native Pixi particles ---
+            this.glowTex = this._createGlowTexture(64);
+
+            // --- Bullet ParticleContainer (additive, GPU-batched) ---
+            this.bulletLayer = new PIXI.ParticleContainer({
+                texture: this.glowTex,
+                dynamicProperties: { vertex: true, position: true, rotation: true, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+                blendMode: 'add',
+            });
+
+            // --- Particle ParticleContainer (additive, GPU-batched) ---
+            this.particleLayer = new PIXI.ParticleContainer({
+                texture: this.glowTex,
+                dynamicProperties: { vertex: true, position: true, rotation: true, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+                blendMode: 'add',
+            });
+
+            // --- Explosion fireball sprites ---
+            this._explosionLayer = new PIXI.Container();
+
+            // --- Per-level colour grade (identity by default) ---
+            this._colorGrade = new PIXI.ColorMatrixFilter();
+
+            // --- Game layer: assembles all gameplay Pixi objects ---
+            // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
+            this.gameLayer = new PIXI.Container();
+            this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
+            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (sky + all Canvas 2D)
+            this._initStarLayers();                         // 2-3. GPU star tiles
+            this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
+            this.gameLayer.addChild(this.bulletLayer);      // 5. Native bullets
+            this.gameLayer.addChild(this.particleLayer);    // 6. Native particles
+            this.gameLayer.addChild(this._explosionLayer);  // 7. Fireball sprites
+            this.app.stage.addChild(this.gameLayer);
+
+            // --- Screen flash overlay (above colour grade + bloom) ---
+            this._flashSprite = new PIXI.Sprite(PIXI.Texture.WHITE);
+            this._flashSprite.width = PLAY_W;
+            this._flashSprite.height = PLAY_H;
+            this._flashSprite.alpha = 0;
+            this._flashSprite.blendMode = 'add';
+            this.app.stage.addChild(this._flashSprite);
+
+            // Context loss
+            this.pixiCanvas.addEventListener('webglcontextlost', (e) => {
+                e.preventDefault();
+                console.warn('[Renderer] WebGL context lost');
+                this.usePixi = false;
+            });
+            this.pixiCanvas.addEventListener('webglcontextrestored', () => {
+                console.log('[Renderer] WebGL context restored');
+                this.usePixi = true;
+            });
+
+            this._initChromaFilter();
+            this._initCRTFilter();
+
+            // --- pixi-filters effects (guarded — no-ops if PIXIFilters not loaded) ---
+            this._initShockwaveFilter();
+            this._initGodrayFilter();
+            this._initGlitchFilter();
+
+            // --- Laser beam MeshRope ---
+            this._initLaserBeam();
+
+            // Apply initial filter chain
+            this._rebuildGameLayerFilters();
+            this._rebuildFilterChain();
+
+            this.usePixi = true;
+            this.ready = true;
+            console.log('[Renderer] PixiJS v' + PIXI.VERSION + ' (' + this.app.renderer.name + ') — bloom + colour grade active');
+        } catch (e) {
+            console.warn('[Renderer] PixiJS init failed:', e);
+            this.ready = true;
+        }
+    },
+
+    // Canvas 2D white radial gradient (used for addGlow and baked into glowTex)
+    _createGlowImage(size) {
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const g = c.getContext('2d');
+        const half = size / 2;
+        const grad = g.createRadialGradient(half, half, 0, half, half, half);
+        grad.addColorStop(0, 'rgba(255,255,255,1)');
+        grad.addColorStop(0.3, 'rgba(255,255,255,0.5)');
+        grad.addColorStop(0.7, 'rgba(255,255,255,0.15)');
+        grad.addColorStop(1, 'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, size, size);
+        return c;
+    },
+
+    // Convert the glow canvas into a PIXI.Texture for ParticleContainer use
+    _createGlowTexture(size) {
+        const canvas = this._createGlowImage(size);
+        const src = new PIXI.CanvasSource({ resource: canvas, width: size, height: size });
+        return new PIXI.Texture(src);
+    },
+
+    // --- Star field (TilingSprite) ---
+
+    _createStarTexture(count, maxRadius, seed) {
+        const c = document.createElement('canvas');
+        c.width = PLAY_W; c.height = PLAY_H;
+        const g = c.getContext('2d');
+        // Seeded random via simple LCG so each call is reproducible
+        let r = seed || 1337;
+        const rng = () => { r = (r * 1664525 + 1013904223) & 0xffffffff; return (r >>> 0) / 0xffffffff; };
+        for (let i = 0; i < count; i++) {
+            const x = rng() * PLAY_W;
+            const y = rng() * PLAY_H;
+            const radius = 0.4 + rng() * maxRadius;
+            const alpha = 0.25 + rng() * 0.6;
+            g.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            g.beginPath();
+            g.arc(x, y, radius, 0, Math.PI * 2);
+            g.fill();
+        }
+        const src = new PIXI.CanvasSource({ resource: c, width: PLAY_W, height: PLAY_H });
+        return new PIXI.Texture(src);
+    },
+
+    _initStarLayers() {
+        try {
+            // Deep slow stars — many, small
+            const slowTex = this._createStarTexture(120, 1.0, 9001);
+            this._starSlowLayer = new PIXI.TilingSprite({ texture: slowTex, width: PLAY_W, height: PLAY_H });
+            this._starSlowLayer.blendMode = 'add';
+            this._starSlowLayer.alpha = 0.65;
+
+            // Near fast stars — fewer, slightly larger
+            const fastTex = this._createStarTexture(40, 1.6, 4242);
+            this._starFastLayer = new PIXI.TilingSprite({ texture: fastTex, width: PLAY_W, height: PLAY_H });
+            this._starFastLayer.blendMode = 'add';
+            this._starFastLayer.alpha = 0.85;
+
+            this.gameLayer.addChild(this._starSlowLayer);
+            this.gameLayer.addChild(this._starFastLayer);
+        } catch (e) {
+            console.warn('[Renderer] Star layers unavailable:', e);
+        }
+    },
+
+    // --- Laser beam (MeshRope) ---
+
+    _createLaserBeamTexture() {
+        const w = 14, h = 32;
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const g = c.getContext('2d');
+        // Horizontal gradient: transparent → bright centre → transparent
+        const grad = g.createLinearGradient(0, 0, w, 0);
+        grad.addColorStop(0,    'rgba(255,255,255,0)');
+        grad.addColorStop(0.3,  'rgba(255,255,255,0.35)');
+        grad.addColorStop(0.5,  'rgba(255,255,255,1)');
+        grad.addColorStop(0.7,  'rgba(255,255,255,0.35)');
+        grad.addColorStop(1,    'rgba(255,255,255,0)');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, w, h);
+        const src = new PIXI.CanvasSource({ resource: c, width: w, height: h });
+        return new PIXI.Texture(src);
+    },
+
+    _initLaserBeam() {
+        if (!this.usePixi) return;
+        try {
+            this._laserBeamTex = this._createLaserBeamTexture();
+            this._laserBeamPoints = [];
+            const numPoints = 10;
+            for (let i = 0; i < numPoints; i++) {
+                this._laserBeamPoints.push(new PIXI.Point(PLAY_W / 2, PLAY_H * (1 - i / (numPoints - 1))));
+            }
+            this._laserBeamMesh = new PIXI.MeshRope({
+                texture: this._laserBeamTex,
+                points: this._laserBeamPoints,
+            });
+            this._laserBeamMesh.blendMode = 'add';
+            this._laserBeamMesh.visible = false;
+            this._laserBeamMesh.alpha = 0.9;
+            this.gameLayer.addChild(this._laserBeamMesh);
+        } catch (e) {
+            console.warn('[Renderer] LaserBeam mesh unavailable:', e);
+        }
+    },
+
+    // Called each frame from Player.update() — x/y is the ship's gun tip
+    updateLaserBeam(x, y, color, visible) {
+        if (!this._laserBeamMesh) return;
+        if (!visible) {
+            this._laserBeamMesh.visible = false;
+            return;
+        }
+        const pts = this._laserBeamPoints;
+        const numPoints = pts.length;
+        const t = this._laserBeamTime;
+        for (let i = 0; i < numPoints; i++) {
+            const frac = i / (numPoints - 1);             // 0 = ship tip, 1 = top of screen
+            const waveAmp = (1 - frac) * (1 - frac) * 10; // strongest near ship, tapers to 0
+            pts[i].x = x + Math.sin(t * 7 + i * 1.3) * waveAmp;
+            pts[i].y = y * (1 - frac);                    // ship y → 0 at top
+        }
+        const hex = typeof color === 'string' ? this.colorToHex(color) : (color || 0x4488ff);
+        this._laserBeamMesh.tint = hex;
+        this._laserBeamMesh.visible = true;
+    },
+
+    // --- pixi-filters effects ---
+
+    _initShockwaveFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._shockwaveFilter = new PIXIFilters.ShockwaveFilter({
+                center: [0.5, 0.5],
+                time: 0,
+                amplitude: 35,
+                wavelength: 90,
+                brightness: 0.85,
+                speed: 650,
+                radius: -1,
+            });
+            this._shockwaveFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] ShockwaveFilter unavailable:', e);
+        }
+    },
+
+    _initGodrayFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._godrayFilter = new PIXIFilters.GodrayFilter({
+                angle: 30,
+                gain: 0.55,
+                lacunarity: 2.5,
+                time: 0,
+                parallel: false,
+                x: 0.5,
+                y: 0.0,
+                alpha: 0,
+            });
+            this._godrayFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] GodrayFilter unavailable:', e);
+        }
+    },
+
+    _initGlitchFilter() {
+        if (typeof PIXIFilters === 'undefined') return;
+        try {
+            this._glitchFilter = new PIXIFilters.GlitchFilter({
+                slices: 6,
+                offset: 55,
+                fillMode: 0,
+                average: false,
+                seed: Math.random(),
+                minSize: 8,
+                sampleSize: 512,
+            });
+            this._glitchFilter.enabled = false;
+        } catch (e) {
+            console.warn('[Renderer] GlitchFilter unavailable:', e);
+        }
+    },
+
+    // gameLayer.filters = colorGrade + any active game-space effects
+    _rebuildGameLayerFilters() {
+        if (!this.gameLayer) return;
+        const filters = [this._colorGrade];
+        if (this._shockwaveFilter && this._shockwaveActive) filters.push(this._shockwaveFilter);
+        if (this._godrayFilter && this._godrayTimer > 0) filters.push(this._godrayFilter);
+        this.gameLayer.filters = filters;
+    },
+
+    _initChromaFilter() {
+        try {
+            this._chromaFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: `
+                        in vec2 aPosition;
+                        out vec2 vTextureCoord;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uOutputTexture;
+                        vec4 filterVertexPosition(void) {
+                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+                            return vec4(position, 0.0, 1.0);
+                        }
+                        vec2 filterTextureCoord(void) {
+                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
+                        }
+                        void main(void) {
+                            gl_Position = filterVertexPosition();
+                            vTextureCoord = filterTextureCoord();
+                        }`,
+                    fragment: `
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform float uOffset;
+                        void main(void) {
+                            float r = texture(uTexture, vTextureCoord + vec2(uOffset, 0.0)).r;
+                            float g = texture(uTexture, vTextureCoord).g;
+                            float b = texture(uTexture, vTextureCoord - vec2(uOffset, 0.0)).b;
+                            float a = texture(uTexture, vTextureCoord).a;
+                            gl_FragColor = vec4(r, g, b, a);
+                        }`
+                },
+                resources: {
+                    chromaUniforms: { uOffset: { value: 0.0, type: 'f32' } }
+                }
+            });
+        } catch (e) {
+            console.warn('[Renderer] Chroma filter unavailable:', e);
+        }
+    },
+
+    _initCRTFilter() {
+        try {
+            this._crtFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: `
+                        in vec2 aPosition;
+                        out vec2 vTextureCoord;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uOutputTexture;
+                        vec4 filterVertexPosition(void) {
+                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+                            return vec4(position, 0.0, 1.0);
+                        }
+                        vec2 filterTextureCoord(void) {
+                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
+                        }
+                        void main(void) {
+                            gl_Position = filterVertexPosition();
+                            vTextureCoord = filterTextureCoord();
+                        }`,
+                    fragment: `
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform vec4 uInputSize;
+                        uniform float uIntensity;
+                        void main(void) {
+                            vec4 color = texture(uTexture, vTextureCoord);
+                            float line = mod(vTextureCoord.y * uInputSize.y, 2.0);
+                            float scanline = 1.0 - step(1.0, line) * uIntensity;
+                            gl_FragColor = vec4(color.rgb * scanline, color.a);
+                        }`
+                },
+                resources: {
+                    crtUniforms: { uIntensity: { value: 0.12, type: 'f32' } }
+                }
+            });
+        } catch (e) {
+            console.warn('[Renderer] CRT filter unavailable:', e);
+        }
+    },
+
+    // Chroma + CRT + Glitch live on app.stage (screen-space, above colour grade + bloom)
+    _rebuildFilterChain() {
+        if (!this.app) return;
+        const filters = [];
+        if (this._chromaFilter && (this._chromaTimer > 0 || this._chromaPersist)) filters.push(this._chromaFilter);
+        if (this._crtFilter && this._crtEnabled) filters.push(this._crtFilter);
+        if (this._glitchFilter && this._glitchTimer > 0) filters.push(this._glitchFilter);
+        this.app.stage.filters = filters.length > 0 ? filters : null;
+    },
+
+    // --- Frame lifecycle ---
+
+    getPlayCtx() { return this.offCtx; },
+
+    beginFrame() {
+        this.offCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+    },
+
+    updateEffects(dt) {
+        if (!this.usePixi) return;
+
+        // Chromatic aberration
+        if (this._chromaTimer > 0 && !this._chromaPersist) {
+            this._chromaTimer -= dt;
+            if (this._chromaTimer <= 0) {
+                this._chromaTimer = 0;
+                this._chromaIntensity = 0;
+                this._rebuildFilterChain();
+            }
+        }
+        if (this._chromaFilter) {
+            const t = this._chromaDuration > 0 ? this._chromaTimer / this._chromaDuration : 0;
+            const offset = this._chromaPersist ? this._chromaIntensity : this._chromaIntensity * t;
+            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = offset;
+        }
+
+        // Screen flash
+        if (this._flashTimer > 0) {
+            this._flashTimer -= dt;
+            const t = Math.max(0, this._flashTimer / this._flashDuration);
+            this._flashSprite.alpha = t * 0.8;
+            this._flashSprite.tint = this._flashColor;
+            if (this._flashTimer <= 0) this._flashSprite.alpha = 0;
+        }
+
+        // Explosion fireball sprites
+        for (let i = this._explosionSprites.length - 1; i >= 0; i--) {
+            const e = this._explosionSprites[i];
+            e.elapsed += dt;
+            const t = e.elapsed / e.duration;
+            const eased = 1 - Math.pow(1 - Math.min(t, 1), 2);
+            e.sprite.scale.set(e.maxScale * eased);
+            e.sprite.alpha = 1 - t;
+            if (t >= 1) {
+                this._explosionLayer.removeChild(e.sprite);
+                this._explosionSprites.splice(i, 1);
+            }
+        }
+
+        // Star field scroll
+        if (this._starSlowLayer) {
+            this._starScrollSlow += dt * 18;
+            this._starScrollFast += dt * 55;
+            this._starSlowLayer.tilePosition.y = this._starScrollSlow;
+            this._starFastLayer.tilePosition.y = this._starScrollFast;
+        }
+
+        // Laser beam time (drives oscillation animation)
+        if (this._laserBeamMesh) {
+            this._laserBeamTime += dt;
+        }
+
+        // Shockwave — expand until wave leaves screen (~1.2s at speed 650)
+        if (this._shockwaveActive && this._shockwaveFilter) {
+            this._shockwaveTimer -= dt;
+            this._shockwaveFilter.time += dt;
+            if (this._shockwaveTimer <= 0) {
+                this._shockwaveActive = false;
+                this._shockwaveFilter.enabled = false;
+                this._rebuildGameLayerFilters();
+            }
+        }
+
+        // God-ray fade in → hold → fade out
+        if (this._godrayTimer > 0 && this._godrayFilter) {
+            this._godrayTimer -= dt;
+            this._godrayFilter.time += dt * 0.4;
+            const frac = this._godrayTimer / this._godrayDuration;
+            if (frac > 0.8) {
+                this._godrayFilter.alpha = (1 - frac) / 0.2 * 0.65;
+            } else if (frac < 0.3) {
+                this._godrayFilter.alpha = frac / 0.3 * 0.65;
+            } else {
+                this._godrayFilter.alpha = 0.65;
+            }
+            if (this._godrayTimer <= 0) {
+                this._godrayTimer = 0;
+                this._godrayFilter.enabled = false;
+                this._rebuildGameLayerFilters();
+            }
+        }
+
+        // Glitch — update seed each frame for randomness, disable when expired
+        if (this._glitchTimer > 0 && this._glitchFilter) {
+            this._glitchTimer -= dt;
+            this._glitchFilter.seed = Math.random();
+            if (this._glitchTimer <= 0) {
+                this._glitchTimer = 0;
+                this._glitchFilter.enabled = false;
+                this._rebuildFilterChain();
+            }
+        }
+    },
+
+    // Pixi mode: upload game + glow canvases separately (glow sprite handles bloom)
+    // Fallback mode: composite glow additively into compCanvas for blitToOverlay
+    endFrame() {
+        if (this.usePixi) {
+            this._canvasSource.update();
+            this._glowCanvasSource.update();
+            this.app.renderer.render(this.app.stage);
+        } else {
+            const c = this.compCtx;
+            c.clearRect(0, 0, PLAY_W, PLAY_H);
+            c.globalCompositeOperation = 'source-over';
+            c.drawImage(this.offCanvas, 0, 0);
+            c.globalCompositeOperation = 'lighter';
+            c.drawImage(this.glowCanvas, 0, 0);
+            c.globalCompositeOperation = 'source-over';
+        }
+    },
+
+    // Canvas 2D fallback only — blits compCanvas onto the overlay
+    blitToOverlay(targetCtx, x, y) {
+        targetCtx.drawImage(this.compCanvas, x, y);
+    },
+
+    setShake(x, y) {
+        if (this.usePixi && this.gameLayer) {
+            this.gameLayer.position.set(x, y);
+        }
+    },
+
+    resize(scale, pixiLeft, pixiTop) {
+        if (!this.pixiCanvas) return;
+        this.pixiCanvas.style.width = (PLAY_W * scale) + 'px';
+        this.pixiCanvas.style.height = (PLAY_H * scale) + 'px';
+        this.pixiCanvas.style.left = pixiLeft + 'px';
+        this.pixiCanvas.style.top = pixiTop + 'px';
+    },
+
+    // --- Glow API (Canvas 2D — writes to glowCanvas, blurred by _glowSprite in Pixi mode) ---
+
+    _glowCache: {},
+
+    _getTintedGlow(colorHex) {
+        if (this._glowCache[colorHex]) return this._glowCache[colorHex];
+        const size = 64;
+        const c = document.createElement('canvas');
+        c.width = size; c.height = size;
+        const g = c.getContext('2d');
+        g.drawImage(this._glowImg, 0, 0);
+        g.globalCompositeOperation = 'source-in';
+        g.fillStyle = '#' + colorHex.toString(16).padStart(6, '0');
+        g.fillRect(0, 0, size, size);
+        this._glowCache[colorHex] = c;
+        return c;
+    },
+
+    addGlow(x, y, color, size, alpha) {
+        const hex = typeof color === 'number' ? color : this.colorToHex(color);
+        const img = this._getTintedGlow(hex);
+        const g = this.glowCtx;
+        g.globalAlpha = alpha || 0.4;
+        g.drawImage(img, x - size, y - size, size * 2, size * 2);
+        g.globalAlpha = 1;
+    },
+
+    colorToHex(cssColor) {
+        if (typeof cssColor === 'number') return cssColor;
+        if (cssColor.charAt(0) === '#') {
+            if (cssColor.length === 4) {
+                const r = cssColor[1], g = cssColor[2], b = cssColor[3];
+                return parseInt(r + r + g + g + b + b, 16);
+            }
+            return parseInt(cssColor.slice(1, 7), 16);
+        }
+        if (cssColor.charAt(0) === 'r') {
+            const m = cssColor.match(/([\d.]+)/g);
+            if (m) return (parseInt(m[0]) << 16) | (parseInt(m[1]) << 8) | parseInt(m[2]);
+        }
+        if (cssColor.charAt(0) === 'h') {
+            const m = cssColor.match(/([\d.]+)/g);
+            if (m) {
+                const rgb = _rendererHslToRgb(parseFloat(m[0]), parseFloat(m[1]), parseFloat(m[2]));
+                return (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+            }
+        }
+        return 0xffffff;
+    },
+
+    // --- Bloom control ---
+
+    setBloomIntensity(scale, threshold) {
+        if (!this._blurFilter || !this._glowSprite) return;
+        this._blurFilter.strength = 6 + scale * 7.5;
+        this._glowSprite.alpha = 1.0 + scale * 0.5;
+    },
+
+    // --- Per-level colour grade ---
+
+    setColorGrade(opts) {
+        if (!this._colorGrade) return;
+        this._colorGrade.reset();
+        if (!opts) return;
+        if (opts.hue)        this._colorGrade.hue(opts.hue, false);
+        if (opts.saturate)   this._colorGrade.saturate(opts.saturate, false);
+        if (opts.contrast)   this._colorGrade.contrast(opts.contrast, false);
+        if (opts.brightness) this._colorGrade.brightness(1 + opts.brightness, false);
+    },
+
+    // --- Explosion fireball sprite ---
+
+    spawnExplosionSprite(x, y, maxScale, colorHex, duration) {
+        if (!this.usePixi || !this.glowTex || !this._explosionLayer) return;
+        const s = new PIXI.Sprite(this.glowTex);
+        s.anchor.set(0.5);
+        s.x = x;
+        s.y = y;
+        s.tint = colorHex || 0xff8800;
+        s.alpha = 1.0;
+        s.scale.set(0.05);
+        s.blendMode = 'add';
+        this._explosionLayer.addChild(s);
+        this._explosionSprites.push({ sprite: s, maxScale: maxScale || 3, duration: duration || 0.5, elapsed: 0 });
+    },
+
+    // --- Screen-space effects ---
+
+    triggerChroma(intensity, duration) {
+        if (!this._chromaFilter) return;
+        this._chromaIntensity = intensity || 0.008;
+        this._chromaDuration = duration || 0.3;
+        this._chromaTimer = this._chromaDuration;
+        this._rebuildFilterChain();
+    },
+
+    setPersistentChroma(intensity) {
+        if (!this._chromaFilter) return;
+        this._chromaPersist = intensity > 0;
+        this._chromaIntensity = intensity;
+        this._rebuildFilterChain();
+    },
+
+    triggerFlash(color, duration) {
+        if (!this.usePixi) return;
+        this._flashColor = color || 0xffffff;
+        this._flashDuration = duration || 0.3;
+        this._flashTimer = this._flashDuration;
+        this._flashSprite.alpha = 0.8;
+        this._flashSprite.tint = this._flashColor;
+    },
+
+    setCRT(enabled) {
+        this._crtEnabled = enabled;
+        this._rebuildFilterChain();
+    },
+
+    // --- Game-space effects ---
+
+    // Shockwave ripple expanding from a normalised position (0-1 range)
+    triggerShockwave(normX, normY) {
+        if (!this._shockwaveFilter) return;
+        this._shockwaveFilter.center = [normX, normY];
+        this._shockwaveFilter.time = 0;
+        this._shockwaveActive = true;
+        this._shockwaveTimer = 1.1;
+        this._shockwaveFilter.enabled = true;
+        this._rebuildGameLayerFilters();
+    },
+
+    // Volumetric god-ray light from top-centre — use on boss entrance
+    triggerGodray(duration) {
+        if (!this._godrayFilter) return;
+        this._godrayDuration = duration || 2.5;
+        this._godrayTimer = this._godrayDuration;
+        this._godrayFilter.time = 0;
+        this._godrayFilter.alpha = 0;
+        this._godrayFilter.enabled = true;
+        this._rebuildGameLayerFilters();
+    },
+
+    // Screen-space glitch burst — use on boss phase transition
+    triggerGlitch(duration) {
+        if (!this._glitchFilter) return;
+        this._glitchTimer = duration || 0.55;
+        this._glitchFilter.enabled = true;
+        this._rebuildFilterChain();
+    },
+};
+
+function _rendererHslToRgb(h, s, l) {
+    s /= 100; l /= 100;
+    const c = (1 - Math.abs(2 * l - 1)) * s;
+    const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+    const m = l - c / 2;
+    let r, g, b;
+    if (h < 60) { r = c; g = x; b = 0; }
+    else if (h < 120) { r = x; g = c; b = 0; }
+    else if (h < 180) { r = 0; g = c; b = x; }
+    else if (h < 240) { r = 0; g = x; b = c; }
+    else if (h < 300) { r = x; g = 0; b = c; }
+    else { r = c; g = 0; b = x; }
+    return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+}
 
 
 // === config.js ===
@@ -47,9 +910,10 @@ const DIFFICULTY_PRESETS = {
         lives: 5,
         shieldHp: 0,
         deathPenalty: 'none',
-        bulletDensity: 0.4,
+        bulletDensity: 0.6,
         chainTimerSpeed: 0.7,
-        scoreMultiplier: 0.5
+        scoreMultiplier: 0.5,
+        deathBombWindow: 0.25   // seconds after a hit in which bombing cancels it
     },
     normal: {
         bombs: { enabled: true, startCount: 3 },
@@ -62,11 +926,12 @@ const DIFFICULTY_PRESETS = {
         deathPenalty: 'moderate',
         bulletDensity: 1.0,
         chainTimerSpeed: 1.0,
-        scoreMultiplier: 1.0
+        scoreMultiplier: 1.0,
+        deathBombWindow: 0.15
     },
     hardcore: {
         bombs: { enabled: false, startCount: 0 },
-        focus: { enabled: false, speedMultiplier: 1.0 },
+        focus: { enabled: true, speedMultiplier: 0.4 }, // focus is a precision tool, not an assist
         dash: { enabled: true, cooldown: 3.0 },
         graze: { enabled: true, zoneMultiplier: 0.7, rewardMultiplier: 1.5 },
         autofire: false,
@@ -75,7 +940,8 @@ const DIFFICULTY_PRESETS = {
         deathPenalty: 'full',
         bulletDensity: 1.3,
         chainTimerSpeed: 1.4,
-        scoreMultiplier: 2.0
+        scoreMultiplier: 2.0,
+        deathBombWindow: 0
     }
 };
 
@@ -106,6 +972,7 @@ const Input = {
         focus: ['ShiftLeft', 'ShiftRight', 'KeyX'],
         dash: ['KeyC', 'KeyV'],
         bomb: ['KeyB', 'KeyN'],
+        surge: ['KeyF', 'KeyM'],
         pause: ['Escape', 'KeyP'],
         confirm: ['Enter', 'Space'],
         back: ['Escape', 'Backspace']
@@ -117,6 +984,7 @@ const Input = {
         focus: [6],          // Left trigger
         dash: [5],           // Right bumper
         bomb: [4],           // Left bumper
+        surge: [7, 3],       // Right trigger, Y
         pause: [9],          // Start
         confirm: [0],        // A
         back: [1]            // B
@@ -127,7 +995,7 @@ const Input = {
     gpBindings: {},
 
     // Actions that can be rebound by the player (excludes menu-only actions)
-    rebindableActions: ['up', 'down', 'left', 'right', 'fire', 'focus', 'dash', 'bomb', 'pause'],
+    rebindableActions: ['up', 'down', 'left', 'right', 'fire', 'focus', 'dash', 'bomb', 'surge', 'pause'],
 
     // Human-readable names for key codes
     keyDisplayNames: {
@@ -346,18 +1214,21 @@ const Audio = {
     enabled: true,
 
     init() {
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-        // Resume on user interaction (browser policy)
-        const resume = () => {
-            if (this.ctx.state === 'suspended') this.ctx.resume();
-            window.removeEventListener('click', resume);
-            window.removeEventListener('keydown', resume);
+        // Defer AudioContext creation to first user interaction (browser policy)
+        const createCtx = () => {
+            if (this.ctx) return;
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            window.removeEventListener('click', createCtx);
+            window.removeEventListener('keydown', createCtx);
+            window.removeEventListener('touchstart', createCtx);
         };
-        window.addEventListener('click', resume);
-        window.addEventListener('keydown', resume);
+        window.addEventListener('click', createCtx);
+        window.addEventListener('keydown', createCtx);
+        window.addEventListener('touchstart', createCtx);
     },
 
     _createGain(volume) {
+        if (!this.ctx) return null;
         const gain = this.ctx.createGain();
         gain.gain.value = volume * this.sfxVolume * this.masterVolume;
         gain.connect(this.ctx.destination);
@@ -1421,7 +2292,7 @@ const EndRunBonus = {
     bonuses: [],
     totalBonus: 0,
 
-    calculate(won, lives, maxChain, graze, levelTime) {
+    calculate(won, lives, maxChain, graze, levelTime, noDeath) {
         this.bonuses = [];
         this.totalBonus = 0;
 
@@ -1435,7 +2306,7 @@ const EndRunBonus = {
             this.bonuses.push({ label: 'LIVES BONUS', value: Math.floor(livesBonus) });
 
             // No-death bonus
-            if (lives === GameConfig.lives) {
+            if (noDeath) {
                 const noDeathBonus = 15000 * GameConfig.scoreMultiplier;
                 this.bonuses.push({ label: 'NO DEATH BONUS', value: Math.floor(noDeathBonus) });
             }
@@ -1807,10 +2678,10 @@ const Hangar = {
 const Tutorial = {
     pageIndex: 0,
     pages: [
-        { title: 'MOVEMENT', lines: ['Use ARROW KEYS or WASD to move your ship.', 'Your ship can move in all 8 directions.', '', 'Hold SHIFT or X for FOCUS MODE — slower', 'movement for precise bullet dodging.', 'Your hitbox is the tiny dot at the center!', '', 'Gamepad: Left Stick to move.', 'Left Trigger to focus.'] },
-        { title: 'SHOOTING', lines: ['Press SPACE or Z to fire.', 'Toggle AUTO-FIRE in Settings menu.', '', 'Collect weapon power-ups to upgrade:', '  S = SPREAD SHOT (orange)', '  H = HOMING MISSILES (green)', '  L = LASER BEAM (blue)', '  D = DRONES (purple, passive slot)', '', 'Same pickup = level up (max Lv5).', 'Different pickup = switch weapon to Lv1.'] },
+        { title: 'MOVEMENT', lines: ['Use ARROW KEYS or WASD to move your ship.', 'Your ship can move in all 8 directions.', '', 'Hold SHIFT or X for FOCUS MODE — slower', 'movement and a tighter shot pattern.', 'Your hitbox is the tiny dot at the center!', '', 'Gamepad: Left Stick to move.', 'Left Trigger to focus.'] },
+        { title: 'SHOOTING', lines: ['Press SPACE or Z to fire.', 'Toggle AUTO-FIRE in Settings menu.', '', 'Collect weapon power-ups to upgrade:', '  S = SPREAD SHOT (orange)', '  H = HOMING MISSILES (green)', '  L = LASER BEAM (blue)', '  D = DRONES (purple, passive slot)', '', 'Same pickup = level up (max Lv5).', 'Different pickup = switch weapon to Lv1.', '', 'Hold FOCUS to tighten your spread.'] },
         { title: 'ABILITIES', lines: ['DASH (C or V) — Quick invincible burst', 'in your movement direction. Has a cooldown.', '', 'BOMB (B or N) — Clears all enemy bullets', 'and damages all enemies. Limited stock.', '', 'Gamepad: Right Bumper = Dash', '         Left Bumper = Bomb'] },
-        { title: 'SCORING', lines: ['CHAIN COMBO — Kill enemies quickly to', 'build a score multiplier:', '  10 hits=2x  25=3x  50=5x  100+=8x', '', 'GRAZE — Fly close to enemy bullets to', 'fill the SURGE meter.', '', 'NEON SURGE — When meter is full, hold', 'FIRE + FOCUS to activate. Gives 3x score', 'and your bullets cancel enemy bullets!', '', 'Destroying tough enemies converts their', 'bullets into bonus score pickups.'] },
+        { title: 'SCORING', lines: ['CHAIN COMBO — Kill enemies quickly to', 'build a score multiplier:', '  10 hits=2x  20=3x  35=5x  60+=8x', '', 'GRAZE — Fly close to enemy bullets to', 'fill the SURGE meter.', '', 'NEON SURGE — When meter is full, press', 'SURGE (F / M) to activate: 2x fire rate,', '3x score, and your shots cancel bullets!', '', 'Destroying tough enemies converts their', 'bullets into bonus score pickups.'] },
         { title: 'TIPS', lines: ['Dying drops your weapon 1 level and', 'breaks your chain combo.', '', 'Use FOCUS MODE during dense boss patterns.', 'Your tiny hitbox is your best friend!', '', 'DASH can save you from impossible spots.', '', 'Pre-boss section has extra power-up drops.', 'Stock up before the big fight!', '', 'Earn NEON CREDITS from your score to', 'unlock cosmetics in the HANGAR.', '', 'GOOD LUCK, PILOT!'] }
     ],
 
@@ -1864,10 +2735,9 @@ const Tutorial = {
 const Particles = {
     particles: [],
     shockwaves: [], // Expanding ring effects
-    maxParticles: 400,
+    maxParticles: 3000,
 
     spawn(x, y, count, opts = {}) {
-        // Apply particle density setting
         const densityScale = { low: 0.3, medium: 0.6, high: 1.0 };
         const scale = densityScale[Settings.values.particleDensity] || 1.0;
         const actualCount = Math.min(Math.max(1, Math.round(count * scale)), this.maxParticles - this.particles.length);
@@ -1875,17 +2745,50 @@ const Particles = {
         for (let i = 0; i < actualCount; i++) {
             const angle = opts.angle !== undefined ? opts.angle + (Math.random() - 0.5) * (opts.spread || Math.PI * 2) : Math.random() * Math.PI * 2;
             const speed = (opts.speed || 100) * (0.5 + Math.random());
-            this.particles.push({
+            const life = opts.life || (0.3 + Math.random() * 0.5);
+            const size = opts.size || (1 + Math.random() * 2);
+            const p = {
                 x, y,
                 vx: Math.cos(angle) * speed,
                 vy: Math.sin(angle) * speed,
-                life: opts.life || (0.3 + Math.random() * 0.5),
-                maxLife: opts.life || (0.3 + Math.random() * 0.5),
-                size: opts.size || (1 + Math.random() * 2),
+                life, maxLife: life, size,
                 color: opts.color || '#00ffff',
-                decay: opts.decay || 1
-            });
+                decay: opts.decay || 1,
+                _pp: null, // Pixi Particle
+            };
+            if (Renderer.usePixi && Renderer.particleLayer && Renderer.glowTex) {
+                const s = (size * 2) / 32;
+                p._pp = new PIXI.Particle({
+                    texture: Renderer.glowTex,
+                    x, y,
+                    scaleX: s, scaleY: s,
+                    anchorX: 0.5, anchorY: 0.5,
+                    tint: Renderer.colorToHex(p.color),
+                    alpha: 0.85,
+                });
+                Renderer.particleLayer.addParticle(p._pp);
+            }
+            this.particles.push(p);
         }
+    },
+
+    // Multi-layer explosion: shockwave + particle bursts + GPU fireball + addGlow
+    spawnExplosion(x, y, opts = {}) {
+        const style = opts.style || 'medium';
+        const color  = opts.color  || '#ff8800';
+        const color2 = opts.color2 || '#ffffff';
+        const styles = {
+            small:  { shock: 40,  core: 15, coreSpd: 120, coreLife: 0.4, coreSize: 1.5, spark: 8,  sparkSpd: 80,  sparkLife: 0.6, sparkSize: 2,   fScale: 1.2, fDur: 0.35 },
+            medium: { shock: 70,  core: 30, coreSpd: 200, coreLife: 0.6, coreSize: 2.5, spark: 18, sparkSpd: 140, sparkLife: 0.9, sparkSize: 3,   fScale: 2.2, fDur: 0.45 },
+            large:  { shock: 110, core: 55, coreSpd: 280, coreLife: 0.8, coreSize: 3.5, spark: 28, sparkSpd: 200, sparkLife: 1.2, sparkSize: 4,   fScale: 3.5, fDur: 0.55 },
+            mega:   { shock: 160, core: 80, coreSpd: 370, coreLife: 1.0, coreSize: 5,   spark: 45, sparkSpd: 280, sparkLife: 1.5, sparkSize: 6,   fScale: 5.5, fDur: 0.65 },
+        };
+        const s = styles[style] || styles.medium;
+        this.spawnShockwave(x, y, color, s.shock, 0.4);
+        this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd,  life: s.coreLife,  size: s.coreSize  });
+        this.spawn(x, y, s.spark, { color: color,  speed: s.sparkSpd, life: s.sparkLife, size: s.sparkSize });
+        Renderer.addGlow(x, y, Renderer.colorToHex(color2), s.shock * 0.9, 0.95);
+        Renderer.spawnExplosionSprite(x, y, s.fScale, Renderer.colorToHex(color), s.fDur);
     },
 
     // Spawn an expanding shockwave ring
@@ -1900,6 +2803,7 @@ const Particles = {
     },
 
     update(dt) {
+        const usePixi = Renderer.usePixi && Renderer.particleLayer;
         for (let i = this.particles.length - 1; i >= 0; i--) {
             const p = this.particles[i];
             p.x += p.vx * dt;
@@ -1907,7 +2811,19 @@ const Particles = {
             p.vx *= (1 - 0.5 * dt);
             p.vy *= (1 - 0.5 * dt);
             p.life -= dt * p.decay;
-            if (p.life <= 0) this.particles.splice(i, 1);
+            if (p.life <= 0) {
+                if (p._pp) { Renderer.particleLayer.removeParticle(p._pp); p._pp = null; }
+                this.particles.splice(i, 1);
+            } else if (usePixi && p._pp) {
+                const t = p.life / p.maxLife;
+                const currentSize = p.size * (0.3 + t * 0.7);
+                const s = (currentSize * 2) / 32;
+                p._pp.x = p.x;
+                p._pp.y = p.y;
+                p._pp.scaleX = s;
+                p._pp.scaleY = s;
+                p._pp.alpha = t * 0.9;
+            }
         }
         // Update shockwaves
         for (let i = this.shockwaves.length - 1; i >= 0; i--) {
@@ -1920,42 +2836,57 @@ const Particles = {
     },
 
     draw(ctx) {
-        const prevComposite = ctx.globalCompositeOperation;
-        ctx.globalCompositeOperation = 'lighter';
-        ctx.shadowBlur = 0; // No shadowBlur in hot loop
-
-        for (const p of this.particles) {
-            const t = p.life / p.maxLife; // 1→0 over lifetime
-            const currentSize = p.size * (0.3 + t * 0.7);
-
-            // Soft outer glow (replaces shadowBlur)
-            ctx.globalAlpha = t * 0.2;
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, currentSize * 2.5, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Main particle
-            ctx.globalAlpha = t * 0.9;
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
-            ctx.fill();
-
-            // White-hot centre on large/fresh particles
-            if (t > 0.5 && p.size >= 2) {
-                ctx.fillStyle = '#ffffff';
-                ctx.globalAlpha = (t - 0.5) * 1.2;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, currentSize * 0.35, 0, Math.PI * 2);
-                ctx.fill();
+        if (Renderer.usePixi) {
+            // Pixi path: particles are rendered via particleLayer; just feed bloom
+            for (const p of this.particles) {
+                const t = p.life / p.maxLife;
+                if (t > 0.4 && p.size >= 1.5) {
+                    const currentSize = p.size * (0.3 + t * 0.7);
+                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 9, t * 0.45);
+                }
             }
+        } else {
+            // Canvas 2D fallback path
+            const prevComposite = ctx.globalCompositeOperation;
+            ctx.globalCompositeOperation = 'lighter';
+
+            for (const p of this.particles) {
+                const t = p.life / p.maxLife;
+                const currentSize = p.size * (0.3 + t * 0.7);
+
+                if (t > 0.4 && p.size >= 1.5) {
+                    Renderer.addGlow(p.x, p.y, Renderer.colorToHex(p.color), currentSize * 8, t * 0.5);
+                }
+
+                ctx.globalAlpha = t * 0.2;
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, currentSize * 2.5, 0, Math.PI * 2);
+                ctx.fill();
+
+                ctx.globalAlpha = t * 0.9;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (t > 0.5 && p.size >= 2) {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.globalAlpha = (t - 0.5) * 1.2;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, currentSize * 0.35, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+
+            ctx.globalCompositeOperation = prevComposite;
         }
 
-        ctx.globalCompositeOperation = prevComposite;
-
-        // Shockwave rings — these are few in number so shadowBlur is acceptable
+        // Shockwave rings
         for (const s of this.shockwaves) {
             const t = 1 - s.life / s.maxLife;
+            // GPU glow at shockwave centre
+            Renderer.addGlow(s.x, s.y, Renderer.colorToHex(s.color), s.radius * 2.5, (1 - t) * 0.8);
+
             ctx.globalAlpha = (1 - t) * 0.6;
             ctx.strokeStyle = s.color;
             ctx.lineWidth = 2 * (1 - t) + 0.5;
@@ -1967,7 +2898,15 @@ const Particles = {
         ctx.globalAlpha = 1;
     },
 
-    clear() { this.particles.length = 0; this.shockwaves.length = 0; }
+    clear() {
+        if (Renderer.usePixi && Renderer.particleLayer) {
+            for (const p of this.particles) {
+                if (p._pp) Renderer.particleLayer.removeParticle(p._pp);
+            }
+        }
+        this.particles.length = 0;
+        this.shockwaves.length = 0;
+    }
 };
 
 
@@ -2063,7 +3002,7 @@ const Transition = {
 
 // === bullets.js ===
 // ============================================================
-//  BULLET POOL — optimised: no shadowBlur, hand-drawn glow
+//  BULLET POOL — optimised with hand-drawn glow
 // ============================================================
 class BulletPool {
     constructor(maxSize = 500) {
@@ -2082,8 +3021,34 @@ class BulletPool {
             active: true,
             type: opts.type || 'normal',
             life: opts.life || 5,
-            grazed: false
+            grazed: false,
+            pierce: !!opts.pierce,          // passes through enemies (hits each once)
+            harmless: opts.harmless || 0,   // seconds of telegraph before it can hit
+            turnRate: opts.turnRate || 5.0, // homing turn rate (rad/s)
+            _p: null,   // Pixi outer glow Particle
+            _pc: null,  // Pixi white-core Particle
         };
+        if (Renderer.usePixi && Renderer.bulletLayer && Renderer.glowTex) {
+            const hexColor = Renderer.colorToHex(bullet.color);
+            const outerScale = (bullet.radius * 5) / 32;
+            const coreScale  = (bullet.radius * 0.8) / 32;
+            bullet._p = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: outerScale, scaleY: outerScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: hexColor, alpha: 0.8,
+            });
+            bullet._pc = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: coreScale, scaleY: coreScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: 0xffffff, alpha: 0.95,
+            });
+            Renderer.bulletLayer.addParticle(bullet._p);
+            Renderer.bulletLayer.addParticle(bullet._pc);
+        }
         this.pool.push(bullet);
         return bullet;
     }
@@ -2093,6 +3058,7 @@ class BulletPool {
             const b = this.pool[i];
             b.prevX = b.x;
             b.prevY = b.y;
+            if (b.harmless > 0) b.harmless = Math.max(0, b.harmless - dt);
 
             if (b.type === 'homing' && homingTargets && homingTargets.length > 0) {
                 let nearest = null, nearDist = Infinity;
@@ -2107,8 +3073,7 @@ class BulletPool {
                     let diff = desired - current;
                     while (diff > Math.PI) diff -= Math.PI * 2;
                     while (diff < -Math.PI) diff += Math.PI * 2;
-                    const turnRate = 5.0;
-                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), b.turnRate * dt);
                     const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
                     b.vx = Math.cos(newAngle) * speed;
                     b.vy = Math.sin(newAngle) * speed;
@@ -2119,12 +3084,37 @@ class BulletPool {
             b.y += b.vy * dt;
             b.life -= dt;
             if (b.x < -20 || b.x > PLAY_W + 20 || b.y < -20 || b.y > PLAY_H + 20 || b.life <= 0 || !b.active) {
+                if (b._p)  { Renderer.bulletLayer.removeParticle(b._p);  b._p  = null; }
+                if (b._pc) { Renderer.bulletLayer.removeParticle(b._pc); b._pc = null; }
                 this.pool.splice(i, 1);
+            } else if (b._p) {
+                // Sync Pixi particle positions each frame
+                const outerScale = (b.radius * 5) / 32;
+                const coreScale  = (b.radius * 0.8) / 32;
+                b._p.x = b.x;  b._p.y = b.y;
+                b._p.scaleX = outerScale; b._p.scaleY = b.type === 'laser' ? outerScale * 3 : outerScale;
+                b._pc.x = b.x; b._pc.y = b.y;
+                b._pc.scaleX = coreScale; b._pc.scaleY = b.type === 'laser' ? coreScale * 3 : coreScale;
+                // Telegraphed bullets stay faint until they become dangerous
+                b._p.alpha = b.harmless > 0 ? 0.25 : 0.8;
+                b._pc.alpha = b.harmless > 0 ? 0.2 : 0.95;
+                if (b.type === 'homing') {
+                    b._p.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+                }
             }
         }
     }
 
     draw(ctx) {
+        // In Pixi mode the particles are synced in update(); only keep addGlow for bloom source
+        if (Renderer.usePixi) {
+            for (const b of this.pool) {
+                Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 7, 0.5);
+            }
+            return;
+        }
+
+        // Canvas 2D fallback path
         const prevComposite = ctx.globalCompositeOperation;
         ctx.globalCompositeOperation = 'lighter';
 
@@ -2143,11 +3133,25 @@ class BulletPool {
     }
 
     _drawNormal(ctx, b) {
+        if (b.harmless > 0) {
+            // Telegraph: faint outline only
+            ctx.globalAlpha = 0.35;
+            ctx.strokeStyle = b.color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            return;
+        }
+        // GPU glow halo behind bullet
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
+
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
         if (trailLen > 2) {
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = b.color;
             ctx.beginPath();
             ctx.moveTo(b.x + b.radius * 0.5, b.y);
@@ -2158,11 +3162,11 @@ class BulletPool {
             ctx.fill();
         }
 
-        // Soft outer glow (replaces shadowBlur)
-        ctx.globalAlpha = 0.2;
+        // Soft outer glow
+        ctx.globalAlpha = 0.35;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 2.2, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, b.radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Main bullet body
@@ -2180,6 +3184,9 @@ class BulletPool {
     }
 
     _drawHoming(ctx, b) {
+        // GPU glow halo
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.45);
+
         const angle = Math.atan2(b.vy, b.vx);
 
         // Exhaust trail
@@ -2217,6 +3224,9 @@ class BulletPool {
     }
 
     _drawLaser(ctx, b) {
+        // GPU glow halo (elongated by using wider size)
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.5);
+
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 
         // Wide outer glow
@@ -2234,7 +3244,15 @@ class BulletPool {
         ctx.fillRect(b.x - b.radius * 0.35, b.y - len * 0.6, b.radius * 0.7, len * 1.2);
     }
 
-    clear() { this.pool.length = 0; }
+    clear() {
+        if (Renderer.usePixi && Renderer.bulletLayer) {
+            for (const b of this.pool) {
+                if (b._p)  Renderer.bulletLayer.removeParticle(b._p);
+                if (b._pc) Renderer.bulletLayer.removeParticle(b._pc);
+            }
+        }
+        this.pool.length = 0;
+    }
 }
 
 
@@ -2246,7 +3264,7 @@ const Scoring = {
     score: 0,
     chain: 0,
     chainTimer: 0,
-    chainTimerMax: 2.5,
+    chainTimerMax: 3.0,
     maxChain: 0,
     multiplier: 1,
     surgeCharge: 0,
@@ -2262,9 +3280,18 @@ const Scoring = {
     bombCount: 0,
     isPerfect: true,  // No deaths AND no bombs this level
 
-    // Graze thresholds for bonus popups
+    // Graze thresholds for bonus popups (per level)
     grazeThresholds: [25, 50, 100, 200, 500],
     nextGrazeThreshold: 0,
+
+    // Per-level counters (end-of-level bonuses and level records use these)
+    levelStartScore: 0,
+    levelGrazes: 0,
+    levelMaxChain: 0,
+
+    // Extra lives at score milestones (normal-difficulty points; scaled by the score multiplier)
+    extendThresholds: [300000, 1000000, 2000000, 4000000],
+    nextExtend: 0,
 
     // Floating popup text system
     popups: [],
@@ -2289,6 +3316,7 @@ const Scoring = {
         this.chain++;
         this.chainTimer = this.chainTimerMax / GameConfig.chainTimerSpeed;
         if (this.chain > this.maxChain) this.maxChain = this.chain;
+        if (this.chain > this.levelMaxChain) this.levelMaxChain = this.chain;
         this._updateMultiplier();
 
         // Point-blank bonus: 3x within 60px, 2x within 120px, 1.5x within 200px
@@ -2305,6 +3333,9 @@ const Scoring = {
         let pts = basePoints * this.multiplier * pointBlankMult * GameConfig.scoreMultiplier;
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
+
+        // Each kill contributes a little surge charge; grazing (5 each) is the main source
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 1.5);
 
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
@@ -2325,13 +3356,14 @@ const Scoring = {
 
     addGraze() {
         this.grazeCount++;
+        this.levelGrazes++;
         const reward = 5 * (GameConfig.graze.rewardMultiplier || 1);
         this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + reward);
         this.score += Math.floor(10 * GameConfig.scoreMultiplier);
 
         // Graze threshold milestones
         if (this.nextGrazeThreshold < this.grazeThresholds.length &&
-            this.grazeCount >= this.grazeThresholds[this.nextGrazeThreshold]) {
+            this.levelGrazes >= this.grazeThresholds[this.nextGrazeThreshold]) {
             const count = this.grazeThresholds[this.nextGrazeThreshold];
             const bonusScore = count * 10;
             this.score += Math.floor(bonusScore * GameConfig.scoreMultiplier);
@@ -2340,13 +3372,51 @@ const Scoring = {
         }
     },
 
+    // A player shot connected: keeps the chain timer topped up while you keep
+    // hitting (DoDonPachi-style), so skilled players can bridge wave gaps on tough enemies
+    onHit() {
+        if (this.chain > 0 && this.chainTimer > 0) {
+            const max = this.chainTimerMax / GameConfig.chainTimerSpeed;
+            this.chainTimer = Math.min(max, this.chainTimer + 0.08);
+        }
+    },
+
+    // Start-of-level bookkeeping (level score, per-level bonus counters, milestones)
+    beginLevel() {
+        this.levelStartScore = this.score;
+        this.levelGrazes = 0;
+        this.levelMaxChain = 0;
+        this.levelDeaths = 0;
+        this.levelBombs = 0;
+        this.nextGrazeThreshold = 0;
+    },
+
+    get levelScore() {
+        return this.score - this.levelStartScore;
+    },
+
+    _checkExtends() {
+        const mult = GameConfig.scoreMultiplier || 1;
+        while (this.nextExtend < this.extendThresholds.length &&
+               this.score >= this.extendThresholds[this.nextExtend] * mult) {
+            this.nextExtend++;
+            if (Player.lives < 9) {
+                Player.lives++;
+                this.spawnPopup('EXTEND! 1UP', '#00ff88', 28);
+                Audio.playPowerUp();
+            }
+        }
+    },
+
     recordDeath() {
         this.deathCount++;
+        this.levelDeaths++;
         this.isPerfect = false;
     },
 
     recordBomb() {
         this.bombCount++;
+        this.levelBombs++;
         this.isPerfect = false;
     },
 
@@ -2362,14 +3432,17 @@ const Scoring = {
     },
 
     _updateMultiplier() {
-        if (this.chain >= 100) this.multiplier = 8;
-        else if (this.chain >= 50) this.multiplier = 5;
-        else if (this.chain >= 25) this.multiplier = 3;
+        // Tiers sized so 5x is reachable with good play and 8x is an expert goal
+        // (the old 50/100 thresholds were never reached in simulated campaigns)
+        if (this.chain >= 60) this.multiplier = 8;
+        else if (this.chain >= 35) this.multiplier = 5;
+        else if (this.chain >= 20) this.multiplier = 3;
         else if (this.chain >= 10) this.multiplier = 2;
         else this.multiplier = 1;
     },
 
     update(dt) {
+        this._checkExtends();
         if (this.chainTimer > 0) {
             this.chainTimer -= dt;
             if (this.chainTimer <= 0) {
@@ -2398,14 +3471,11 @@ const Scoring = {
             const scale = 1 + (1 - p.life / p.maxLife) * 0.3; // Grow slightly over time
             ctx.globalAlpha = alpha;
             ctx.fillStyle = p.color;
-            ctx.shadowColor = p.color;
-            ctx.shadowBlur = 0;
             ctx.font = 'bold ' + Math.round(p.size * scale) + 'px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
             ctx.fillText(p.text, p.x, p.y);
         }
         ctx.globalAlpha = 1;
-        ctx.shadowBlur = 0;
     },
 
     breakChain() {
@@ -2426,8 +3496,9 @@ const Scoring = {
         this.surgeActive = false;
         this.surgeDuration = 0;
         this.nextGrazeThreshold = 0;
-        // Keep: score, maxChain, grazeCount, deathCount, bombCount, isPerfect
+        // Keep: score, maxChain, grazeCount, deathCount, bombCount, isPerfect, nextExtend
         this.popups = [];
+        this.beginLevel();
     },
 
     reset() {
@@ -2444,7 +3515,9 @@ const Scoring = {
         this.bombCount = 0;
         this.isPerfect = true;
         this.nextGrazeThreshold = 0;
+        this.nextExtend = 0;
         this.popups = [];
+        this.beginLevel();
     }
 };
 
@@ -2473,7 +3546,7 @@ const Enemies = {
         },
         phase_shifter: {
             hp: 4, speed: 100, radius: 15, score: 600, color: '#ff00ff', accent: '#ff88ff', bulletColor: '#cc00ff',
-            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.2, cancelBullets: true
+            fireRate: 3.0, bulletSpeed: 160, dropChance: 0.20, cancelBullets: true
         },
         shielded_cruiser: {
             hp: 8, shieldHp: 3, speed: 40, radius: 28, score: 1000, color: '#8b00ff', accent: '#aa44ff', bulletColor: '#6600cc',
@@ -2481,7 +3554,7 @@ const Enemies = {
         },
         bomber: {
             hp: 6, speed: 50, radius: 24, score: 700, color: '#ff4400', accent: '#ff6622', bulletColor: '#ff2200',
-            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.3, cancelBullets: true
+            fireRate: 2.5, bulletSpeed: 110, dropChance: 0.30, cancelBullets: true
         },
         sniper: {
             hp: 2, speed: 20, radius: 14, score: 400, color: '#ffff00', accent: '#ffffaa', bulletColor: '#ffcc00',
@@ -2493,15 +3566,29 @@ const Enemies = {
         },
         shield_wall: {
             hp: 3, speed: 60, radius: 16, score: 250, color: '#4488ff', accent: '#66aaff', bulletColor: '#2266dd',
-            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.1
+            fireRate: 2.0, bulletSpeed: 160, dropChance: 0.10
         }
     },
+
+    // Enemies whose patterns scale bullet COUNT with density; all others scale fire frequency
+    COUNT_SCALED: { phase_shifter: true, bomber: true },
+    // Seconds an enemy on these paths stays before retreating (genre convention: nothing waits forever)
+    LIFETIMES: { hover: 14, strafe: 16 },
+    CARRIER_MAX_LAUNCHES: 6,
+    NO_FIRE_RADIUS: 110,          // no point-blank shots at the player
+    FIRE_CEILING: PLAY_H * 0.75,  // enemies below this line stop firing
 
     spawn(type, x, y, movePath) {
         const def = this.types[type];
         if (!def) return;
         const hpScale = GameConfig._levelHpScale || 1;
         const spdScale = GameConfig._levelSpeedScale || 1;
+        const rateScale = GameConfig._levelFireRateScale || 1;
+        const density = GameConfig.bulletDensity || 1;
+        const densityRate = this.COUNT_SCALED[type] ? 1 : density;
+        const fireRate = def.fireRate / (rateScale * densityRate);
+        // Spawned beside the play area (e.g. "sides" formation): fly in before following the path
+        const entryX = x < 0 ? 70 : x > PLAY_W ? PLAY_W - 70 : null;
         const enemy = {
             type, x, y,
             hp: Math.ceil(def.hp * hpScale),
@@ -2514,17 +3601,22 @@ const Enemies = {
             color: def.color,
             accent: def.accent || def.color,
             bulletColor: def.bulletColor || '#ff1493',
-            fireRate: def.fireRate / spdScale,
-            fireTimer: def.fireRate * Math.random(),
+            fireRate,
+            fireTimer: fireRate * Math.random(),
             bulletSpeed: def.bulletSpeed * spdScale,
             dropChance: def.dropChance,
             cancelBullets: def.cancelBullets || false,
             movePath: movePath || 'straight_down',
             moveTimer: 0,
+            entryX,
+            retreating: false,
+            launches: 0,
             active: true,
             flashTimer: 0,
             // Phase shifter specific
             teleportTimer: type === 'phase_shifter' ? 3.0 : 0,
+            warpTimer: 0,
+            warpTo: null,
             // Shielded cruiser specific
             shieldAngle: 0,
             // Sniper specific
@@ -2566,26 +3658,40 @@ const Enemies = {
             e.prevX = oldX;
             e.prevY = oldY;
 
-            // Firing
+            // Firing — only on screen, above the fire ceiling, and not point-blank on the player
             e.fireTimer -= dt;
-            if (e.fireTimer <= 0 && e.y > 0 && e.y < PLAY_H - 50) {
-                this._firePattern(e, playerX, playerY);
+            if (e.fireTimer <= 0) {
+                const onScreen = e.x > 0 && e.x < PLAY_W && e.y > 0 && e.y < this.FIRE_CEILING;
+                const pdx = playerX - e.x, pdy = playerY - e.y;
+                const tooClose = pdx * pdx + pdy * pdy < this.NO_FIRE_RADIUS * this.NO_FIRE_RADIUS;
+                if (onScreen && !tooClose && e.warpTimer <= 0 && !e.retreating) {
+                    this._firePattern(e, playerX, playerY);
+                }
                 e.fireTimer = e.fireRate;
             }
 
-            // Phase shifter teleport
-            if (e.type === 'phase_shifter') {
-                e.teleportTimer -= dt;
-                if (e.teleportTimer <= 0) {
-                    e.x = 40 + Math.random() * (PLAY_W - 80);
-                    e.y = 40 + Math.random() * (PLAY_H * 0.4);
-                    e.teleportTimer = 2.5 + Math.random();
-                    Particles.spawn(e.x, e.y, 8, { color: e.bulletColor, speed: 80, life: 0.3 });
+            // Phase shifter teleport — telegraphed: a marker appears at the destination first
+            if (e.type === 'phase_shifter' && !e.retreating) {
+                if (e.warpTimer > 0) {
+                    e.warpTimer -= dt;
+                    if (e.warpTimer <= 0) {
+                        e.x = e.warpTo.x;
+                        e.y = e.warpTo.y;
+                        e.fireTimer = Math.max(e.fireTimer, 0.8); // no instant shot after arriving
+                        Particles.spawn(e.x, e.y, 8, { color: e.bulletColor, speed: 80, life: 0.3 });
+                    }
+                } else {
+                    e.teleportTimer -= dt;
+                    if (e.teleportTimer <= 0) {
+                        e.warpTo = { x: 40 + Math.random() * (PLAY_W - 80), y: 40 + Math.random() * (PLAY_H * 0.4) };
+                        e.warpTimer = 0.45;
+                        e.teleportTimer = 2.5 + Math.random();
+                    }
                 }
             }
 
-            // Sniper aim tracking
-            if (e.type === 'sniper') {
+            // Sniper aim tracking — locks 0.3 s before the shot so the laser sight is honest
+            if (e.type === 'sniper' && e.fireTimer > 0.3) {
                 e.aimAngle = Math.atan2(playerY - e.y, playerX - e.x);
             }
 
@@ -2594,16 +3700,41 @@ const Enemies = {
                 e.shieldAngle += dt * 1.5;
             }
 
-            // Remove if off screen
-            if (e.y > PLAY_H + 60 || e.x < -60 || e.x > PLAY_W + 60) {
+            // Remove if off screen (retreating enemies leave through the top)
+            if (e.y > PLAY_H + 60 || e.x < -60 || e.x > PLAY_W + 60 || (e.retreating && e.y < -60)) {
                 this.list.splice(i, 1);
             }
         }
 
-        this.enemyBullets.update(dt);
+        // Enemy homing bullets track the player
+        this.enemyBullets.update(dt, Player.alive ? [{ x: playerX, y: playerY }] : null);
+    },
+
+    // Every remaining enemy leaves the screen (used when the boss arrives)
+    retreatAll() {
+        for (const e of this.list) e.retreating = true;
     },
 
     _updateMovement(e, dt) {
+        // Mid-bosses have their own movement (midbosses.js) until they retreat
+        if (e.midboss && !e.retreating) {
+            MidBoss.updateMovement(e, dt, Player.x);
+            return;
+        }
+        // Fly in from beside the play area first
+        if (e.entryX !== null) {
+            const step = Math.max(80, e.speed) * 1.5 * dt;
+            e.x += Math.max(-step, Math.min(step, e.entryX - e.x));
+            if (Math.abs(e.x - e.entryX) < 1) { e.entryX = null; e.moveTimer = 0; }
+            return;
+        }
+        // Retreat: leave upwards after the path's lifetime (or when told to)
+        const lifetime = this.LIFETIMES[e.movePath];
+        if (lifetime && e.moveTimer > lifetime) e.retreating = true;
+        if (e.retreating) {
+            e.y -= Math.max(90, e.speed * 1.5) * dt;
+            return;
+        }
         switch (e.movePath) {
             case 'straight_down':
                 e.y += e.speed * dt;
@@ -2638,6 +3769,10 @@ const Enemies = {
         const angle = Math.atan2(dy, dx);
         const bs = e.bulletSpeed;
 
+        if (e.midboss) {
+            MidBoss.fire(e, px, py);
+            return;
+        }
         switch (e.type) {
             case 'scout_drone':
                 // Fires from sensor at centre
@@ -2655,10 +3790,10 @@ const Enemies = {
                 }
                 break;
             case 'missile_turret':
-                // Fires from barrel tip
+                // Slow homing missile from the barrel tip — gentle turn rate, easy to out-turn
                 this.enemyBullets.spawn(e.x, e.y + e.radius * 0.85,
                     Math.cos(angle) * bs * 0.8, Math.sin(angle) * bs * 0.8,
-                    { color: e.bulletColor, radius: 4, life: 4 });
+                    { color: e.bulletColor, radius: 4, life: 4, type: 'homing', turnRate: 1.0 });
                 break;
             case 'phase_shifter': {
                 // Radial burst from energy core (centre is fine)
@@ -2699,15 +3834,16 @@ const Enemies = {
                 break;
             }
             case 'sniper': {
-                // Fires from barrel end
+                // Fires from barrel end along the locked aim (matches the laser sight)
                 this.enemyBullets.spawn(e.x, e.y + e.radius * 0.9,
-                    Math.cos(angle) * bs, Math.sin(angle) * bs,
+                    Math.cos(e.aimAngle) * bs, Math.sin(e.aimAngle) * bs,
                     { color: e.bulletColor, radius: 4, life: 3 });
                 break;
             }
             case 'carrier':
                 // Drones launch from hangar bay
-                if (Enemies.list.length < 30) {
+                if (Enemies.list.length < 30 && e.launches < this.CARRIER_MAX_LAUNCHES) {
+                    e.launches++;
                     Enemies.spawn('scout_drone', e.x + (Math.random() - 0.5) * 15, e.y + e.radius * 0.6, 'straight_down');
                 }
                 break;
@@ -2725,6 +3861,7 @@ const Enemies = {
         if (enemy.shieldHp > 0) {
             enemy.shieldHp -= damage;
             enemy.flashTimer = 0.08;
+            Particles.spawn(enemy.x, enemy.y, 3, { color: enemy.bulletColor, speed: 60, life: 0.15, size: 1.5 });
             if (enemy.shieldHp <= 0) {
                 Particles.spawn(enemy.x, enemy.y, 12, { color: enemy.bulletColor, speed: 120, life: 0.4 });
             }
@@ -2732,6 +3869,10 @@ const Enemies = {
         }
         enemy.hp -= damage;
         enemy.flashTimer = 0.08;
+        // Impact spark burst at hit point
+        Particles.spawn(enemy.x, enemy.y, 5, { color: '#ffffff', speed: 120, life: 0.15, size: 2 });
+        // GPU glow flash
+        Renderer.addGlow(enemy.x, enemy.y, 0xffffff, enemy.radius * 3, 0.7);
         if (enemy.hp <= 0) {
             this._onDeath(enemy, playerDist);
             return true;
@@ -2741,16 +3882,19 @@ const Enemies = {
 
     _onDeath(enemy, playerDist) {
         enemy.active = false;
-        // Explosion particles — apply equipped explosion cosmetic
-        const particleCount = enemy.radius > 20 ? 30 : 15;
+        const isBig = enemy.radius > 20;
         const explColor = Hangar.explosionColor;
-        Particles.spawn(enemy.x, enemy.y, particleCount, { color: explColor, speed: 150, life: 0.5, size: 2 });
-        Particles.spawn(enemy.x, enemy.y, Math.floor(particleCount * 0.4), { color: enemy.accent || explColor, speed: 120, life: 0.4, size: 2.5 });
-        Particles.spawn(enemy.x, enemy.y, 6, { color: '#ffffff', speed: 80, life: 0.3, size: 3 });
-        // Shockwave ring for medium+ enemies
-        if (enemy.radius > 15) {
-            Particles.spawnShockwave(enemy.x, enemy.y, explColor, enemy.radius * 3, 0.35);
-        }
+        const accent = enemy.accent || explColor;
+
+        // Layered explosion: use spawnExplosion for the main burst
+        Particles.spawnExplosion(enemy.x, enemy.y, {
+            style: isBig ? 'large' : 'medium',
+            color: explColor,
+            color2: '#ffffff',
+        });
+        // Extra accent-coloured sparks for visual variety
+        Particles.spawn(enemy.x, enemy.y, isBig ? 20 : 10, { color: accent, speed: 180, life: 0.7, size: 3 });
+        if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
         if (enemy.cancelBullets) {
@@ -2766,6 +3910,7 @@ const Enemies = {
             }
         }
 
+        if (enemy.midboss) MidBoss.onDefeat(enemy);
         Scoring.addKill(enemy.score, playerDist);
         Achievements.onEnemyKill();
         Audio.playExplosionSmall();
@@ -2782,6 +3927,18 @@ const Enemies = {
 
     draw(ctx) {
         const isGlitchLevel = Background.bgType === 'void';
+        // Warp-in markers (phase shifter and teleporting mid-boss telegraph)
+        for (const e of this.list) {
+            if (!(e.warpTimer > 0) || !e.warpTo) continue;
+            const t = Math.max(0, 1 - e.warpTimer / 0.5);
+            ctx.strokeStyle = e.color;
+            ctx.globalAlpha = 0.3 + 0.5 * t;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(e.warpTo.x, e.warpTo.y, e.radius * (2 - t), 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
         for (const e of this.list) {
             ctx.save();
             // Glitch jitter for Level 6
@@ -2798,12 +3955,9 @@ const Enemies = {
             const glitchFlash = isGlitchLevel && Math.random() < 0.02;
             if (e.flashTimer > 0 || glitchFlash) {
                 ctx.fillStyle = glitchFlash ? '#ff00ff' : '#ffffff';
-                ctx.shadowColor = glitchFlash ? '#ff00ff' : '#ffffff';
             } else {
                 ctx.fillStyle = e.color;
-                ctx.shadowColor = e.color;
             }
-            ctx.shadowBlur = 0; // No shadowBlur in gameplay — use hand-drawn glow for performance
 
             // Draw based on type
             const r = e.radius;
@@ -3057,6 +4211,10 @@ const Enemies = {
                     break;
 
                 default:
+                    if (e.midboss) {
+                        MidBoss.draw(ctx, e, flash);
+                        break;
+                    }
                     // Fallback circle
                     ctx.beginPath();
                     ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
@@ -3064,8 +4222,8 @@ const Enemies = {
                     break;
             }
 
-            // HP bar for tough enemies
-            if (e.maxHp > 2) {
+            // HP bar for tough enemies (mid-bosses use the top-of-screen bar)
+            if (e.maxHp > 2 && !e.midboss) {
                 const barW = e.radius * 2;
                 const barH = 3;
                 const barY = -e.radius - 8;
@@ -3078,6 +4236,8 @@ const Enemies = {
 
             ctx.restore();
         }
+
+        MidBoss.drawBar(ctx);
 
         // Apply colorblind override to enemy bullets before drawing
         if (Settings.values.colorblind) {
@@ -3107,13 +4267,14 @@ const PowerUps = {
     list: [],
     types: ['spread', 'homing', 'laser', 'drone'],
 
+    colors: { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' },
+
     spawn(x, y, forceType) {
         const type = forceType || this.types[Math.floor(Math.random() * this.types.length)];
-        const colors = { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' };
         this.list.push({
             x, y,
             type,
-            color: colors[type],
+            color: this.colors[type],
             vy: 50,
             life: 999,
             radius: 10,
@@ -3139,12 +4300,14 @@ const PowerUps = {
             const pulse = 0.7 + Math.sin(p.bobTimer * 1.5) * 0.3;
             const rot = p.bobTimer * 0.8;
 
+            // Dynamic light — pulsing glow around power-ups
+            Renderer.addGlow(p.x, p.y + bob, Renderer.colorToHex(p.color), p.radius * 6, 0.3 + pulse * 0.4);
+
             ctx.save();
             ctx.translate(p.x, p.y + bob);
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;
-            ctx.shadowColor = p.color;
             
             ctx.lineWidth = 1.5;
             ctx.globalAlpha = 0.3 + Math.sin(p.bobTimer * 2) * 0.15;
@@ -3155,7 +4318,6 @@ const PowerUps = {
             // Inner filled hexagon background
             ctx.globalAlpha = 0.5 * pulse;
             ctx.fillStyle = p.color;
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             for (let j = 0; j < 6; j++) {
                 const a = (Math.PI * 2 / 6) * j + rot * 0.3;
@@ -3168,7 +4330,6 @@ const PowerUps = {
             // Weapon icon — drawn in white over the colored background
             ctx.globalAlpha = 1;
             
-            ctx.shadowColor = '#ffffff';
 
             switch (p.type) {
                 case 'spread':
@@ -3279,7 +4440,338 @@ const PowerUps = {
 };
 
 
+// === midbosses.js ===
+// ============================================================
+//  MID-BOSSES
+// ============================================================
+// One mid-boss per level, around the middle of the stage (genre convention:
+// Cave, Touhou). A mid-boss is a heavy enemy registered in Enemies.types, so it
+// reuses spawning, level HP scaling, collision and homing; this module adds its
+// movement, attack patterns, drawing and rewards.
+//
+// While a mid-boss is alive the wave timer is paused (WaveSystem), so the stage
+// waits for it. If it isn't destroyed within MIDBOSS_TIME_LIMIT it retreats
+// without its reward (like a Touhou mid-boss).
+
+const MIDBOSS_TIME_LIMIT = 35;   // seconds on screen before it retreats
+const MIDBOSS_ENTRY_Y = 190;     // lower than the main boss, so spread weapons can reach it
+const MIDBOSS_BONUS = 8000;      // score for destroying it (× difficulty multiplier)
+const MIDBOSS_DROPS = 2;         // guaranteed power-ups on defeat
+
+const MidBossTypes = {
+    // Level 1 — heavy gunship: aimed fans and rings, sways across the top
+    sentinel: {
+        name: 'SENTINEL', level: 1, movement: 'sway',
+        color: '#ff6600', accent: '#ffcc44', bulletColor: '#ff4400',
+        patterns: ['aimedFan', 'ring', 'wideFan'], interval: 1.1,
+    },
+    // Level 2 — industrial walker: bomb drops and walls with a gap near the player
+    forge_walker: {
+        name: 'FORGE WALKER', level: 2, movement: 'sway',
+        color: '#cc4400', accent: '#ff8844', bulletColor: '#ff2200',
+        patterns: ['bombDrop', 'gapWall', 'aimedHeavy'], interval: 1.2,
+    },
+    // Level 3 — debris hauler: spiral bursts and thrown debris
+    debris_hauler: {
+        name: 'DEBRIS HAULER', level: 3, movement: 'sway',
+        color: '#886644', accent: '#ccaa77', bulletColor: '#00ffaa',
+        patterns: ['spiral', 'debrisThrow', 'ring'], interval: 1.0,
+    },
+    // Level 4 — strike leader: darts between positions, fast fans, calls in scouts
+    strike_leader: {
+        name: 'STRIKE LEADER', level: 4, movement: 'dart', hpMult: 0.6, // mobile: lower HP (like the Duo)
+        color: '#ffaa00', accent: '#ffdd66', bulletColor: '#ff6600',
+        patterns: ['aimedFanFast', 'callScouts', 'crossStreams'], interval: 1.0,
+    },
+    // Level 5 — core warden: telegraphed teleports, double rings, triple spiral
+    core_warden: {
+        name: 'CORE WARDEN', level: 5, movement: 'teleport',
+        color: '#cc44ff', accent: '#ff88ff', bulletColor: '#cc00ff',
+        patterns: ['doubleRing', 'tripleSpiral', 'aimedFan'], interval: 0.95,
+    },
+    // Level 6 — glitch echo: mirrors the player and fires a copy of their spread
+    glitch_echo: {
+        name: 'GLITCH ECHO', level: 6, movement: 'mirror',
+        color: '#00ffff', accent: '#ff00ff', bulletColor: '#00ffff',
+        patterns: ['mirrorSpread', 'randomBurst', 'ringAimed'], interval: 0.9,
+    },
+};
+
+// Register as enemy types: ~25 s to destroy at the power a player typically has at that point
+for (const [id, def] of Object.entries(MidBossTypes)) {
+    Enemies.types[id] = {
+        hp: Math.round(250 * (def.hpMult || 1)), speed: 70, radius: 40, score: 5000,
+        color: def.color, accent: def.accent, bulletColor: def.bulletColor,
+        fireRate: def.interval, bulletSpeed: 150, dropChance: 0, cancelBullets: true,
+    };
+    Enemies.COUNT_SCALED[id] = true; // density scales bullet counts, not fire frequency
+}
+
+const MidBoss = {
+    isType(type) { return !!MidBossTypes[type]; },
+
+    // The active mid-boss (at most one), or null
+    current() {
+        for (const e of Enemies.list) if (e.midboss && !e.retreating) return e;
+        return null;
+    },
+
+    spawn(type) {
+        const def = MidBossTypes[type];
+        if (!def) return null;
+        const e = Enemies.spawn(type, PLAY_W / 2, -60, 'midboss');
+        if (!e) return null;
+        e.midboss = def;
+        e.patternIndex = 0;
+        e.fireTimer = 1.5;          // grace period while it enters
+        e.onScreenTime = 0;
+        e.dartTarget = PLAY_W / 2;
+        Scoring.spawnPopup('WARNING — ' + def.name, '#ff4466', 22);
+        Audio.playExplosionLarge();
+        return e;
+    },
+
+    _n(base) { return Math.max(3, Math.round(base * (GameConfig.bulletDensity || 1))); },
+
+    updateMovement(e, dt, playerX) {
+        const def = e.midboss;
+        if (e.y < MIDBOSS_ENTRY_Y - 1 && e.onScreenTime < 3) {
+            e.y += Math.min(90 * dt, MIDBOSS_ENTRY_Y - e.y);
+            return;
+        }
+        e.onScreenTime += dt;
+        if (e.onScreenTime > MIDBOSS_TIME_LIMIT) {
+            if (!e.retreating) Scoring.spawnPopup(def.name + ' ESCAPED', '#888888', 18);
+            e.retreating = true;
+            return;
+        }
+        const t = e.moveTimer;
+        switch (def.movement) {
+            // Movement speeds stay low (≤ ~140 px/s): shots take ~1 s to reach it, so a
+            // fast mid-boss can't be hit at all from the bottom of the screen
+            case 'sway':
+                e.x += (PLAY_W / 2 + Math.sin(t * 0.35) * 150 - e.x) * Math.min(1, dt * 2);
+                e.y = MIDBOSS_ENTRY_Y + Math.sin(t * 1.1) * 20;
+                break;
+            case 'dart':
+                // Dart to one of three positions, then hold there briefly (a window to hit it)
+                if (Math.abs(e.x - e.dartTarget) < 4) {
+                    e.dartDwell = (e.dartDwell || 0) + dt;
+                    if (e.dartDwell > 1.5) {
+                        e.dartDwell = 0;
+                        e.dartTarget = [140, PLAY_W / 2, PLAY_W - 140][Math.floor(Math.random() * 3)];
+                    }
+                }
+                e.x += Math.sign(e.dartTarget - e.x) * Math.min(Math.abs(e.dartTarget - e.x), 140 * dt);
+                e.y = MIDBOSS_ENTRY_Y + Math.sin(t * 2) * 15;
+                break;
+            case 'teleport':
+                if (e.warpTimer > 0) {
+                    e.warpTimer -= dt;
+                    if (e.warpTimer <= 0) { e.x = e.warpTo.x; e.y = e.warpTo.y; e.fireTimer = Math.max(e.fireTimer, 0.8); }
+                } else {
+                    e.teleportTimer = (e.teleportTimer || 4) - dt;
+                    if (e.teleportTimer <= 0) {
+                        e.warpTo = { x: 100 + Math.random() * (PLAY_W - 200), y: MIDBOSS_ENTRY_Y - 60 + Math.random() * 120 };
+                        e.warpTimer = 0.5;
+                        e.teleportTimer = 4;
+                    }
+                }
+                break;
+            case 'mirror':
+                e.x += Math.max(-90 * dt, Math.min(90 * dt, (PLAY_W - playerX) - e.x));
+                e.y = MIDBOSS_ENTRY_Y + Math.sin(t * 1.5) * 25;
+                break;
+        }
+        e.x = Math.max(50, Math.min(PLAY_W - 50, e.x));
+    },
+
+    fire(e, px, py) {
+        const def = e.midboss;
+        const pattern = def.patterns[e.patternIndex % def.patterns.length];
+        e.patternIndex++;
+        const B = Enemies.enemyBullets;
+        const bs = e.bulletSpeed;
+        const angle = Math.atan2(py - e.y, px - e.x);
+        const c = def.bulletColor, c2 = def.accent;
+        const ring = (count, speed, offset, color, radius) => {
+            for (let j = 0; j < count; j++) {
+                const a = (Math.PI * 2 / count) * j + offset;
+                B.spawn(e.x, e.y, Math.cos(a) * speed, Math.sin(a) * speed, { color, radius: radius || 3 });
+            }
+        };
+        const fan = (count, spreadRad, speed, color, radius) => {
+            for (let j = 0; j < count; j++) {
+                const a = angle + (count > 1 ? (j / (count - 1) - 0.5) * spreadRad : 0);
+                B.spawn(e.x, e.y + 20, Math.cos(a) * speed, Math.sin(a) * speed, { color, radius: radius || 3 });
+            }
+        };
+        switch (pattern) {
+            case 'aimedFan': fan(this._n(5), 0.6, bs * 1.1, c); break;
+            case 'wideFan': fan(this._n(9), 1.2, bs * 0.9, c2); break;
+            case 'aimedFanFast': fan(this._n(7), 0.7, bs * 1.35, c); break;
+            case 'aimedHeavy': fan(3, 0.35, bs * 1.2, c, 5); break;
+            case 'ring': ring(this._n(14), bs * 0.75, e.moveTimer, c2); break;
+            case 'doubleRing':
+                ring(this._n(12), bs * 0.65, 0, c);
+                ring(this._n(16), bs * 0.9, 0.2, c2);
+                break;
+            case 'spiral':
+                ring(this._n(18), bs * 0.85, e.moveTimer * 2.5, c);
+                break;
+            case 'tripleSpiral':
+                for (let s = 0; s < 3; s++) ring(this._n(6), bs * 0.9, e.moveTimer * 3 + s * 0.35, s === 1 ? c2 : c);
+                break;
+            case 'bombDrop': {
+                const n = this._n(4);
+                for (let j = 0; j < n; j++) {
+                    B.spawn(e.x + (j - (n - 1) / 2) * 26, e.y + 25, (Math.random() - 0.5) * 30, bs * 0.55, { color: c, radius: 6, life: 3 });
+                }
+                ring(this._n(8), bs * 0.5, 0, c2, 2.5);
+                break;
+            }
+            case 'gapWall': {
+                // Horizontal wall with a 90 px gap centred near the player
+                const n = this._n(14);
+                const gap = Math.max(60, Math.min(PLAY_W - 60, px + (Math.random() - 0.5) * 120));
+                for (let j = 0; j < n; j++) {
+                    const x = 10 + ((PLAY_W - 20) / (n - 1)) * j;
+                    if (Math.abs(x - gap) < 45) continue;
+                    B.spawn(x, e.y + 30, 0, bs * 0.6, { color: c2, radius: 3 });
+                }
+                break;
+            }
+            case 'debrisThrow':
+                if (Asteroids.active) {
+                    for (let j = -1; j <= 1; j += 2) {
+                        Asteroids.list.push({ x: e.x + j * 30, y: e.y + 30, vx: j * 40, vy: 110, radius: 12, hp: 2,
+                            destructible: true, rotation: 0, rotSpeed: 2 });
+                    }
+                }
+                fan(3, 0.3, bs, c);
+                break;
+            case 'callScouts':
+                for (let j = -1; j <= 1; j += 2) Enemies.spawn('scout_drone', e.x + j * 40, e.y + 30, 'straight_down');
+                break;
+            case 'crossStreams':
+                for (let j = 0; j < this._n(6); j++) {
+                    const a1 = 0.7 + j * 0.12, a2 = Math.PI - 0.7 - j * 0.12;
+                    B.spawn(e.x - 30, e.y, Math.cos(a1) * bs, Math.sin(a1) * bs, { color: c, radius: 3 });
+                    B.spawn(e.x + 30, e.y, Math.cos(a2) * bs, Math.sin(a2) * bs, { color: c2, radius: 3 });
+                }
+                break;
+            case 'mirrorSpread': fan(this._n(7), 0.9, bs, c); break;
+            case 'randomBurst':
+                for (let j = 0; j < this._n(16); j++) {
+                    const a = Math.PI * (0.1 + Math.random() * 0.8);
+                    const sp = bs * (0.6 + Math.random() * 0.6);
+                    B.spawn(e.x, e.y, Math.cos(a) * sp, Math.sin(a) * sp, { color: j % 2 ? c : c2, radius: 3 });
+                }
+                break;
+            case 'ringAimed':
+                ring(this._n(16), bs * 0.7, 0, c2);
+                fan(3, 0.25, bs * 1.2, c);
+                break;
+        }
+    },
+
+    // Destroyed (not escaped): bonus, screen-wide bullet cancel, guaranteed power-ups
+    onDefeat(e) {
+        const bonus = Math.floor(MIDBOSS_BONUS * GameConfig.scoreMultiplier);
+        Scoring.score += bonus;
+        Scoring.spawnPopup(e.midboss.name + ' DOWN  +' + bonus.toLocaleString(), '#ffff00', 22);
+        for (const b of Enemies.enemyBullets.pool) {
+            b.active = false;
+            Particles.spawn(b.x, b.y, 1, { color: '#00ffff', speed: 30, life: 0.6, size: 2 });
+        }
+        for (let i = 0; i < MIDBOSS_DROPS; i++) PowerUps.spawn(e.x + (i - 0.5) * 40, e.y);
+        Particles.spawn(e.x, e.y, 50, { color: e.color, speed: 260, life: 0.9, size: 4 });
+        ScreenShake.trigger(12, 0.6);
+        Audio.playExplosionLarge();
+    },
+
+    draw(ctx, e, flash) {
+        const r = e.radius;
+        const t = e.moveTimer;
+        // Hull: armoured hexagon
+        ctx.fillStyle = flash ? '#ffffff' : e.color;
+        ctx.beginPath();
+        for (let j = 0; j < 6; j++) {
+            const a = (Math.PI * 2 / 6) * j + Math.PI / 6;
+            ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.8);
+        }
+        ctx.closePath();
+        ctx.fill();
+        ctx.strokeStyle = flash ? '#ffffff' : e.accent;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // Rotating weapon ring
+        ctx.strokeStyle = e.accent;
+        ctx.globalAlpha = 0.6;
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.65, t * 2, t * 2 + Math.PI * 1.4);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+        // Core
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(0, 0, r * 0.22 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+    },
+
+    // Top-of-screen HP bar and timer (same place as the boss bar; they never overlap)
+    drawBar(ctx) {
+        const e = this.current();
+        if (!e || e.y < 0) return;
+        const barW = 200, barH = 6, barX = (PLAY_W - barW) / 2, barY = 15;
+        ctx.fillStyle = '#221100';
+        ctx.fillRect(barX, barY, barW, barH);
+        ctx.fillStyle = e.color;
+        ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '12px Share Tech Mono, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('MID-BOSS — ' + e.midboss.name, PLAY_W / 2, barY + barH + 12);
+        const timeLeft = Math.max(0, MIDBOSS_TIME_LIMIT - e.onScreenTime);
+        ctx.textAlign = 'right';
+        ctx.fillStyle = timeLeft <= 10 ? '#ff4444' : '#aaaaaa';
+        ctx.fillText(Math.ceil(timeLeft).toString(), barX + barW + 34, barY + barH);
+    },
+};
+
+
 // === waves.js ===
+// ============================================================
+//  SCHEDULER (game-time delayed actions)
+// ============================================================
+// Delayed spawns and state changes run on game time, not wall-clock time, so
+// they pause with the game and are discarded when a level restarts.
+const Scheduler = {
+    time: 0,
+    queue: [],
+
+    after(seconds, fn) {
+        this.queue.push({ at: this.time + Math.max(0, seconds), fn });
+    },
+
+    update(dt) {
+        this.time += dt;
+        // Run due items in order; items scheduled while running wait for the next update
+        const due = this.queue.filter(item => item.at <= this.time).sort((a, b) => a.at - b.at);
+        if (due.length === 0) return;
+        this.queue = this.queue.filter(item => item.at > this.time);
+        for (const item of due) item.fn();
+    },
+
+    get pending() { return this.queue.length; },
+
+    clear() {
+        this.time = 0;
+        this.queue = [];
+    }
+};
+
+
 // ============================================================
 //  WAVE SYSTEM (Data-driven level sequencer)
 // ============================================================
@@ -3294,17 +4786,20 @@ const WaveSystem = {
         this.waves = levelData.waves;
         this.currentWaveIndex = 0;
         this.levelTimer = 0;
+        this.waveTime = 0;
         this.levelComplete = false;
         this.bossActive = false;
     },
 
     update(dt) {
         this.levelTimer += dt;
+        // Wave schedule clock: paused while a mid-boss is on screen, so the stage waits for it
+        if (!MidBoss.current()) this.waveTime += dt;
 
-        // Spawn waves based on timing
-        while (this.currentWaveIndex < this.waves.length) {
+        // Spawn waves based on timing; nothing else spawns while a mid-boss is on screen
+        while (this.currentWaveIndex < this.waves.length && !MidBoss.current()) {
             const wave = this.waves[this.currentWaveIndex];
-            if (this.levelTimer >= wave.time) {
+            if (this.waveTime >= wave.time) {
                 this._spawnWave(wave);
                 this.currentWaveIndex++;
             } else {
@@ -3314,6 +4809,10 @@ const WaveSystem = {
     },
 
     _spawnWave(wave) {
+        if (wave.midboss) {
+            MidBoss.spawn(wave.midboss);
+            return;
+        }
         for (const group of wave.enemies) {
             for (let i = 0; i < group.count; i++) {
                 let x, y;
@@ -3341,18 +4840,21 @@ const WaveSystem = {
                         y = -20;
                 }
 
-                // Delayed spawn
-                setTimeout(() => {
-                    if (Game.state === 'playing') {
-                        Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
-                    }
-                }, (group.delay || 0) + i * (group.stagger || 200));
+                // Delayed spawn (game time — pauses with the game)
+                Scheduler.after(((group.delay || 0) + i * (group.stagger || 200)) / 1000, () => {
+                    Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                });
             }
         }
     },
 
+    // All waves dispatched and every delayed spawn has happened
+    allWavesSpawned() {
+        return this.currentWaveIndex >= this.waves.length && Scheduler.pending === 0;
+    },
+
     isComplete() {
-        return this.currentWaveIndex >= this.waves.length && Enemies.list.length === 0 && !this.bossActive;
+        return this.allWavesSpawned() && Enemies.list.length === 0 && !this.bossActive;
     }
 };
 
@@ -3396,6 +4898,7 @@ const LEVEL_1 = {
         ]},
 
         // ESCALATION (50-90s)
+        { time: 52, midboss: 'sentinel' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover' }] },
         { time: 56, enemies: [
             { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'zigzag' },
@@ -3420,7 +4923,15 @@ const LEVEL_1 = {
             { type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 300 },
             { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1000 },
             { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'straight_down', delay: 500 }
-        ]}
+        ]},
+
+        // FINALE (after the mid-boss): denser mixes, then a generous pre-boss wave
+        { time: 100, enemies: [{ type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 600 }] },
+        { time: 107, enemies: [{ type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover' }, { type: 'scout_drone', count: 6, formation: 'line', movePath: 'sweep_right', stagger: 150, delay: 800 }] },
+        { time: 114, enemies: [{ type: 'scout_drone', count: 10, formation: 'line', movePath: 'straight_down', stagger: 90 }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }] },
+        { time: 123, enemies: [{ type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe' }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'sweep_left', delay: 700 }] },
+        { time: 132, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 1, formation: 'random', movePath: 'hover', delay: 500 }, { type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'straight_down', delay: 1200 }] },
+        { time: 141, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
     ]
 };
 
@@ -3445,11 +4956,20 @@ const LEVEL_2 = {
         { time: 32, enemies: [{ type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover' }, { type: 'bomber', count: 1, formation: 'random', movePath: 'straight_down', delay: 500 }] },
         { time: 38, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }] },
         { time: 44, enemies: [{ type: 'sniper', count: 3, formation: 'line', movePath: 'hover' }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 48, midboss: 'forge_walker' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down' }, { type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
         { time: 60, enemies: [{ type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 500 }] },
         { time: 68, enemies: [{ type: 'bomber', count: 3, formation: 'line', movePath: 'straight_down', stagger: 600 }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'sweep_right', delay: 1000 }] },
         { time: 78, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 88, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 300 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
+
+        // FINALE: artillery push
+        { time: 96, enemies: [{ type: 'bomber', count: 2, formation: 'line', movePath: 'straight_down', stagger: 600 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 104, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'zigzag', stagger: 90 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 112, enemies: [{ type: 'sniper', count: 3, formation: 'line', movePath: 'hover' }, { type: 'scout_drone', count: 8, formation: 'line', movePath: 'sweep_right', stagger: 120, delay: 600 }] },
+        { time: 121, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 500 }, { type: 'gunship', count: 3, formation: 'random', movePath: 'strafe', delay: 1000 }] },
+        { time: 130, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'straight_down', delay: 600 }] },
+        { time: 139, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
     ]
 };
 
@@ -3469,10 +4989,19 @@ const LEVEL_3 = {
         { time: 30, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }] },
         { time: 36, enemies: [{ type: 'carrier', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }] },
         { time: 44, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'zigzag', delay: 500 }] },
+        { time: 48, midboss: 'debris_hauler' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'gunship', count: 4, formation: 'random', movePath: 'strafe' }, { type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover', delay: 800 }] },
         { time: 60, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
         { time: 70, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 600 }] },
         { time: 80, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+
+        // FINALE: deep debris — carriers and shifters in the rocks
+        { time: 90, enemies: [{ type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 99, enemies: [{ type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe' }, { type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 108, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', stagger: 500 }, { type: 'gunship', count: 2, formation: 'random', movePath: 'strafe', delay: 1000 }] },
+        { time: 117, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }] },
+        { time: 127, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'straight_down', stagger: 80 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }] },
+        { time: 137, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
     ]
 };
 
@@ -3492,10 +5021,19 @@ const LEVEL_4 = {
         { time: 28, enemies: [{ type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
         { time: 35, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
         { time: 42, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'shield_wall', count: 4, formation: 'line', movePath: 'straight_down', delay: 500, stagger: 100 }] },
+        { time: 46, midboss: 'strike_leader' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 50, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
         { time: 58, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
         { time: 68, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 78, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1000 }] },
+
+        // FINALE: the convoy's final approach
+        { time: 88, enemies: [{ type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 800 }] },
+        { time: 96, enemies: [{ type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 105, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80, delay: 1000 }] },
+        { time: 114, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
+        { time: 124, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 134, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }, { type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 70, delay: 1500 }] },
     ]
 };
 
@@ -3513,10 +5051,19 @@ const LEVEL_5 = {
         { time: 24, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover', stagger: 2000 }] },
         { time: 32, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 500 }, { type: 'gunship', count: 4, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
         { time: 40, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 2000 }] },
+        { time: 46, midboss: 'core_warden' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 48, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 60 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
         { time: 56, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 800 }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 66, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 3, formation: 'line', movePath: 'hover', delay: 1000 }] },
         { time: 76, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 400 }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 2000 }] },
+
+        // FINALE: the core's last defences
+        { time: 86, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 400 }, { type: 'scout_drone', count: 10, formation: 'line', movePath: 'zigzag', stagger: 80, delay: 600 }] },
+        { time: 95, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 104, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover', delay: 1000 }] },
+        { time: 113, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 60 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }] },
+        { time: 123, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 133, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 400 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 800 }] },
     ]
 };
 
@@ -3534,9 +5081,18 @@ const LEVEL_6 = {
         { time: 28, enemies: [{ type: 'shield_wall', count: 10, formation: 'line', movePath: 'straight_down', stagger: 50 }] },
         { time: 34, enemies: [{ type: 'phase_shifter', count: 4, formation: 'random', movePath: 'hover', stagger: 300 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
         { time: 42, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 46, midboss: 'glitch_echo' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'missile_turret', count: 3, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 4, formation: 'random', movePath: 'hover', delay: 500 }] },
         { time: 60, enemies: [{ type: 'bomber', count: 4, formation: 'random', movePath: 'straight_down', stagger: 300 }, { type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 70, enemies: [{ type: 'carrier', count: 3, formation: 'random', movePath: 'hover', stagger: 1000 }, { type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover', delay: 2000 }] },
+
+        // FINALE: the relay collapses
+        { time: 80, enemies: [{ type: 'scout_drone', count: 12, formation: 'v_shape', movePath: 'zigzag', stagger: 60 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 89, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
+        { time: 99, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 300, delay: 1000 }] },
+        { time: 109, enemies: [{ type: 'bomber', count: 4, formation: 'random', movePath: 'straight_down', stagger: 300 }, { type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 119, enemies: [{ type: 'phase_shifter', count: 4, formation: 'random', movePath: 'hover', stagger: 300 }, { type: 'gunship', count: 4, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 129, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
     ]
 };
 
@@ -3551,6 +5107,9 @@ const EndlessMode = {
     spawnTimer: 0,
     spawnInterval: 4.0,
     rank: 1.0, // Difficulty scaling — increases over time
+    // Concurrent enemy ceiling: keeps late Endless readable and under the 800-bullet pool.
+    // Rank still escalates spawn rate, enemy mix and (capped) stats up to this limit.
+    MAX_ENEMIES: 30,
 
     // Enemy pools by difficulty tier
     easyPool: ['scout_drone', 'scout_drone', 'gunship'],
@@ -3575,8 +5134,8 @@ const EndlessMode = {
         // Rank increases over time
         this.rank = 1.0 + WaveSystem.levelTimer * 0.008; // ~1.5x at 1 min, ~2.0x at 2 min, etc.
 
-        // Spawn waves on timer
-        this.spawnTimer -= dt;
+        // Spawn waves on timer (held while the screen is at the enemy cap)
+        if (Enemies.list.length < this.MAX_ENEMIES) this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
             this._spawnWave();
             this.wave++;
@@ -3628,7 +5187,7 @@ const EndlessMode = {
 
         // Power-up drop every 3 waves
         if (wave % 3 === 2) {
-            setTimeout(() => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); }, 2000);
+            Scheduler.after(2, () => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); });
         }
 
         // Spawn via WaveSystem-style spawning
@@ -3643,11 +5202,11 @@ const EndlessMode = {
                     default: x = 40 + Math.random() * (PLAY_W - 80); y = -20 - Math.random() * 60; break;
                 }
                 const delay = (group.delay || 0) + i * (group.stagger || 200);
-                setTimeout(() => {
-                    if (EndlessMode.active) {
+                Scheduler.after(delay / 1000, () => {
+                    if (Enemies.list.length < EndlessMode.MAX_ENEMIES) {
                         Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
                     }
-                }, delay);
+                });
             }
         }
     }
@@ -3662,13 +5221,15 @@ const Asteroids = {
     list: [],
     active: false,
 
+    SPAWN_PER_SECOND: 1.2,
+
     init() { this.list = []; this.active = false; },
     activate() { this.active = true; },
 
     update(dt) {
         if (!this.active) return;
         // Spawn new asteroids periodically
-        if (Math.random() < 0.02) {
+        if (Math.random() < this.SPAWN_PER_SECOND * dt) { // frame-rate independent
             const big = Math.random() > 0.6;
             this.list.push({
                 x: 20 + Math.random() * (PLAY_W - 40),
@@ -3716,8 +5277,6 @@ const Asteroids = {
             ctx.fillStyle = a.destructible ? '#665544' : '#444455';
             ctx.strokeStyle = a.destructible ? '#887766' : '#6666aa';
             ctx.lineWidth = 1.5;
-            ctx.shadowColor = a.destructible ? '#886644' : '#6666aa';
-            ctx.shadowBlur = 0;
             // Irregular polygon
             ctx.beginPath();
             for (let j = 0; j < 7; j++) {
@@ -3749,15 +5308,18 @@ const Escort = {
     active: false,
     x: PLAY_W / 2,
     y: PLAY_H - 160,
-    hp: 30,
-    maxHp: 30,
+    hp: 50,
+    maxHp: 50,
+    HIT_RADIUS: 28,
+    MIN_Y: PLAY_H * 0.62,
+    REGEN_PER_SECOND: 0.4,
     alive: true,
     flashTimer: 0,
     supportTimer: 8,
 
     init() {
         this.active = false; this.x = PLAY_W / 2; this.y = PLAY_H - 160;
-        this.hp = 30; this.maxHp = 30; this.alive = true; this.flashTimer = 0; this.supportTimer = 8;
+        this.hp = this.maxHp; this.alive = true; this.flashTimer = 0; this.supportTimer = 8;
     },
 
     activate() { this.active = true; this.alive = true; },
@@ -3765,8 +5327,10 @@ const Escort = {
     update(dt) {
         if (!this.active || !this.alive) return;
         this.flashTimer = Math.max(0, this.flashTimer - dt);
-        // Slowly move upward
-        this.y -= 5 * dt;
+        this.hp = Math.min(this.maxHp, this.hp + this.REGEN_PER_SECOND * dt); // damage control repairs
+        // Slowly move upward, but stay in the lower part of the screen — drifting into the
+        // boss's point-blank range made the escort mission unwinnable
+        this.y = Math.max(this.MIN_Y, this.y - 5 * dt);
         this.x += Math.sin(WaveSystem.levelTimer * 0.3) * 15 * dt;
         this.x = Math.max(60, Math.min(PLAY_W - 60, this.x));
 
@@ -3788,7 +5352,8 @@ const Escort = {
         // Check enemy bullet collision
         for (const b of Enemies.enemyBullets.pool) {
             const dx = b.x - this.x, dy = b.y - this.y;
-            if (dx * dx + dy * dy < 35 * 35) {
+            if (b.harmless > 0) continue;
+            if (dx * dx + dy * dy < this.HIT_RADIUS * this.HIT_RADIUS) {
                 b.active = false;
                 this.hp--;
                 this.flashTimer = 0.15;
@@ -3810,17 +5375,14 @@ const Escort = {
         // Allied ship — green tinted
         const flash = this.flashTimer > 0;
         ctx.fillStyle = flash ? '#ffffff' : '#44aa44';
-        ctx.shadowColor = '#44aa44'; ctx.shadowBlur = 0;
         ctx.beginPath();
         ctx.moveTo(0, -25); ctx.lineTo(30, 10); ctx.lineTo(20, 20);
         ctx.lineTo(-20, 20); ctx.lineTo(-30, 10);
         ctx.closePath(); ctx.fill();
         ctx.strokeStyle = '#88ff88'; ctx.lineWidth = 1.5; ctx.stroke();
         // Engine
-        ctx.fillStyle = '#22ff22'; ctx.shadowColor = '#22ff22';
         ctx.fillRect(-12, 20, 8, 6 + Math.random() * 3);
         ctx.fillRect(4, 20, 8, 6 + Math.random() * 3);
-        ctx.shadowBlur = 0;
         ctx.restore();
 
         // HP bar
@@ -3907,36 +5469,43 @@ const Campaign = {
 // ============================================================
 const BossTypes = {
     architect: {
-        name: 'THE ARCHITECT', phases: 3, phaseHps: [80, 120, 160],
-        hasArmor: true, armorCount: 4, armorHp: 20,
+        name: 'THE ARCHITECT', phases: 3, phaseHps: [200, 260, 300],
+        hasArmor: true, armorCount: 4, armorHp: 40,
         colors: ['#ff4444', '#ff00ff', '#ff0040']
     },
     furnace: {
-        name: 'THE FURNACE', phases: 2, phaseHps: [150, 200],
+        name: 'THE FURNACE', phases: 2, phaseHps: [460, 540],
         hasArmor: false,
         colors: ['#ff6600', '#ff2200']
     },
     leviathan: {
-        name: 'THE LEVIATHAN', phases: 3, phaseHps: [120, 160, 140],
+        name: 'THE LEVIATHAN', phases: 3, phaseHps: [340, 380, 380],
         hasArmor: false,
         colors: ['#4488ff', '#00ffaa', '#ff44ff']
     },
     interceptor_duo: {
-        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [140, 220],
+        name: 'INTERCEPTOR DUO', phases: 2, phaseHps: [300, 400], // fast-moving (low uptime): lower HP
         hasArmor: false,
         colors: ['#ffaa00', '#ff4400']
     },
     nexus: {
-        name: 'THE NEXUS', phases: 3, phaseHps: [160, 200, 280],
-        hasArmor: true, armorCount: 6, armorHp: 15,
+        name: 'THE NEXUS', phases: 3, phaseHps: [300, 380, 460],
+        hasArmor: true, armorCount: 6, armorHp: 32,
         colors: ['#cc44ff', '#ff00ff', '#ffffff']
     },
     echo: {
-        name: 'THE ECHO', phases: 3, phaseHps: [180, 220, 300],
+        name: 'THE ECHO', phases: 3, phaseHps: [420, 490, 560],
         hasArmor: false,
         colors: ['#00ffff', '#ff00ff', '#ffffff']
     }
 };
+
+
+// Boss tuning (all bosses)
+const BOSS_PHASE_TIME_LIMIT = 45;   // seconds; phase ends without its bonus (Touhou-style timeout)
+const BOSS_ARMOR_ORBIT = 40;        // armor segments orbit the core at this radius
+const BOSS_ARMOR_RADIUS = 16;
+const BOSS_ARMORED_CORE_DAMAGE = 0.5;  // core damage multiplier while armor is up
 
 
 // ============================================================
@@ -3966,6 +5535,11 @@ const Boss = {
     totalPhases: 3,
     colors: ['#ff4444', '#ff00ff', '#ff0040'],
 
+    // Bullet count for a pattern at the current density (never fewer than 3)
+    _n(base, density) {
+        return Math.max(3, Math.round(base * density));
+    },
+
     init(bossType) {
         bossType = bossType || 'architect';
         const def = BossTypes[bossType] || BossTypes.architect;
@@ -3988,6 +5562,9 @@ const Boss = {
         this.patternIndex = 0;
         this.flashTimer = 0;
         this.warningTimer = 3;
+        this.phaseTime = 0;
+        this.phaseTransitionTimer = 0;
+        this.timedOut = false;
         // Armor segments
         this.armor = [];
         if (def.hasArmor) {
@@ -4013,6 +5590,7 @@ const Boss = {
             if (this.y >= 120) {
                 this.y = 120;
                 this.entered = true;
+                Renderer.triggerGodray(2.5);
             }
             return;
         }
@@ -4023,12 +5601,12 @@ const Boss = {
 
             // Stage 1 (0-1.5s): Internal explosions, increasing frequency
             if (this.defeatTimer < 1.5) {
-                const freq = 0.3 - this.defeatTimer * 0.12; // Faster over time
+                const freq = 0.3 - this.defeatTimer * 0.12;
                 if (this.defeatTimer % Math.max(0.08, freq) < dt) {
                     const rx = this.x + (Math.random() - 0.5) * 80;
                     const ry = this.y + (Math.random() - 0.5) * 80;
                     const col = this.colors[Math.floor(Math.random() * this.colors.length)] || '#ff8800';
-                    Particles.spawn(rx, ry, 12, { color: col, speed: 100 + this.defeatTimer * 40, life: 0.5, size: 2 + this.defeatTimer });
+                    Particles.spawnExplosion(rx, ry, { style: 'small', color: col, color2: '#ffffff' });
                     Audio.playExplosionSmall();
                     ScreenShake.trigger(3 + this.defeatTimer * 3, 0.15);
                 }
@@ -4038,13 +5616,13 @@ const Boss = {
             if (this.defeatTimer >= 1.5 && this.defeatTimer < 2.5) {
                 if (this.defeatTimer % 0.2 < dt) {
                     const ringCount = 16;
+                    const dist = (this.defeatTimer - 1.5) * 150;
                     for (let j = 0; j < ringCount; j++) {
                         const a = (Math.PI * 2 / ringCount) * j + this.defeatTimer * 2;
-                        const dist = (this.defeatTimer - 1.5) * 150;
-                        Particles.spawn(
+                        Particles.spawnExplosion(
                             this.x + Math.cos(a) * dist,
                             this.y + Math.sin(a) * dist,
-                            3, { color: '#ffffff', speed: 80, life: 0.4, size: 3 }
+                            { style: 'small', color: this.colors[j % this.colors.length] || '#ffffff', color2: '#ffffff' }
                         );
                     }
                     Audio.playExplosionSmall();
@@ -4052,48 +5630,50 @@ const Boss = {
                 }
             }
 
-            // Stage 3 (2.5-3.5s): Boss-specific final effect
+            // Stage 3 (2.5-3.5s): Boss-specific mega final effect
             if (this.defeatTimer >= 2.5 && this.defeatTimer < 3.5) {
                 if (this.defeatTimer - dt < 2.5) {
-                    // One-time big boom at start of stage 3
                     Audio.playExplosionLarge();
-                    ScreenShake.trigger(15, 0.8);
+                    ScreenShake.trigger(20, 1.0);
+                    Renderer.triggerFlash(0xffffff, 0.7);
+                    Renderer.triggerChroma(0.025, 0.8);
 
-                    // Boss-specific final burst
                     switch (this.bossType) {
                         case 'furnace':
-                            // Fiery explosion
-                            Particles.spawn(this.x, this.y, 50, { color: '#ff4400', speed: 300, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 30, { color: '#ffaa00', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff4400', color2: '#ffaa00' });
+                            Particles.spawnExplosion(this.x + 30, this.y - 20, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
                             break;
                         case 'leviathan':
-                            // Organic dissolution
-                            for (let j = 0; j < 40; j++) {
-                                const a = Math.random() * Math.PI * 2;
-                                const d = Math.random() * 60;
-                                Particles.spawn(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d, 3, { color: '#00ffaa', speed: 150 + Math.random() * 100, life: 1.2, size: 3 });
+                            for (let j = 0; j < 6; j++) {
+                                const a = (Math.PI * 2 / 6) * j;
+                                const d = 50 + Math.random() * 40;
+                                Particles.spawnExplosion(this.x + Math.cos(a) * d, this.y + Math.sin(a) * d,
+                                    { style: 'large', color: '#00ffaa', color2: '#ffffff' });
                             }
                             break;
                         case 'interceptor_duo':
-                            // Twin explosions
-                            Particles.spawn(this.x - 40, this.y, 35, { color: '#ffaa00', speed: 250, life: 0.8, size: 4 });
-                            Particles.spawn(this.x + 40, this.y, 35, { color: '#ff4400', speed: 250, life: 0.8, size: 4 });
+                            Particles.spawnExplosion(this.x - 50, this.y, { style: 'large', color: '#ffaa00', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x + 50, this.y, { style: 'large', color: '#ff4400', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'medium', color: '#ffffff', color2: '#ffff00' });
                             break;
                         case 'nexus':
-                            // Energy implosion then burst
-                            Particles.spawn(this.x, this.y, 60, { color: '#cc44ff', speed: 350, life: 1.2, size: 5 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 200, life: 1.0, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#cc44ff', color2: '#ffffff' });
+                            Particles.spawnShockwave(this.x, this.y, '#cc44ff', 200, 0.6);
                             break;
-                        case 'echo':
-                            // Glitch dissolution
-                            for (let j = 0; j < 50; j++) {
-                                const col = ['#00ffff', '#ff00ff', '#ffffff'][j % 3];
-                                Particles.spawn(this.x + (Math.random() - 0.5) * 100, this.y + (Math.random() - 0.5) * 100, 2, { color: col, speed: 200 + Math.random() * 150, life: 1.0, size: 2 + Math.random() * 3 });
+                        case 'echo': {
+                            const echoCols = ['#00ffff', '#ff00ff', '#ffffff'];
+                            for (let j = 0; j < 5; j++) {
+                                const ox = (Math.random() - 0.5) * 120;
+                                const oy = (Math.random() - 0.5) * 120;
+                                Particles.spawnExplosion(this.x + ox, this.y + oy,
+                                    { style: 'medium', color: echoCols[j % 3], color2: '#ffffff' });
                             }
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#00ffff' });
                             break;
+                        }
                         default: // architect
-                            Particles.spawn(this.x, this.y, 60, { color: '#ffffff', speed: 250, life: 1.0, size: 4 });
-                            Particles.spawn(this.x, this.y, 40, { color: '#ff00ff', speed: 200, life: 0.8, size: 3 });
+                            Particles.spawnExplosion(this.x, this.y, { style: 'mega', color: '#ff00ff', color2: '#ffffff' });
+                            Particles.spawnExplosion(this.x, this.y + 20, { style: 'large', color: '#ffffff', color2: '#ff00ff' });
                             break;
                     }
                 }
@@ -4102,7 +5682,7 @@ const Boss = {
             // Final cleanup
             if (this.defeatTimer > 3.5) {
                 this.active = false;
-                Scoring.score += Math.floor(25000 * GameConfig.scoreMultiplier);
+                if (!this.timedOut) Scoring.score += Math.floor(25000 * GameConfig.scoreMultiplier);
                 Enemies.enemyBullets.clear();
                 Scoring.spawnPopup('BOSS DEFEATED!', '#ffff00', 30);
             }
@@ -4117,6 +5697,13 @@ const Boss = {
             this.flashTimer = 0.1;
             this._updateMovement(dt, playerX);
             return; // Skip attacks during transition
+        }
+
+        // Phase timeout: the phase ends without its bonus, so fights can't stall
+        this.phaseTime += dt;
+        if (this.phaseTime >= BOSS_PHASE_TIME_LIMIT) {
+            this._phaseTimeout();
+            return;
         }
         this.attackTimer -= dt;
 
@@ -4274,8 +5861,9 @@ const Boss = {
         if (this.phase === 1) {
             switch (pattern) {
                 case 0: // Wide horizontal barrage
-                    for (let j = 0; j < Math.floor(15 * density); j++) {
-                        const x = (PLAY_W / 15) * j + 10;
+                    const wallN = this._n(15, density);
+                    for (let j = 0; j < wallN; j++) {
+                        const x = 10 + ((PLAY_W - 20) / (wallN - 1)) * j; // always spans the screen
                         Enemies.enemyBullets.spawn(x, this.y + 40, 0, bs * 0.7, { color: '#ff6600', radius: 3 });
                     }
                     this.attackTimer = 1.2; break;
@@ -4286,8 +5874,9 @@ const Boss = {
                     }
                     this.attackTimer = 0.8; break;
                 case 2: // Flame spread (wide cone downward)
-                    for (let j = 0; j < Math.floor(10 * density); j++) {
-                        const a = Math.PI / 2 + (j - 5) * 0.12;
+                    const flameN = this._n(10, density);
+                    for (let j = 0; j < flameN; j++) {
+                        const a = Math.PI / 2 + (j / (flameN - 1) - 0.5) * 1.1; // centred cone
                         Enemies.enemyBullets.spawn(this.x, this.y + this.radius * 0.9, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#ff2200', radius: 3, life: 2 });
                     }
                     this.attackTimer = 1.5; break;
@@ -4295,8 +5884,8 @@ const Boss = {
         } else {
             switch (pattern) {
                 case 0: // Charge slam — bullet burst
-                    for (let j = 0; j < Math.floor(20 * density); j++) {
-                        const a = (Math.PI * 2 / 20) * j;
+                    for (let j = 0; j < this._n(20, density); j++) {
+                        const a = (Math.PI * 2 / this._n(20, density)) * j;
                         Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff4400', radius: 4 });
                     }
                     this.attackTimer = 0.9; break;
@@ -4328,8 +5917,8 @@ const Boss = {
             case 1: // Hidden among debris
                 switch (pattern) {
                     case 0: // Tentacle sweep (arc of bullets)
-                        for (let j = 0; j < Math.floor(12 * density); j++) {
-                            const a = angle - 0.6 + (1.2 / 12) * j;
+                        for (let j = 0, tn = this._n(12, density); j < tn; j++) {
+                            const a = angle - 0.6 + (1.2 / (tn - 1)) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#00ffaa', radius: 3 });
                         }
                         this.attackTimer = 1.3; break;
@@ -4351,20 +5940,20 @@ const Boss = {
             case 2: // Revealed — spiral + tentacles
                 switch (pattern) {
                     case 0: // Double spiral
-                        for (let j = 0; j < Math.floor(16 * density); j++) {
-                            const a = (Math.PI * 2 / 16) * j + this.moveTimer * 2;
+                        for (let j = 0; j < this._n(16, density); j++) {
+                            const a = (Math.PI * 2 / this._n(16, density)) * j + this.moveTimer * 2;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#00ffaa', radius: 3 });
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + Math.PI) * bs * 0.7, Math.sin(a + Math.PI) * bs * 0.7, { color: '#4488ff', radius: 3 });
                         }
                         this.attackTimer = 0.8; break;
                     case 1: // Tentacle sweep (reuse phase 1 pattern)
-                        for (let j = 0; j < Math.floor(12 * density); j++) {
-                            const a = angle - 0.6 + (1.2 / 12) * j;
+                        for (let j = 0, tn = this._n(12, density); j < tn; j++) {
+                            const a = angle - 0.6 + (1.2 / (tn - 1)) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.8, Math.sin(a) * bs * 0.8, { color: '#00ffaa', radius: 3 });
                         }
                         this.attackTimer = 1.0; break;
                     case 2: // Ring burst
-                        const count = Math.floor(20 * density);
+                        const count = this._n(20, density);
                         for (let j = 0; j < count; j++) {
                             const a = (Math.PI * 2 / count) * j;
                             Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.6, Math.sin(a) * bs * 0.6, { color: '#00ffaa', radius: 4 });
@@ -4374,9 +5963,9 @@ const Boss = {
                 break;
             case 3: // Charging — fast and aggressive
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(24 * density); j++) { const a = (Math.PI * 2 / 24) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.5; break;
+                    case 0: for (let j = 0; j < this._n(24, density); j++) { const a = (Math.PI * 2 / this._n(24, density)) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.5; break;
                     case 1: for (let j = -4; j <= 4; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.12) * bs * 1.3, Math.sin(angle + j * 0.12) * bs * 1.3, { color: '#4488ff', radius: 4 }); } this.attackTimer = 0.6; break;
-                    case 2: for (let j = 0; j < Math.floor(12 * density); j++) { const a = Math.random() * Math.PI * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * (80 + Math.random() * bs), Math.sin(a) * (80 + Math.random() * bs), { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.7; break;
+                    case 2: for (let j = 0; j < this._n(12, density); j++) { const a = Math.random() * Math.PI * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * (80 + Math.random() * bs), Math.sin(a) * (80 + Math.random() * bs), { color: '#00ffaa', radius: 3 }); } this.attackTimer = 0.7; break;
                 }
                 break;
         }
@@ -4402,14 +5991,14 @@ const Boss = {
                     }
                     this.attackTimer = 1.2; break;
                 case 3: // Ring from center
-                    const c = Math.floor(12 * density);
+                    const c = this._n(12, density);
                     for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#ff6600', radius: 3 }); }
                     this.attackTimer = 1.5; break;
             }
         } else { // Combined form — overlapping patterns
             switch (pattern) {
                 case 0: // Double spiral
-                    for (let j = 0; j < Math.floor(20 * density); j++) { const a = (Math.PI * 2 / 20) * j + this.moveTimer * 2.5; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ffaa00', radius: 3 }); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + 0.3) * bs * 0.8, Math.sin(a + 0.3) * bs * 0.8, { color: '#ff4400', radius: 3 }); }
+                    for (let j = 0; j < this._n(20, density); j++) { const a = (Math.PI * 2 / this._n(20, density)) * j + this.moveTimer * 2.5; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ffaa00', radius: 3 }); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a + 0.3) * bs * 0.8, Math.sin(a + 0.3) * bs * 0.8, { color: '#ff4400', radius: 3 }); }
                     this.attackTimer = 0.7; break;
                 case 1: // Wide shotgun
                     for (let j = -5; j <= 5; j++) { const a = angle + j * 0.1; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.2, Math.sin(a) * bs * 1.2, { color: '#ff6600', radius: 4 }); }
@@ -4418,7 +6007,7 @@ const Boss = {
                     for (let j = 0; j < 4; j++) Enemies.spawn('scout_drone', this.x + (j - 1.5) * 30, this.y + 20, 'straight_down');
                     this.attackTimer = 2.5; break;
                 case 3: // Burst rings
-                    for (let ring = 0; ring < 2; ring++) { const c = Math.floor((14 + ring * 6) * density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j + ring * 0.15; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * (0.6 + ring * 0.3), Math.sin(a) * bs * (0.6 + ring * 0.3), { color: ring === 0 ? '#ffaa00' : '#ff4400', radius: 3 }); } }
+                    for (let ring = 0; ring < 2; ring++) { const c = this._n(14 + ring * 6, density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j + ring * 0.15; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * (0.6 + ring * 0.3), Math.sin(a) * bs * (0.6 + ring * 0.3), { color: ring === 0 ? '#ffaa00' : '#ff4400', radius: 3 }); } }
                     this.attackTimer = 1.0; break;
             }
         }
@@ -4430,11 +6019,11 @@ const Boss = {
         switch (this.phase) {
             case 1: // Shielded — controlled patterns
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(16 * density); j++) { const a = (Math.PI * 2 / 16) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#cc44ff', radius: 4 }); } this.attackTimer = 1.2; break;
+                    case 0: for (let j = 0; j < this._n(16, density); j++) { const a = (Math.PI * 2 / this._n(16, density)) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#cc44ff', radius: 4 }); } this.attackTimer = 1.2; break;
                     case 1: for (let j = -3; j <= 3; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.15) * bs * 1.1, Math.sin(angle + j * 0.15) * bs * 1.1, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.8; break;
                     case 2: Enemies.spawn('phase_shifter', this.x, this.y + 30, 'hover'); this.attackTimer = 3.0; break;
                     case 3: // Horizontal wall with gaps
-                        for (let j = 0; j < Math.floor(18 * density); j++) { if (j % 4 === Math.floor(this.moveTimer) % 4) continue; const x = (PLAY_W / 18) * j; Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.5, { color: '#cc44ff', radius: 3 }); }
+                        for (let j = 0, wn = this._n(18, density); j < wn; j++) { if (j % 4 === Math.floor(this.moveTimer) % 4) continue; const x = 10 + ((PLAY_W - 20) / (wn - 1)) * j; Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.5, { color: '#cc44ff', radius: 3 }); }
                         this.attackTimer = 1.0; break;
                 }
                 break;
@@ -4443,18 +6032,18 @@ const Boss = {
                     case 0: this._furnaceAttack(angle, bs * 0.9, density); break;
                     case 1: this._leviathanAttack(angle, bs * 0.9, density); break;
                     case 2: this._duoAttack(angle, bs * 0.9, density); break;
-                    case 3: for (let j = 0; j < Math.floor(20 * density); j++) { const a = (Math.PI * 2 / 20) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.6; break;
+                    case 3: for (let j = 0; j < this._n(20, density); j++) { const a = (Math.PI * 2 / this._n(20, density)) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); } this.attackTimer = 0.6; break;
                 }
                 break;
             case 3: // Endurance — everything at max
                 switch (pattern) {
                     case 0: // Triple spiral
-                        for (let s = 0; s < 3; s++) { for (let j = 0; j < Math.floor(10 * density); j++) { const a = (Math.PI * 2 / 10) * j + this.moveTimer * 3 + s * (Math.PI * 2 / 3); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: ['#ff00ff', '#cc44ff', '#ffffff'][s], radius: 3 }); } }
+                        for (let s = 0; s < 3; s++) { for (let j = 0; j < this._n(10, density); j++) { const a = (Math.PI * 2 / this._n(10, density)) * j + this.moveTimer * 3 + s * (Math.PI * 2 / 3); Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: ['#ff00ff', '#cc44ff', '#ffffff'][s], radius: 3 }); } }
                         this.attackTimer = 0.4; break;
                     case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.3, Math.sin(angle + j * 0.1) * bs * 1.3, { color: '#ffffff', radius: 4 }); } this.attackTimer = 0.5; break;
                     case 2: for (let j = 0; j < 3; j++) Enemies.spawn('phase_shifter', this.x + (j - 1) * 50, this.y + 30, 'hover'); this.attackTimer = 3.0; break;
                     case 3: // Cross beams
-                        for (let arm = 0; arm < 4; arm++) { const ba = this.moveTimer * 1.5 + arm * (Math.PI / 2); for (let j = 0; j < 10; j++) { const bx = this.x + Math.cos(ba) * j * 18; const by = this.y + Math.sin(ba) * j * 18; if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff00ff', radius: 4, life: 0.6 }); } }
+                        for (let arm = 0; arm < 4; arm++) { const ba = this.moveTimer * 1.5 + arm * (Math.PI / 2); for (let j = 0; j < 10; j++) { const bx = this.x + Math.cos(ba) * j * 18; const by = this.y + Math.sin(ba) * j * 18; if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff00ff', radius: 4, life: 0.95, harmless: 0.35 }); } }
                         this.attackTimer = 0.5; break;
                 }
                 break;
@@ -4471,20 +6060,20 @@ const Boss = {
                         for (let j = -3; j <= 3; j++) { const a = angle + j * 0.15; Enemies.enemyBullets.spawn(this.x, this.y + this.radius * 0.8, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#00ffff', radius: 3 }); }
                         this.attackTimer = 0.5; break;
                     case 1: // Homing (slow tracking bullets)
-                        for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j - 1) * 20, this.y, Math.cos(angle) * bs * 0.5, Math.sin(angle) * bs * 0.5, { color: '#00ff88', radius: 3, type: 'homing', life: 4 }); }
+                        for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j - 1) * 20, this.y, Math.cos(angle) * bs * 0.5, Math.sin(angle) * bs * 0.5, { color: '#00ff88', radius: 3, type: 'homing', life: 4, turnRate: 1.5 }); }
                         this.attackTimer = 1.0; break;
                     case 2: // Ring
-                        const c = Math.floor(14 * density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#00ffff', radius: 3 }); }
+                        const c = this._n(14, density); for (let j = 0; j < c; j++) { const a = (Math.PI * 2 / c) * j; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#00ffff', radius: 3 }); }
                         this.attackTimer = 1.2; break;
                 }
                 break;
             case 2: // Mirrors laser + adds own patterns
                 switch (pattern) {
                     case 0: // Laser beams (vertical lines)
-                        for (let j = -1; j <= 1; j++) { for (let k = 0; k < 8; k++) { Enemies.enemyBullets.spawn(this.x + j * 15, this.y + k * 15, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.5 }); } }
+                        for (let j = -1; j <= 1; j++) { for (let k = 0; k < 8; k++) { Enemies.enemyBullets.spawn(this.x + j * 15, this.y + k * 15, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.75, harmless: 0.25 }); } }
                         this.attackTimer = 0.4; break;
                     case 1: // Mirror movement burst
-                        for (let j = 0; j < Math.floor(16 * density); j++) { const a = (Math.PI * 2 / 16) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); }
+                        for (let j = 0; j < this._n(16, density); j++) { const a = (Math.PI * 2 / this._n(16, density)) * j + this.moveTimer * 2; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 }); }
                         this.attackTimer = 0.7; break;
                     case 2: // Aimed fan
                         for (let j = -4; j <= 4; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.12) * bs * 1.2, Math.sin(angle + j * 0.12) * bs * 1.2, { color: '#00ffff', radius: 3 }); }
@@ -4493,9 +6082,9 @@ const Boss = {
                 break;
             case 3: // All patterns combined, faster
                 switch (pattern) {
-                    case 0: for (let j = 0; j < Math.floor(24 * density); j++) { const a = (Math.PI * 2 / 24) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#ffffff', radius: 3 }); } this.attackTimer = 0.4; break;
-                    case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.4, Math.sin(angle + j * 0.1) * bs * 1.4, { color: '#00ffff', radius: 4 }); } for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j-1)*20, this.y, Math.cos(angle)*bs*0.5, Math.sin(angle)*bs*0.5, { color:'#00ff88', radius:3, type:'homing', life:3 }); } this.attackTimer = 0.5; break;
-                    case 2: for (let j = -1; j <= 1; j++) { for (let k = 0; k < 10; k++) Enemies.enemyBullets.spawn(this.x + j * 20, this.y + k * 12, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.4 }); } this.attackTimer = 0.3; break;
+                    case 0: for (let j = 0; j < this._n(24, density); j++) { const a = (Math.PI * 2 / this._n(24, density)) * j + this.moveTimer * 3; Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.1, Math.sin(a) * bs * 1.1, { color: '#ffffff', radius: 3 }); } this.attackTimer = 0.4; break;
+                    case 1: for (let j = -5; j <= 5; j++) { Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(angle + j * 0.1) * bs * 1.4, Math.sin(angle + j * 0.1) * bs * 1.4, { color: '#00ffff', radius: 4 }); } for (let j = 0; j < 3; j++) { Enemies.enemyBullets.spawn(this.x + (j-1)*20, this.y, Math.cos(angle)*bs*0.5, Math.sin(angle)*bs*0.5, { color:'#00ff88', radius:3, type:'homing', life:3, turnRate:1.5 }); } this.attackTimer = 0.5; break;
+                    case 2: for (let j = -1; j <= 1; j++) { for (let k = 0; k < 10; k++) Enemies.enemyBullets.spawn(this.x + j * 20, this.y + k * 12, 0, bs * 1.5, { color: '#4488ff', radius: 5, life: 0.65, harmless: 0.25 }); } this.attackTimer = 0.3; break;
                 }
                 break;
         }
@@ -4507,8 +6096,8 @@ const Boss = {
             case 0: // Aimed spread from armor
                 for (const seg of this.armor) {
                     if (!seg.alive) continue;
-                    const sx = this.x + Math.cos(seg.angle + this.moveTimer) * 40;
-                    const sy = this.y + Math.sin(seg.angle + this.moveTimer) * 40;
+                    const sx = this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
+                    const sy = this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                     for (let j = -2; j <= 2; j++) {
                         const a = angle + j * 0.2;
                         Enemies.enemyBullets.spawn(sx, sy, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff1493', radius: 3 });
@@ -4517,14 +6106,15 @@ const Boss = {
                 this.attackTimer = 1.5;
                 break;
             case 1: // Horizontal sweep
-                for (let i = 0; i < Math.floor(12 * density); i++) {
-                    const x = (PLAY_W / (12 * density)) * i + 10;
-                    Enemies.enemyBullets.spawn(this.x, this.y + 30, 0, bs * 0.8, { color: '#ff4040', radius: 3 });
+                const sweepN = this._n(12, density);
+                for (let i = 0; i < sweepN; i++) {
+                    const x = 10 + ((PLAY_W - 20) / (sweepN - 1)) * i;
+                    Enemies.enemyBullets.spawn(x, this.y + 30, 0, bs * 0.8, { color: '#ff4040', radius: 3 });
                 }
                 this.attackTimer = 2.0;
                 break;
             case 2: // Ring burst
-                const count = Math.floor(16 * density);
+                const count = this._n(16, density);
                 for (let j = 0; j < count; j++) {
                     const a = (Math.PI * 2 / count) * j;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.7, Math.sin(a) * bs * 0.7, { color: '#ff1493', radius: 3 });
@@ -4546,7 +6136,7 @@ const Boss = {
                 break;
             case 1: // Double ring
                 for (let ring = 0; ring < 2; ring++) {
-                    const count = Math.floor((12 + ring * 4) * density);
+                    const count = this._n(12 + ring * 4, density);
                     const offset = ring * 0.15;
                     for (let j = 0; j < count; j++) {
                         const a = (Math.PI * 2 / count) * j + offset;
@@ -4570,7 +6160,7 @@ const Boss = {
                         const bx = this.x + Math.cos(baseA) * dist;
                         const by = this.y + Math.sin(baseA) * dist;
                         if (bx > 0 && bx < PLAY_W && by > 0 && by < PLAY_H) {
-                            Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff4488', radius: 4, life: 0.8 });
+                            Enemies.enemyBullets.spawn(bx, by, 0, 0, { color: '#ff4488', radius: 4, life: 1.15, harmless: 0.35 });
                         }
                     }
                 }
@@ -4583,7 +6173,7 @@ const Boss = {
         const pattern = this.patternIndex % 3;
         switch (pattern) {
             case 0: // Spiral
-                const spiralCount = Math.floor(24 * density);
+                const spiralCount = this._n(24, density);
                 for (let j = 0; j < spiralCount; j++) {
                     const a = (Math.PI * 2 / spiralCount) * j + this.moveTimer * 3;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs, Math.sin(a) * bs, { color: '#ff00ff', radius: 3 });
@@ -4595,7 +6185,7 @@ const Boss = {
                     const a = angle + j * 0.15;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 1.3, Math.sin(a) * bs * 1.3, { color: '#ff4040', radius: 4 });
                 }
-                const ringCount = Math.floor(10 * density);
+                const ringCount = this._n(10, density);
                 for (let j = 0; j < ringCount; j++) {
                     const a = (Math.PI * 2 / ringCount) * j;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * bs * 0.5, Math.sin(a) * bs * 0.5, { color: '#ff1493', radius: 3 });
@@ -4606,7 +6196,7 @@ const Boss = {
                 // Telegraph line
                 Particles.spawn(this.x, this.y, 5, { color: '#ff0000', speed: 20, life: 0.5, size: 4 });
                 // Bullet burst after charge
-                for (let j = 0; j < Math.floor(20 * density); j++) {
+                for (let j = 0; j < this._n(20, density); j++) {
                     const a = Math.random() * Math.PI * 2;
                     const spd = 80 + Math.random() * bs;
                     Enemies.enemyBullets.spawn(this.x, this.y, Math.cos(a) * spd, Math.sin(a) * spd, { color: '#ff1493', radius: 3 });
@@ -4616,63 +6206,113 @@ const Boss = {
         }
     },
 
-    hit(damage) {
-        if (!this.active || !this.entered || this.defeated) return;
+    // Armor segment positions (they orbit the core)
+    armorPositions() {
+        return this.armor.map(seg => ({
+            seg,
+            x: this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+            y: this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+        }));
+    },
 
-        // Phase 1: Damage armor first
-        if (this.phase === 1) {
-            for (const seg of this.armor) {
-                if (seg.alive) {
-                    seg.hp -= damage;
-                    this.flashTimer = 0.06;
-                    if (seg.hp <= 0) {
-                        seg.alive = false;
-                        Particles.spawn(
-                            this.x + Math.cos(seg.angle) * 40,
-                            this.y + Math.sin(seg.angle) * 40,
-                            20, { color: '#ff8800', speed: 150, life: 0.5 }
-                        );
-                        Scoring.score += Math.floor(1500 * GameConfig.scoreMultiplier);
-                        Audio.playExplosionSmall();
-                        ScreenShake.trigger(6, 0.3);
-                    }
-                    // Check if all armor destroyed
-                    if (this.armor.every(s => !s.alive)) {
-                        this._nextPhase();
-                    }
-                    return;
+    // Player bullet vs boss. Armor segments are real hit zones: a bullet that touches an
+    // intact segment damages it; one that reaches the core while armor is up does reduced damage.
+    // Returns true if the bullet was absorbed.
+    hitTest(b) {
+        if (this.phase === 1 && this.armor.some(seg => seg.alive)) {
+            for (const p of this.armorPositions()) {
+                if (!p.seg.alive) continue;
+                const dx = b.x - p.x, dy = b.y - p.y;
+                const r = b.radius + BOSS_ARMOR_RADIUS;
+                if (dx * dx + dy * dy < r * r) {
+                    this._damageArmor(p.seg, b.damage);
+                    return true;
                 }
             }
         }
+        const dx = b.x - this.x, dy = b.y - this.y;
+        if (dx * dx + dy * dy < (b.radius + this.radius) * (b.radius + this.radius)) {
+            this.hit(b.damage);
+            return true;
+        }
+        return false;
+    },
 
-        // Phase transition invulnerability
-        if (this.phaseTransitionTimer > 0) return;
+    _damageArmor(seg, damage) {
+        seg.hp -= damage;
+        this.flashTimer = 0.06;
+        if (seg.hp <= 0 && seg.alive) {
+            seg.alive = false;
+            Particles.spawn(
+                this.x + Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+                this.y + Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT,
+                20, { color: '#ff8800', speed: 150, life: 0.5 }
+            );
+            Scoring.score += Math.floor(1500 * GameConfig.scoreMultiplier);
+            Audio.playExplosionSmall();
+            ScreenShake.trigger(6, 0.3);
+            if (this.armor.every(s => !s.alive)) Scoring.spawnPopup('ARMOR BROKEN', '#ff8800', 20);
+        }
+    },
 
+    // Bomb: damages the core and every intact armor segment
+    bombHit(damage) {
+        if (!this.active || !this.entered || this.defeated) return;
+        if (this.phase === 1) {
+            for (const seg of this.armor) if (seg.alive) this._damageArmor(seg, damage);
+        }
+        this.hit(damage, true);
+    },
+
+    // Core damage. While armor is intact (phase 1) the core only takes a fraction.
+    hit(damage, ignoreArmor) {
+        if (!this.active || !this.entered || this.defeated) return;
+        if (this.phaseTransitionTimer > 0) return; // phase transition invulnerability
+
+        if (!ignoreArmor && this.phase === 1 && this.armor.some(seg => seg.alive)) {
+            damage *= BOSS_ARMORED_CORE_DAMAGE;
+        }
         this.hp -= damage;
         this.flashTimer = 0.06;
 
         if (this.hp <= 0) {
             if (this.phase < this.totalPhases) {
-                this._nextPhase();
+                this._nextPhase(true);
             } else {
                 this._onDefeat();
             }
         }
     },
 
-    _nextPhase() {
+    _phaseTimeout() {
+        Scoring.spawnPopup('TIME OUT', '#888888', 22);
+        for (const seg of this.armor) seg.alive = false;
+        if (this.phase < this.totalPhases) {
+            this._nextPhase(false);
+        } else {
+            this.timedOut = true;
+            this._onDefeat();
+        }
+    },
+
+    _nextPhase(awardBonus) {
         this.phase++;
         this.hp = this.phaseHps[this.phase - 1];
         this.maxHp = this.phaseHps[this.phase - 1];
         this.attackTimer = 2.0;
         this.patternIndex = 0;
+        this.phaseTime = 0;
         this.phaseTransitionTimer = 1.5; // Brief invulnerability
+        for (const seg of this.armor) seg.alive = false;
         Enemies.enemyBullets.clear();
-        ScreenShake.trigger(8, 0.5);
-        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 180, life: 0.6, size: 3 });
-        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 80, 0.5);
+        ScreenShake.trigger(12, 0.6);
+        Particles.spawn(this.x, this.y, 40, { color: '#ffffff', speed: 220, life: 0.7, size: 4 });
+        Particles.spawnShockwave(this.x, this.y, this.colors[this.phase - 1] || '#ffffff', 120, 0.6);
+        Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.9);
+        Renderer.triggerFlash(0xffffff, 0.2);
+        Renderer.triggerGlitch(0.55);
         Audio.playExplosionLarge();
-        Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
+        if (awardBonus) Scoring.score += Math.floor((this.phase === 2 ? 5000 : 10000) * GameConfig.scoreMultiplier);
         Scoring.spawnPopup('PHASE ' + this.phase, this.colors[this.phase - 1] || '#ffffff', 24);
     },
 
@@ -4691,8 +6331,6 @@ const Boss = {
             ctx.fillStyle = `rgba(255, 0, 80, ${0.5 + Math.sin(this.warningTimer * 8) * 0.5})`;
             ctx.font = 'bold 28px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
-            ctx.shadowColor = '#ff0050';
-            ctx.shadowBlur = 0;
             ctx.fillText('WARNING', PLAY_W / 2, PLAY_H / 2 - 20);
             ctx.font = '16px Share Tech Mono, Consolas, monospace';
             ctx.fillText(this.bossName + ' APPROACHES', PLAY_W / 2, PLAY_H / 2 + 15);
@@ -4706,10 +6344,11 @@ const Boss = {
         const flash = this.flashTimer > 0;
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
+        // Dynamic light — boss core glow (brighter during flash)
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+
         // Core body
         ctx.fillStyle = mainColor;
-        ctx.shadowColor = mainColor;
-        ctx.shadowBlur = 0;
 
         // Type-specific body shapes
         const r = this.radius;
@@ -4750,10 +6389,8 @@ const Boss = {
                 ctx.fillRect(-r * 0.15, r * 0.85, r * 0.3, r * 0.08);
                 // Furnace glow (core)
                 ctx.fillStyle = '#ff2200';
-                ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 0;
                 ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 4) * 0.3;
                 ctx.beginPath(); ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = 1; ctx.shadowBlur = 0;
                 break;
             }
             case 'leviathan': {
@@ -4787,10 +6424,8 @@ const Boss = {
                     ctx.fillStyle = flash ? '#ffffff' : '#001a10';
                     ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12, r * 0.08, 0, 0, Math.PI * 2); ctx.fill();
                     ctx.fillStyle = '#00ffaa';
-                    ctx.shadowColor = '#00ffaa'; ctx.shadowBlur = 0;
                     ctx.beginPath(); ctx.arc(ex, ey, r * 0.04, 0, Math.PI * 2); ctx.fill();
                 }
-                ctx.shadowBlur = 0;
                 break;
             }
             case 'interceptor_duo': {
@@ -4846,13 +6481,11 @@ const Boss = {
                 // Phase 2: energy link between ships
                 if (this.phase === 2) {
                     ctx.strokeStyle = `rgba(255, 150, 0, ${0.4 + Math.sin(this.moveTimer * 5) * 0.2})`;
-                    ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 0;
                     ctx.lineWidth = 2;
                     for (let beam = 0; beam < 3; beam++) {
                         const by = -r * 0.2 + beam * r * 0.25;
                         ctx.beginPath(); ctx.moveTo(-sep, by); ctx.lineTo(sep, by); ctx.stroke();
                     }
-                    ctx.shadowBlur = 0;
                 }
                 break;
             }
@@ -4985,9 +6618,7 @@ const Boss = {
                 // Central eye
                 ctx.fillStyle = flash ? '#ffffff' : '#220000';
                 ctx.beginPath(); ctx.ellipse(0, -r * 0.25, r * 0.15, r * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.fillStyle = '#ff4444'; ctx.shadowColor = '#ff4444'; ctx.shadowBlur = 0;
                 ctx.beginPath(); ctx.arc(0, -r * 0.25, r * 0.05, 0, Math.PI * 2); ctx.fill();
-                ctx.shadowColor = mainColor; ctx.shadowBlur = 0;
                 // Leg struts
                 ctx.strokeStyle = mainColor; ctx.lineWidth = 2;
                 ctx.beginPath(); ctx.moveTo(r * 0.15, r * 0.7); ctx.lineTo(r * 0.35, r * 1.0); ctx.stroke();
@@ -5004,13 +6635,12 @@ const Boss = {
         if (this.armor.length > 0 && this.phase === 1) {
             for (const seg of this.armor) {
                 if (!seg.alive) continue;
-                const ax = Math.cos(seg.angle + this.moveTimer * 0.5) * 45;
-                const ay = Math.sin(seg.angle + this.moveTimer * 0.5) * 45;
+                // Same orbit as the hit zones and the armor's own guns (armorPositions)
+                const ax = Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
+                const ay = Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                 ctx.fillStyle = '#ff6644';
-                ctx.shadowColor = '#ff6644';
-                ctx.shadowBlur = 0;
                 ctx.beginPath();
-                ctx.arc(ax, ay, 12, 0, Math.PI * 2);
+                ctx.arc(ax, ay, BOSS_ARMOR_RADIUS - 2, 0, Math.PI * 2);
                 ctx.fill();
                 ctx.strokeStyle = '#ffaa88';
                 ctx.lineWidth = 1.5;
@@ -5044,15 +6674,17 @@ const Boss = {
             const pct = Math.max(0, this.hp / this.maxHp);
             const hpColor = this.phase === 1 ? '#ff4444' : this.phase === 2 ? '#ff00ff' : '#ff0040';
             ctx.fillStyle = hpColor;
-            ctx.shadowColor = hpColor;
-            ctx.shadowBlur = 0;
             ctx.fillRect(barX, barY, barW * pct, barH);
-            ctx.shadowBlur = 0;
             // Phase label
             ctx.fillStyle = '#ffffff';
             ctx.font = '12px Share Tech Mono, Consolas, monospace';
             ctx.textAlign = 'center';
             ctx.fillText(`${this.bossName} — PHASE ${this.phase}`, PLAY_W / 2, barY + barH + 12);
+            // Phase timer (turns red in the last 10 s)
+            const timeLeft = Math.max(0, BOSS_PHASE_TIME_LIMIT - this.phaseTime);
+            ctx.textAlign = 'right';
+            ctx.fillStyle = timeLeft <= 10 ? '#ff4444' : '#aaaaaa';
+            ctx.fillText(Math.ceil(timeLeft).toString(), barX + barW + 34, barY + barH);
         }
     }
 };
@@ -5088,8 +6720,13 @@ const Player = {
     primaryWeapon: 'none', // 'none', 'spread', 'homing', 'laser'
     primaryLevel: 0,
     droneLevel: 0,
-    fireTimer: 0,
-    fireRate: 0.1,
+    fireTimer: 0,        // base shot
+    weaponTimer: 0,      // primary weapon
+    droneShotTimer: 0,
+    droneContactTimer: 0,
+    shieldPulseTimer: 0,
+    shieldPulseFlash: 0,
+    deathPending: 0,     // death-bomb window remaining
 
     // Abilities
     bombs: 3,
@@ -5122,10 +6759,56 @@ const Player = {
         this.primaryLevel = 0;
         this.droneLevel = 0;
         this.fireTimer = 0;
+        this.weaponTimer = 0;
+        this.droneShotTimer = 0;
+        this.droneContactTimer = 0;
+        this.shieldPulseTimer = 3.0;
+        this.shieldPulseFlash = 0;
+        this.deathPending = 0;
+        this.prevX = this.x;
+        this.prevY = this.y;
         this.dashCooldown = 0;
         this.dashing = false;
+        this.bombActive = false;
         this.bullets.clear();
         this.trailPositions = [];
+    },
+
+    // Weapon tuning. Targets (single target, all shots landing, incl. base shot):
+    // Lv1 ≈ 17-18 DPS, Lv3 ≈ 26-31, Lv5 ≈ 36-45 — a ~2.5× power curve like
+    // Raiden/Touhou, with every weapon within ~20% of the others.
+    BASE_SHOT_INTERVAL: 0.12,
+    WEAPON_INTERVALS: { spread: 0.25, homing: 0.26, laser: 0.1 }, // homing never misses, so it fires slower
+    DRONE_SHOT_INTERVAL: 0.5,
+    DRONE_CONTACT_INTERVAL: 0.15,
+    FOCUS_SPREAD_FACTOR: 0.35,
+    // Spread fans: each level is a strict superset of the previous one (pellets are only
+    // ever added), so an upgrade can never land fewer shots on a target at any range
+    SPREAD_ANGLES: [
+        null,
+        [-0.05, 0.05],
+        [-0.05, 0, 0.05],
+        [-0.2, -0.05, 0, 0.05, 0.2],
+        [-0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2],
+        [-0.34, -0.2, -0.12, -0.05, 0, 0.05, 0.12, 0.2, 0.34],
+    ],
+
+    droneCount() {
+        return this.droneLevel > 0 ? this.droneLevel + 1 : 0; // Lv1: 2 … Lv5: 6
+    },
+
+    dronePositions() {
+        const n = this.droneCount();
+        const out = [];
+        for (let d = 0; d < n; d++) {
+            const a = (Math.PI * 2 / n) * d + this.engineFlicker * 0.15;
+            out.push({ x: this.x + Math.cos(a) * 30, y: this.y + Math.sin(a) * 30 });
+        }
+        return out;
+    },
+
+    isFocusing() {
+        return GameConfig.focus.enabled && Input.isHeld('focus');
     },
 
     update(dt) {
@@ -5147,11 +6830,30 @@ const Player = {
             return;
         }
 
+        this.prevX = this.x;
+        this.prevY = this.y;
         this.engineFlicker += dt * 20;
         this.invincibleTimer = Math.max(0, this.invincibleTimer - dt);
-        if (this.invincibleTimer <= 0) this.invincible = false;
+        if (this.invincibleTimer <= 0 && !this.dashing) this.invincible = false;
         this.dashCooldown = Math.max(0, this.dashCooldown - dt);
         this.shieldFlashTimer = Math.max(0, this.shieldFlashTimer - dt);
+        this.shieldPulseFlash = Math.max(0, this.shieldPulseFlash - dt);
+
+        // Death-bomb window: a lethal hit can still be cancelled by bombing (Touhou-style)
+        if (this.deathPending > 0) {
+            if (Input.isPressed('bomb') && GameConfig.bombs.enabled && this.bombs > 0) {
+                this.deathPending = 0;
+                this._useBomb();
+                Scoring.spawnPopup('DEATH BOMB!', '#00ffff', 20);
+            } else {
+                this.deathPending -= dt;
+                if (this.deathPending <= 0) {
+                    this.deathPending = 0;
+                    this._die(true);
+                    return;
+                }
+            }
+        }
 
         // Bomb
         if (this.bombActive) {
@@ -5166,13 +6868,13 @@ const Player = {
             this.y += this.dashDir.y * this.speed * 3 * dt;
             if (this.dashTimer <= 0) {
                 this.dashing = false;
-                this.invincible = false;
+                // Keep any invulnerability that was already running (bomb, respawn, shield)
+                this.invincible = this.invincibleTimer > 0;
             }
         } else {
             // Normal movement
             const move = Input.getMovement();
-            const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
-            const spd = this.speed * (focusing ? GameConfig.focus.speedMultiplier : 1);
+            const spd = this.speed * (this.isFocusing() ? GameConfig.focus.speedMultiplier : 1);
             this.x += move.x * spd * dt;
             this.y += move.y * spd * dt;
         }
@@ -5185,14 +6887,33 @@ const Player = {
         this.trailPositions.unshift({ x: this.x, y: this.y });
         if (this.trailPositions.length > 10) this.trailPositions.pop();
 
-        // Firing
-        const shouldFire = GameConfig.fireMode === 'auto' ? !Input.isHeld('focus') : Input.isHeld('fire');
+        // Firing — auto-fire keeps shooting while focusing (focus tightens the pattern instead)
+        const shouldFire = (GameConfig.fireMode === 'auto' || Input.isHeld('fire')) && !this.dashing && this.deathPending <= 0;
+        const rateMult = Scoring.surgeActive ? 0.5 : 1; // Neon Surge: double fire rate
         this.fireTimer -= dt;
-        if (shouldFire && this.fireTimer <= 0 && !this.dashing) {
-            this._fire();
-            // Weapon-specific fire rates
-            const rates = { none: 0.12, spread: 0.13, homing: 0.2, laser: 0.1 };
-            this.fireTimer = rates[this.primaryWeapon] || 0.12;
+        this.weaponTimer -= dt;
+        this.droneShotTimer -= dt;
+        if (shouldFire) {
+            if (this.fireTimer <= 0) {
+                this._fireBaseShot();
+                this.fireTimer = this.BASE_SHOT_INTERVAL * rateMult;
+            }
+            if (this.primaryWeapon !== 'none' && this.primaryLevel > 0 && this.weaponTimer <= 0) {
+                this._fireWeapon();
+                this.weaponTimer = this.WEAPON_INTERVALS[this.primaryWeapon] * rateMult;
+            }
+            if (this.droneLevel >= 3 && this.droneShotTimer <= 0) {
+                this._fireDrones();
+                this.droneShotTimer = this.DRONE_SHOT_INTERVAL * rateMult;
+            }
+        }
+
+        // Laser beam MeshRope — show while firing, hide otherwise
+        if (this.primaryWeapon === 'laser' && this.alive) {
+            const laserColor = Hangar.equipped.bullet === 'neon' ? '#4488ff' : Hangar.bulletColor;
+            Renderer.updateLaserBeam(this.x, this.y - this.radius, laserColor, shouldFire);
+        } else {
+            Renderer.updateLaserBeam(0, 0, null, false);
         }
 
         // Dash input
@@ -5200,16 +6921,16 @@ const Player = {
             this._startDash();
         }
 
-        // Bomb input
-        if (Input.isPressed('bomb') && GameConfig.bombs.enabled && this.bombs > 0 && !this.bombActive) {
+        // Bomb input (the death-bomb window above handles bombing while hit)
+        if (Input.isPressed('bomb') && GameConfig.bombs.enabled && this.bombs > 0 && !this.bombActive && this.deathPending <= 0) {
             this._useBomb();
         }
 
-        // Graze detection
-        if (GameConfig.graze.enabled) {
+        // Graze detection — only while vulnerable (dashing through bullets still counts)
+        if (GameConfig.graze.enabled && (!this.invincible || this.dashing) && this.deathPending <= 0) {
             const gz = this.grazeRadius * (GameConfig.graze.zoneMultiplier || 1);
             for (const b of Enemies.enemyBullets.pool) {
-                if (b.grazed) continue;
+                if (b.grazed || b.harmless > 0) continue;
                 const dx = b.x - this.x;
                 const dy = b.y - this.y;
                 const dist = Math.sqrt(dx * dx + dy * dy);
@@ -5222,25 +6943,35 @@ const Player = {
             }
         }
 
-        // Surge activation — fire+focus together, or bomb key when surge is ready and bombs empty/disabled
+        // Surge activation — dedicated SURGE input, or bomb with no bombs left
         if (Scoring.surgeCharge >= Scoring.surgeMax && !Scoring.surgeActive) {
-            const surgeTriggered = (Input.isHeld('fire') && Input.isHeld('focus')) ||
+            const surgeTriggered = Input.isPressed('surge') ||
                                    (Input.isPressed('bomb') && (!GameConfig.bombs.enabled || this.bombs <= 0));
             if (surgeTriggered) {
                 Scoring.activateSurge();
                 Achievements.onSurge();
                 Audio.playSurgeActivate();
-                ScreenShake.trigger(6, 0.3);
-                Particles.spawn(this.x, this.y, 25, { color: '#ffffff', speed: 150, life: 0.5, size: 3 });
+                ScreenShake.trigger(12, 0.5);
+                Renderer.triggerFlash(0xffffff, 0.35);
+                Renderer.triggerChroma(0.025, 0.7);
+                Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
+                Particles.spawn(this.x, this.y, 80, { color: '#ffffff', speed: 300, life: 0.7, size: 4 });
+                Particles.spawn(this.x, this.y, 40, { color: '#00ffff', speed: 200, life: 1.0, size: 2.5 });
+                Particles.spawnShockwave(this.x, this.y, '#00ffff', 150, 0.45);
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 150, 0.95);
+                Renderer.spawnExplosionSprite(this.x, this.y, 5, 0x00ffff, 0.5);
             }
         }
 
-        // Collision with enemy bullets
-        if (!this.invincible && !this.dashing) {
+        // Drones: contact damage and periodic shield pulse
+        this._updateDrones(dt);
+
+        // Collision with enemy bullets (swept, so fast bullets can't tunnel through the hitbox)
+        if (!this.invincible && !this.dashing && this.deathPending <= 0) {
             for (const b of Enemies.enemyBullets.pool) {
-                const dx = b.x - this.x;
-                const dy = b.y - this.y;
-                if (dx * dx + dy * dy < (this.hitboxRadius + b.radius) * (this.hitboxRadius + b.radius)) {
+                if (b.harmless > 0) continue;
+                const r = this.hitboxRadius + b.radius;
+                if (this._sweptHit(b, r)) {
                     b.active = false;
                     this._die();
                     break;
@@ -5249,7 +6980,7 @@ const Player = {
         }
 
         // Collision with enemies (contact damage)
-        if (!this.invincible && !this.dashing) {
+        if (!this.invincible && !this.dashing && this.deathPending <= 0) {
             for (const e of Enemies.list) {
                 const dx = e.x - this.x;
                 const dy = e.y - this.y;
@@ -5261,7 +6992,7 @@ const Player = {
         }
 
         // Collision with boss
-        if (!this.invincible && !this.dashing && Boss.active && Boss.entered && !Boss.defeated) {
+        if (!this.invincible && !this.dashing && this.deathPending <= 0 && Boss.active && Boss.entered && !Boss.defeated) {
             const dx = Boss.x - this.x;
             const dy = Boss.y - this.y;
             if (dx * dx + dy * dy < (this.hitboxRadius + Boss.radius) * (this.hitboxRadius + Boss.radius)) {
@@ -5269,33 +7000,41 @@ const Player = {
             }
         }
 
+        // Neon Surge: player shots cancel enemy bullets they touch
+        if (Scoring.surgeActive) this._surgeCancelBullets();
+
         // Player bullets collision with enemies
         for (let i = this.bullets.pool.length - 1; i >= 0; i--) {
             const b = this.bullets.pool[i];
+            if (!b.active) continue;
 
-            // Check boss
+            // Check boss (armor segments first, then the core)
             if (Boss.active && Boss.entered && !Boss.defeated) {
-                const dx = b.x - Boss.x;
-                const dy = b.y - Boss.y;
-                if (dx * dx + dy * dy < (b.radius + Boss.radius) * (b.radius + Boss.radius)) {
-                    Boss.hit(b.damage);
+                if (Boss.hitTest(b)) {
                     b.active = false;
+                    Scoring.onHit();
                     Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
                     continue;
                 }
             }
 
-            // Check enemies
+            // Check enemies — lasers pierce, hitting each enemy once
             for (const e of Enemies.list) {
+                if (b.pierce && b.hitSet && b.hitSet.has(e)) continue;
                 const dx = b.x - e.x;
                 const dy = b.y - e.y;
                 if (dx * dx + dy * dy < (b.radius + e.radius) * (b.radius + e.radius)) {
                     // Calculate player-to-enemy distance for point-blank bonus
                     const pdx = this.x - e.x, pdy = this.y - e.y;
                     const playerDist = Math.sqrt(pdx * pdx + pdy * pdy);
-                    const killed = Enemies.hit(e, b.damage, playerDist);
-                    b.active = false;
+                    Enemies.hit(e, b.damage, playerDist);
+                    Scoring.onHit();
                     Particles.spawn(b.x, b.y, 3, { color: '#00ffff', speed: 50, life: 0.1 });
+                    if (b.pierce) {
+                        (b.hitSet || (b.hitSet = new Set())).add(e);
+                        continue;
+                    }
+                    b.active = false;
                     break;
                 }
             }
@@ -5312,118 +7051,170 @@ const Player = {
             }
         }
 
-        // Build homing targets list
-        const homingTargets = [...Enemies.list];
-        if (Boss.active && Boss.entered && !Boss.defeated) {
-            homingTargets.push({ x: Boss.x, y: Boss.y });
-        }
-        this.bullets.update(dt, homingTargets);
+        this.bullets.update(dt, this._targets());
     },
 
-    _fire() {
-        const baseSpeed = -700;
+    // Enemies plus the boss, as homing/drone targets
+    _targets() {
+        const targets = [...Enemies.list];
+        if (Boss.active && Boss.entered && !Boss.defeated) targets.push({ x: Boss.x, y: Boss.y, isBoss: true });
+        return targets;
+    },
 
-        // Base shot (always fires unless laser is active)
-        if (this.primaryWeapon !== 'laser') {
-            this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed, { color: Hangar.bulletColor, radius: 3, damage: 1 });
+    // Closest approach between the hitbox and a bullet's path since the last frame
+    _sweptHit(b, r) {
+        const px = this.prevX !== undefined ? this.prevX : this.x;
+        const py = this.prevY !== undefined ? this.prevY : this.y;
+        const ax = b.prevX - px, ay = b.prevY - py;   // relative position at start of step
+        const bx = b.x - this.x, by = b.y - this.y;   // relative position now
+        const vx = bx - ax, vy = by - ay;
+        const len2 = vx * vx + vy * vy;
+        let t = len2 > 0 ? -(ax * vx + ay * vy) / len2 : 0;
+        t = Math.max(0, Math.min(1, t));
+        const cx = ax + vx * t, cy = ay + vy * t;
+        return cx * cx + cy * cy < r * r;
+    },
+
+    _surgeCancelBullets() {
+        const enemy = Enemies.enemyBullets.pool;
+        for (const b of this.bullets.pool) {
+            if (!b.active) continue;
+            for (const eb of enemy) {
+                if (!eb.active) continue;
+                const dx = b.x - eb.x, dy = b.y - eb.y;
+                const r = b.radius + eb.radius + 2;
+                if (dx * dx + dy * dy < r * r) {
+                    eb.active = false;
+                    Particles.spawn(eb.x, eb.y, 2, { color: '#ffffff', speed: 60, life: 0.2, size: 2 });
+                    Scoring.score += Math.floor(10 * GameConfig.scoreMultiplier);
+                    if (!b.pierce) { b.active = false; break; }
+                }
+            }
         }
-        Audio.playShot();
+    },
 
-        // Weapon projectile color — use equipped bullet style, fall back to weapon-specific color
+    _updateDrones(dt) {
+        if (this.droneLevel <= 0) return;
+        const drones = this.dronePositions();
+
+        // Contact damage (GDD: drones damage enemies they touch)
+        this.droneContactTimer -= dt;
+        if (this.droneContactTimer <= 0) {
+            this.droneContactTimer = this.DRONE_CONTACT_INTERVAL;
+            for (const d of drones) {
+                for (const e of [...Enemies.list]) {
+                    const dx = e.x - d.x, dy = e.y - d.y;
+                    if (dx * dx + dy * dy < (e.radius + 6) * (e.radius + 6)) Enemies.hit(e, 1);
+                }
+                if (Boss.active && Boss.entered && !Boss.defeated) {
+                    const dx = Boss.x - d.x, dy = Boss.y - d.y;
+                    if (dx * dx + dy * dy < (Boss.radius + 6) * (Boss.radius + 6)) Boss.hit(1);
+                }
+            }
+        }
+
+        // Shield pulse (Lv2+): periodically cancels enemy bullets close to the ship
+        if (this.droneLevel >= 2) {
+            this.shieldPulseTimer -= dt;
+            if (this.shieldPulseTimer <= 0) {
+                this.shieldPulseTimer = this.droneLevel >= 4 ? 2.0 : 3.0;
+                this.shieldPulseFlash = 0.25;
+                const r = this.droneLevel >= 5 ? 55 : 45;
+                for (const b of Enemies.enemyBullets.pool) {
+                    const dx = b.x - this.x, dy = b.y - this.y;
+                    if (dx * dx + dy * dy < r * r) {
+                        b.active = false;
+                        Particles.spawn(b.x, b.y, 2, { color: '#cc44ff', speed: 60, life: 0.2, size: 2 });
+                    }
+                }
+            }
+        }
+    },
+
+    _weaponColors() {
         const bColor = Hangar.bulletColor;
         const isDefaultBullet = Hangar.equipped.bullet === 'neon';
-        const spreadColor = isDefaultBullet ? '#ff8c00' : bColor;
-        const homingColor = isDefaultBullet ? '#00ff88' : bColor;
-        const laserColor = isDefaultBullet ? '#4488ff' : bColor;
-        const droneColor = isDefaultBullet ? '#cc44ff' : bColor;
+        return {
+            spread: isDefaultBullet ? '#ff8c00' : bColor,
+            homing: isDefaultBullet ? '#00ff88' : bColor,
+            laser: isDefaultBullet ? '#4488ff' : bColor,
+            drone: isDefaultBullet ? '#cc44ff' : bColor,
+        };
+    },
 
-        // Primary weapon additional shots
-        // Spread: Lv1=2-way, Lv2=3-way, Lv3=5-way, Lv4=7-way+bigger, Lv5=9-way+rear shot
-        // Homing: Lv1=1 missile, Lv2=2, Lv3=3, Lv4=4 fast, Lv5=5 fast+stronger
-        // Laser: Lv1=thin beam, Lv2=wider, Lv3=dual, Lv4=triple, Lv5=wide triple+pierce damage
+    // Base shot: always available, on its own timer so weapons never slow it down
+    _fireBaseShot() {
+        this.bullets.spawn(this.x, this.y - this.radius, 0, -700, { color: Hangar.bulletColor, radius: 3, damage: 1 });
+        Audio.playShot();
+    },
+
+    _fireWeapon() {
+        const baseSpeed = -700;
+        const lvl = this.primaryLevel;
+        const colors = this._weaponColors();
+        const focus = this.isFocusing();
+
         switch (this.primaryWeapon) {
             case 'spread': {
-                const lvl = this.primaryLevel;
-                const angles = lvl >= 5 ? [-0.5, -0.35, -0.2, -0.1, 0.1, 0.2, 0.35, 0.5] :
-                               lvl >= 4 ? [-0.45, -0.3, -0.15, 0.15, 0.3, 0.45] :
-                               lvl >= 3 ? [-0.35, -0.2, 0, 0.2, 0.35] :
-                               lvl >= 2 ? [-0.25, 0, 0.25] :
-                               [-0.2, 0.2];
-                const dmg = lvl >= 5 ? 0.8 : lvl >= 4 ? 0.9 : 1;
+                // Focus tightens the fan (Touhou-style focused shot)
+                const spreadMult = focus ? this.FOCUS_SPREAD_FACTOR : 1;
                 const rad = lvl >= 4 ? 3 : 2.5;
-                for (const a of angles) {
+                for (const a0 of this.SPREAD_ANGLES[lvl]) {
+                    const a = a0 * spreadMult;
                     this.bullets.spawn(this.x, this.y - this.radius,
                         Math.sin(a) * -baseSpeed, Math.cos(a) * baseSpeed,
-                        { color: spreadColor, radius: rad, damage: dmg });
-                }
-                // Lv5: rear shot for coverage
-                if (lvl >= 5) {
-                    this.bullets.spawn(this.x, this.y + this.radius, 0, -baseSpeed * 0.5,
-                        { color: spreadColor, radius: 2.5, damage: 0.5 });
+                        { color: colors.spread, radius: rad, damage: 1 });
                 }
                 break;
             }
             case 'homing': {
-                const lvl = this.primaryLevel;
-                const count = lvl >= 5 ? 5 : lvl >= 4 ? 4 : lvl >= 3 ? 3 : lvl >= 2 ? 2 : 1;
-                const dmg = 0.3; // Low damage — convenience weapon, not a damage dealer
-                const spd = lvl >= 4 ? 0.7 : 0.6;
+                const count = lvl + 1; // Lv1: 2 … Lv5: 6 missiles
+                const spd = lvl >= 4 ? 0.7 : lvl >= 2 ? 0.65 : 0.6;
                 for (let j = 0; j < count; j++) {
-                    const ox = (j - (count - 1) / 2) * 14;
+                    const ox = (j - (count - 1) / 2) * 12;
                     this.bullets.spawn(this.x + ox, this.y - this.radius,
                         ox * 2, baseSpeed * spd,
-                        { color: homingColor, radius: 2.5, damage: dmg, type: 'homing', life: 3 });
+                        { color: colors.homing, radius: 2.5, damage: 1, type: 'homing', life: 3 });
                 }
                 break;
             }
             case 'laser': {
-                const lvl = this.primaryLevel;
-                const beamDamage = lvl >= 5 ? 5 : lvl >= 4 ? 4.5 : lvl >= 3 ? 4 : lvl >= 2 ? 3 : 2;
-                const beamWidth = lvl >= 5 ? 8 : lvl >= 4 ? 7 : lvl >= 3 ? 6 : lvl >= 2 ? 5 : 4;
-                this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed * 1.5,
-                    { color: laserColor, radius: beamWidth, damage: beamDamage, type: 'laser' });
-                // Lv3+: side beams
+                // Piercing beam: main beam plus side beams (Lv3+) and thin outer beams (Lv4+)
+                const mainDmg = [0, 1.0, 1.3, 1.6, 1.9, 2.3][lvl];
+                const mainW = [0, 4, 5, 6, 7, 8][lvl];
+                const opts = (radius, damage) => ({ color: colors.laser, radius, damage, type: 'laser', pierce: true });
+                this.bullets.spawn(this.x, this.y - this.radius, 0, baseSpeed * 1.5, opts(mainW, mainDmg));
                 if (lvl >= 3) {
-                    const sideW = lvl >= 5 ? beamWidth * 0.6 : beamWidth * 0.5;
-                    const sideDmg = lvl >= 5 ? beamDamage * 0.4 : beamDamage * 0.35;
-                    const sideSpread = lvl >= 5 ? 18 : lvl >= 4 ? 15 : 12;
-                    this.bullets.spawn(this.x - sideSpread, this.y - this.radius, 0, baseSpeed * 1.5,
-                        { color: laserColor, radius: sideW, damage: sideDmg, type: 'laser' });
-                    this.bullets.spawn(this.x + sideSpread, this.y - this.radius, 0, baseSpeed * 1.5,
-                        { color: laserColor, radius: sideW, damage: sideDmg, type: 'laser' });
+                    const off = [0, 0, 0, 12, 13, 14][lvl];         // stays inside a scout's hitbox
+                    const dmg = [0, 0, 0, 0.3, 0.35, 0.4][lvl];
+                    this.bullets.spawn(this.x - off, this.y - this.radius, 0, baseSpeed * 1.5, opts(3, dmg));
+                    this.bullets.spawn(this.x + off, this.y - this.radius, 0, baseSpeed * 1.5, opts(3, dmg));
                 }
-                // Lv4+: additional outer beams (thin, low damage)
                 if (lvl >= 4) {
-                    this.bullets.spawn(this.x - 30, this.y - this.radius, 0, baseSpeed * 1.3,
-                        { color: laserColor, radius: beamWidth * 0.3, damage: beamDamage * 0.2, type: 'laser' });
-                    this.bullets.spawn(this.x + 30, this.y - this.radius, 0, baseSpeed * 1.3,
-                        { color: laserColor, radius: beamWidth * 0.3, damage: beamDamage * 0.2, type: 'laser' });
+                    const off = lvl >= 5 ? 28 : 26;
+                    const dmg = lvl >= 5 ? 0.2 : 0.15;
+                    this.bullets.spawn(this.x - off, this.y - this.radius, 0, baseSpeed * 1.3, opts(2, dmg));
+                    this.bullets.spawn(this.x + off, this.y - this.radius, 0, baseSpeed * 1.3, opts(2, dmg));
                 }
                 break;
             }
         }
+    },
 
-        // Drone firing — Lv1-2: contact only, Lv3: 4 drones fire, Lv4: 5 drones fire faster, Lv5: 6 drones + stronger
-        if (this.droneLevel >= 3) {
-            const droneCount = this.droneLevel >= 5 ? 6 : this.droneLevel >= 4 ? 5 : 4;
-            const droneDmg = 0.5; // Same damage per shot at all levels — more drones = more coverage, not more burst
-            for (let d = 0; d < droneCount; d++) {
-                const a = (Math.PI * 2 / droneCount) * d + this.engineFlicker * 0.15;
-                const dx = this.x + Math.cos(a) * 30;
-                const dy = this.y + Math.sin(a) * 30;
-                if (this.fireTimer <= 0) {
-                    let nearest = null, nearDist = Infinity;
-                    for (const e of Enemies.list) {
-                        const d2 = (e.x - dx) * (e.x - dx) + (e.y - dy) * (e.y - dy);
-                        if (d2 < nearDist) { nearDist = d2; nearest = e; }
-                    }
-                    if (nearest) {
-                        const ang = Math.atan2(nearest.y - dy, nearest.x - dx);
-                        this.bullets.spawn(dx, dy, Math.cos(ang) * 500, Math.sin(ang) * 500,
-                            { color: droneColor, radius: 2, damage: droneDmg, life: 1.5 });
-                    }
-                }
+    // Drones Lv3+: each drone fires at the nearest target, including the boss
+    _fireDrones() {
+        const targets = this._targets();
+        if (targets.length === 0) return;
+        const color = this._weaponColors().drone;
+        for (const d of this.dronePositions()) {
+            let nearest = null, nearDist = Infinity;
+            for (const t of targets) {
+                const d2 = (t.x - d.x) * (t.x - d.x) + (t.y - d.y) * (t.y - d.y);
+                if (d2 < nearDist) { nearDist = d2; nearest = t; }
             }
+            const ang = Math.atan2(nearest.y - d.y, nearest.x - d.x);
+            this.bullets.spawn(d.x, d.y, Math.cos(ang) * 500, Math.sin(ang) * 500,
+                { color, radius: 2, damage: 1, life: 1.5 });
         }
     },
 
@@ -5435,7 +7226,7 @@ const Player = {
             this.dashDir = move;
         }
         this.dashing = true;
-        this.dashTimer = 0.15;
+        this.dashTimer = 0.2;
         this.invincible = true;
         this.dashCooldown = GameConfig.dash.cooldown;
         Audio.playDash();
@@ -5448,28 +7239,34 @@ const Player = {
         this.bombActive = true;
         this.bombTimer = 1.5;
         this.invincible = true;
-        this.invincibleTimer = 1.5;
+        this.invincibleTimer = Math.max(this.invincibleTimer, 1.5);
+        Renderer.triggerChroma(0.015, 0.6);
+        Renderer.triggerFlash(0x00ffff, 0.3);
+        Renderer.triggerShockwave(this.x / PLAY_W, this.y / PLAY_H);
 
         // Clear all enemy bullets
         Enemies.enemyBullets.clear();
 
-        // Damage all enemies — tiered: kills weak, damages medium, hurts tough
+        // Damage all enemies — tiered by the enemy's BASE toughness, so level HP scaling
+        // doesn't push basic enemies out of the "guaranteed kill" tier
         for (const e of [...Enemies.list]) {
+            const baseHp = (Enemies.types[e.type] || {}).hp || e.maxHp;
             let bombDmg;
-            if (e.maxHp <= 3) {
-                bombDmg = e.maxHp + 5; // Guaranteed kill: scouts, snipers, shield walls
-            } else if (e.maxHp <= 6) {
-                bombDmg = Math.ceil(e.maxHp * 0.75); // 75%: gunships, turrets, phase shifters — nearly dead
+            if (e.midboss) {
+                bombDmg = Math.ceil(e.maxHp * 0.1);          // Mid-bosses: like bosses, 10%
+            } else if (baseHp <= 3) {
+                bombDmg = e.maxHp + e.shieldHp + 5;          // Guaranteed kill: scouts, snipers, shield walls
+            } else if (baseHp <= 6) {
+                bombDmg = Math.ceil(e.maxHp * 0.75);        // Gunships, turrets, phase shifters — nearly dead
             } else {
-                bombDmg = Math.ceil(e.maxHp * 0.45); // 45%: cruisers, carriers, bombers — hurt but survive
+                bombDmg = Math.ceil(e.maxHp * 0.45);        // Cruisers, carriers, bombers — hurt but survive
             }
             Enemies.hit(e, bombDmg);
         }
 
-        // Damage boss — 10% of current phase HP
+        // Damage boss — 10% of current phase HP, and every armor segment
         if (Boss.active && Boss.entered && !Boss.defeated) {
-            const bossBombDmg = Math.max(8, Math.ceil(Boss.maxHp * 0.1));
-            Boss.hit(bossBombDmg);
+            Boss.bombHit(Math.max(8, Math.ceil(Boss.maxHp * 0.1)));
         }
 
         Scoring.breakChain();
@@ -5486,33 +7283,48 @@ const Player = {
         }
     },
 
-    _die() {
-        if (this.invincible || !this.alive) return;
+    // confirmed: true once the death-bomb window has expired
+    _die(confirmed) {
+        if (!this.alive) return;
+        if (!confirmed) {
+            if (this.invincible || this.deathPending > 0) return;
 
-        // Shield absorbs hit if available
-        if (this.shieldHp > 0) {
-            this.shieldHp--;
-            this.shieldFlashTimer = 0.3;
-            this.invincible = true;
-            this.invincibleTimer = 0.8;
-            Particles.spawn(this.x, this.y, 15, { color: '#4488ff', speed: 120, life: 0.3, size: 2 });
-            ScreenShake.trigger(4, 0.2);
-            Audio.playShieldHit();
-            return;
+            // Shield absorbs hit if available
+            if (this.shieldHp > 0) {
+                this.shieldHp--;
+                this.shieldFlashTimer = 0.3;
+                this.invincible = true;
+                this.invincibleTimer = 0.8;
+                Particles.spawn(this.x, this.y, 20, { color: '#4488ff', speed: 150, life: 0.4, size: 2.5 });
+                Particles.spawnShockwave(this.x, this.y, '#4488ff', 60, 0.35);
+                Renderer.addGlow(this.x, this.y, 0x4488ff, 100, 0.8);
+                Renderer.triggerChroma(0.008, 0.3);
+                ScreenShake.trigger(6, 0.3);
+                Audio.playShieldHit();
+                return;
+            }
+
+            // Death-bomb window: a short grace period in which bombing cancels the hit
+            const window = GameConfig.deathBombWindow || 0;
+            if (window > 0 && GameConfig.bombs.enabled && this.bombs > 0) {
+                this.deathPending = window;
+                Renderer.triggerFlash(0xff0044, 0.15);
+                return;
+            }
         }
 
         this.alive = false;
         this.lives--;
         Scoring.recordDeath();
         Scoring.breakChain();
-        Scoring.surgeCharge = 0;
+        Scoring.surgeCharge = Math.floor(Scoring.surgeCharge * 0.5); // keep half the graze effort
         Scoring.surgeActive = false;
 
         // Death penalty
         switch (GameConfig.deathPenalty) {
             case 'moderate':
                 if (this.primaryLevel > 0) this.primaryLevel--;
-                else this.primaryWeapon = 'none';
+                if (this.primaryLevel === 0) this.primaryWeapon = 'none';
                 if (this.droneLevel > 0) this.droneLevel--;
                 break;
             case 'full':
@@ -5541,9 +7353,11 @@ const Player = {
             });
         }
 
-        Particles.spawn(this.x, this.y, 30, { color: skinColor, speed: 200, life: 0.6, size: 3 });
-        Particles.spawn(this.x, this.y, 20, { color: '#ffffff', speed: 150, life: 0.4, size: 2 });
-        ScreenShake.trigger(10, 0.5);
+        Particles.spawn(this.x, this.y, 50, { color: skinColor, speed: 250, life: 0.8, size: 4 });
+        Particles.spawn(this.x, this.y, 30, { color: '#ffffff', speed: 200, life: 0.5, size: 3 });
+        Renderer.triggerChroma(0.02, 0.7);
+        Renderer.triggerFlash(0xffffff, 0.4);
+        ScreenShake.trigger(15, 0.6);
         Audio.playPlayerDeath();
 
         if (this.lives > 0) {
@@ -5555,9 +7369,11 @@ const Player = {
         this.alive = true;
         this.x = PLAY_W / 2;
         this.y = PLAY_H - 80;
+        this.prevX = this.x;
+        this.prevY = this.y;
         this.invincible = true;
         this.invincibleTimer = 2.0;
-        this.bombs = Math.min(this.bombs + 2, GameConfig.bombs.startCount);
+        this.bombs = Math.max(this.bombs, Math.min(this.bombs + 2, GameConfig.bombs.startCount));
         this.shieldHp = this.maxShieldHp; // Restore shield on respawn
         this.bullets.clear();
     },
@@ -5596,8 +7412,6 @@ const Player = {
                 ctx.rotate(f.rot);
                 ctx.globalAlpha = alpha;
                 ctx.fillStyle = f.color;
-                ctx.shadowColor = f.color;
-                ctx.shadowBlur = 0;
                 // Irregular triangle fragment
                 ctx.beginPath();
                 ctx.moveTo(-f.size * 0.5, -f.size * 0.3);
@@ -5608,7 +7422,6 @@ const Player = {
                 ctx.restore();
             }
             ctx.globalAlpha = 1;
-            ctx.shadowBlur = 0;
             // Still draw bullets even when dead
             this.bullets.draw(ctx);
             return;
@@ -5636,44 +7449,35 @@ const Player = {
 
         // Drones
         if (this.droneLevel > 0) {
-            const droneCount = this.droneLevel >= 5 ? 6 : this.droneLevel >= 4 ? 5 : this.droneLevel >= 3 ? 4 : this.droneLevel >= 2 ? 3 : 2;
-            for (let d = 0; d < droneCount; d++) {
-                const a = (Math.PI * 2 / droneCount) * d + this.engineFlicker * 0.15;
-                const dx = this.x + Math.cos(a) * 30;
-                const dy = this.y + Math.sin(a) * 30;
-                ctx.fillStyle = '#cc44ff';
-                ctx.shadowColor = '#cc44ff';
-                ctx.shadowBlur = 0;
+            ctx.fillStyle = '#cc44ff';
+            for (const d of this.dronePositions()) {
                 ctx.beginPath();
-                ctx.arc(dx, dy, 5, 0, Math.PI * 2);
+                ctx.arc(d.x, d.y, 5, 0, Math.PI * 2);
                 ctx.fill();
-                // Shield pulse for level 2+, stronger at higher levels
-                if (this.droneLevel >= 2 && Math.sin(this.engineFlicker * 0.5) > (this.droneLevel >= 4 ? 0.5 : 0.8)) {
-                    const pulseAlpha = this.droneLevel >= 5 ? 0.5 : this.droneLevel >= 4 ? 0.4 : 0.3;
-                    ctx.strokeStyle = `rgba(204, 68, 255, ${pulseAlpha})`;
-                    ctx.lineWidth = this.droneLevel >= 4 ? 3 : 2;
-                    ctx.beginPath();
-                    ctx.arc(this.x, this.y, 35, 0, Math.PI * 2);
-                    ctx.stroke();
-                    // Double ring at level 5
-                    if (this.droneLevel >= 5) {
-                        ctx.strokeStyle = 'rgba(204, 68, 255, 0.2)';
-                        ctx.beginPath();
-                        ctx.arc(this.x, this.y, 45, 0, Math.PI * 2);
-                        ctx.stroke();
-                    }
-                }
+            }
+            // Shield pulse ring (Lv2+) — shown while a pulse is cancelling bullets
+            if (this.shieldPulseFlash > 0) {
+                const r = this.droneLevel >= 5 ? 55 : 45;
+                ctx.strokeStyle = `rgba(204, 68, 255, ${0.3 + this.shieldPulseFlash * 1.6})`;
+                ctx.lineWidth = this.droneLevel >= 4 ? 3 : 2;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, r * (1 - this.shieldPulseFlash), 0, Math.PI * 2);
+                ctx.stroke();
             }
         }
 
         ctx.save();
         ctx.translate(this.x, this.y);
 
+        // GPU glow behind player — engine glow + surge glow
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
+        if (Scoring.surgeActive) {
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
+        }
+
         // Surge glow
         if (Scoring.surgeActive && !Settings.values.flashReduction) {
             ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.radius + 10 + Math.sin(this.engineFlicker) * 3, 0, Math.PI * 2);
             ctx.fill();
@@ -5684,8 +7488,6 @@ const Player = {
             const shieldAlpha = this.shieldFlashTimer > 0 ? 0.6 : 0.2 + Math.sin(this.engineFlicker * 0.3) * 0.1;
             const shieldColor = this.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
             ctx.strokeStyle = shieldColor;
-            ctx.shadowColor = shieldColor;
-            ctx.shadowBlur = 0;
             ctx.lineWidth = 2;
             ctx.globalAlpha = shieldAlpha;
             ctx.beginPath();
@@ -5702,8 +7504,6 @@ const Player = {
         ctx.globalAlpha = shipAlpha;
         const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
         ctx.fillStyle = sc;
-        ctx.shadowColor = sc;
-        ctx.shadowBlur = 0;
         const r = this.radius;
 
         // Main fuselage
@@ -5744,14 +7544,12 @@ const Player = {
 
         // Wing tip accents
         ctx.fillStyle = sc;
-        ctx.shadowBlur = 0;
         ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
         ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
 
         // Outline
         ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
         ctx.lineWidth = 1;
-        ctx.shadowBlur = 0;
         // Fuselage outline
         ctx.beginPath();
         ctx.moveTo(0, -r * 1.1);
@@ -5773,8 +7571,6 @@ const Player = {
         const trailColor = Hangar.trailColor;
         const flicker = Math.sin(this.engineFlicker) * 2;
         ctx.fillStyle = trailColor;
-        ctx.shadowColor = trailColor;
-        ctx.shadowBlur = 0;
         // Left engine
         ctx.beginPath();
         ctx.moveTo(-r * 0.35, r * 0.65);
@@ -5791,8 +7587,6 @@ const Player = {
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
             ctx.fillStyle = '#ffffff';
-            ctx.shadowColor = '#ffffff';
-            ctx.shadowBlur = 0;
             ctx.beginPath();
             ctx.arc(0, 0, this.hitboxRadius + 1, 0, Math.PI * 2);
             ctx.fill();
@@ -5815,13 +7609,28 @@ const Player = {
         // Bomb effect
         if (this.bombActive && !Settings.values.flashReduction) {
             const bombAlpha = this.bombTimer / 1.5;
+            // GPU glow at bomb centre
+            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
+            // Screen-filling flash
             ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
             ctx.fillRect(0, 0, PLAY_W, PLAY_H);
+            // White-hot centre
+            ctx.fillStyle = `rgba(255, 255, 255, ${bombAlpha * 0.12})`;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, 80 * bombAlpha, 0, Math.PI * 2);
+            ctx.fill();
+            // Expanding shockwave ring
             const ringR = (1.5 - this.bombTimer) * 400;
             ctx.strokeStyle = `rgba(0, 255, 255, ${bombAlpha * 0.5})`;
             ctx.lineWidth = 3;
             ctx.beginPath();
             ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+            ctx.stroke();
+            // Secondary inner ring
+            ctx.strokeStyle = `rgba(255, 255, 255, ${bombAlpha * 0.3})`;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
             ctx.stroke();
         } else if (this.bombActive) {
             // Reduced flash — just the ring, dimmer
@@ -5838,407 +7647,960 @@ const Player = {
 
 // === background.js ===
 // ============================================================
-//  BACKGROUND RENDERER — Parallax + Per-Theme Silhouettes
+//  BACKGROUND RENDERER
+//
+//  Layers (back to front):
+//    1. Sky gradient
+//    2. Star field (twinkle, colour tint)
+//    3. Nebulae / atmosphere
+//    4. Horizon feature (sun, planet, portal, etc.)
+//    5. Mid-parallax ambient
+//    6. Distant silhouettes
+//    7. Near silhouettes (pre-baked window phases)
+//    8. Perspective grid / ground plane
+//    9. Foreground speed streaks
+//   10. Theme overlay (data streams, void tears, etc.)
 // ============================================================
 const Background = {
     gridOffset: 0,
+    time: 0,
     bgType: 'synthwave',
 
-    // Parallax layers
-    farStars: [],    // Slowest — distant stars/particles
-    midLayer: [],    // Medium — theme-specific mid elements
-    nearLayer: [],   // Fastest — foreground silhouette elements
+    farStars: [],
+    nebulae: [],
+    midLayer: [],
+    distantBuildings: [],
+    buildings: [],
+    foreground: [],
+    _dataStreams: [],   // digital theme
+    _smokePuffs: [],   // industrial theme
 
     init() {
-        // Far stars (all themes)
+        this.time = 0;
+        this._cachedSkyGrad = null;
+        this._cachedTheme = null;
+
         this.farStars = [];
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < 130; i++) {
             this.farStars.push({
                 x: Math.random() * PLAY_W,
-                y: Math.random() * PLAY_H,
-                size: 0.5 + Math.random() * 1.5,
-                speed: 10 + Math.random() * 20, // Slow — far away
-                brightness: 0.2 + Math.random() * 0.6
+                y: Math.random() * PLAY_H * 0.82,
+                size: 0.4 + Math.random() * 1.6,
+                speed: 5 + Math.random() * 18,
+                brightness: 0.4 + Math.random() * 0.6,
+                phase: Math.random() * Math.PI * 2,
+                twinkleSpeed: 1.0 + Math.random() * 2.5,
+                hue: Math.floor(Math.random() * 3), // 0=white 1=blue 2=warm
             });
         }
 
-        // Mid layer — theme-specific ambient elements
+        this.nebulae = [];
+        for (let i = 0; i < 5; i++) {
+            this.nebulae.push({
+                x: Math.random() * PLAY_W,
+                y: Math.random() * PLAY_H * 0.6,
+                rx: 80 + Math.random() * 160,
+                ry: 40 + Math.random() * 80,
+                speed: 3 + Math.random() * 9,
+                alpha: 0.04 + Math.random() * 0.05,
+                phase: Math.random() * Math.PI * 2,
+            });
+        }
+
         this.midLayer = [];
-        for (let i = 0; i < 15; i++) {
+        for (let i = 0; i < 18; i++) {
             this.midLayer.push({
                 x: Math.random() * PLAY_W,
                 y: Math.random() * PLAY_H,
-                size: 2 + Math.random() * 4,
-                speed: 30 + Math.random() * 40, // Medium speed
-                type: Math.floor(Math.random() * 3)
+                size: 1.5 + Math.random() * 4,
+                speed: 20 + Math.random() * 50,
+                type: Math.floor(Math.random() * 4),
+                phase: Math.random() * Math.PI * 2,
             });
         }
 
-        // Near layer silhouettes are static (drawn procedurally based on theme)
-        this.nearLayer = [];
-        this._generateNearLayer();
+        this.foreground = [];
+        for (let i = 0; i < 28; i++) {
+            this.foreground.push({
+                x: Math.random() * PLAY_W,
+                y: Math.random() * PLAY_H,
+                size: 0.4 + Math.random() * 1.1,
+                speed: 160 + Math.random() * 340,
+                alpha: 0.04 + Math.random() * 0.07,
+                length: 4 + Math.random() * 14,
+            });
+        }
+
+        this._generateBuildings();
+        this._generateThemeExtra();
     },
 
-    _generateNearLayer() {
-        this.nearLayer = [];
-        // Generate horizon silhouette elements based on theme
-        // Each element: { x, w, h, type }
+    _generateNearLayer() { this._generateBuildings(); this._generateThemeExtra(); },
+
+    _generateBuildings() {
+        this.buildings = [];
+        this.distantBuildings = [];
         const W = PLAY_W;
+
         switch (this.bgType) {
             case 'synthwave':
-            case 'industrial':
-                // Buildings
-                for (let x = 10; x < W - 10; x += 30 + Math.random() * 20) {
-                    this.nearLayer.push({ x, w: 20 + Math.random() * 35, h: 40 + Math.random() * 100, type: 'building' });
+            case 'industrial': {
+                // Distant city layer — smaller, packed
+                for (let x = -10; x < W + 10; x += 12 + Math.random() * 10) {
+                    this.distantBuildings.push({
+                        x, w: 9 + Math.random() * 18, h: 12 + Math.random() * 50,
+                    });
+                }
+                // Near city — pre-bake window phases
+                for (let x = -5; x < W + 5; x += 26 + Math.random() * 22) {
+                    const w = 18 + Math.random() * 40;
+                    const h = 50 + Math.random() * 120;
+                    const el = { x, w, h, windows: [], antennaPhase: Math.random() * Math.PI * 2 };
+                    for (let wy = 8; wy < h - 8; wy += 10) {
+                        for (let wx = 4; wx < w - 4; wx += 8) {
+                            el.windows.push({
+                                relX: wx, relY: wy,
+                                phase: Math.random() * Math.PI * 2,
+                                speed: 0.2 + Math.random() * 0.6,
+                                lit: Math.random() < 0.55,
+                            });
+                        }
+                    }
+                    this.buildings.push(el);
                 }
                 break;
-            case 'space':
-                // Space station debris, satellite dishes, antenna arrays
-                for (let x = 30; x < W - 30; x += 60 + Math.random() * 80) {
-                    const types = ['antenna', 'dish', 'debris'];
-                    this.nearLayer.push({ x, w: 15 + Math.random() * 30, h: 20 + Math.random() * 60, type: types[Math.floor(Math.random() * 3)] });
+            }
+            case 'digital': {
+                for (let x = -5; x < W + 5; x += 18 + Math.random() * 28) {
+                    const w = 5 + Math.random() * 14;
+                    const h = 70 + Math.random() * 150;
+                    this.buildings.push({ x, w, h, phase: Math.random() * Math.PI * 2 });
+                }
+                for (let x = 0; x < W; x += 10 + Math.random() * 14) {
+                    this.distantBuildings.push({
+                        x, w: 3 + Math.random() * 8, h: 25 + Math.random() * 80,
+                    });
                 }
                 break;
-            case 'sky':
-                // Cloud banks — wider, shorter, softer
-                for (let x = 0; x < W; x += 40 + Math.random() * 60) {
-                    this.nearLayer.push({ x, w: 60 + Math.random() * 100, h: 15 + Math.random() * 30, type: 'cloud' });
+            }
+            case 'space': {
+                for (let x = 20; x < W - 20; x += 55 + Math.random() * 80) {
+                    const types = ['antenna', 'dish', 'relay'];
+                    this.buildings.push({
+                        x, w: 12 + Math.random() * 30, h: 28 + Math.random() * 80,
+                        type: types[Math.floor(Math.random() * 3)],
+                        phase: Math.random() * Math.PI * 2,
+                    });
                 }
                 break;
-            case 'digital':
-                // Data towers — tall, thin, geometric
-                for (let x = 20; x < W - 20; x += 25 + Math.random() * 40) {
-                    this.nearLayer.push({ x, w: 8 + Math.random() * 15, h: 50 + Math.random() * 130, type: 'datatower' });
+            }
+            case 'sky': {
+                // Three cloud-bank layers at different y positions
+                for (let layer = 0; layer < 3; layer++) {
+                    const baseY = 0.55 + layer * 0.1;
+                    for (let x = -60; x < W + 60; x += 55 + Math.random() * 65) {
+                        this.buildings.push({
+                            x, w: 80 + Math.random() * 140, h: 22 + Math.random() * 35,
+                            type: 'cloud', layer,
+                            baseY: PLAY_H * baseY,
+                            phase: Math.random() * Math.PI * 2,
+                            scrollSpeed: 0.5 + layer * 0.8,
+                        });
+                    }
                 }
                 break;
-            case 'void':
-                // Corrupted fragments — jagged, irregular
-                for (let x = 30; x < W - 30; x += 50 + Math.random() * 70) {
-                    this.nearLayer.push({ x, w: 20 + Math.random() * 40, h: 30 + Math.random() * 70, type: 'corrupt' });
+            }
+            case 'void': {
+                for (let x = 20; x < W - 20; x += 40 + Math.random() * 60) {
+                    this.buildings.push({
+                        x, w: 16 + Math.random() * 40, h: 30 + Math.random() * 90,
+                        phase: Math.random() * Math.PI * 2,
+                    });
                 }
                 break;
+            }
+        }
+    },
+
+    _generateThemeExtra() {
+        this._dataStreams = [];
+        this._smokePuffs = [];
+
+        if (this.bgType === 'digital') {
+            const CHARS = '01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホ';
+            for (let i = 0; i < 24; i++) {
+                const len = 6 + Math.floor(Math.random() * 10);
+                const chars = [];
+                for (let j = 0; j < len; j++) {
+                    chars.push(CHARS[Math.floor(Math.random() * CHARS.length)]);
+                }
+                this._dataStreams.push({
+                    x: Math.random() * PLAY_W,
+                    yOffset: Math.random() * PLAY_H,
+                    speed: 55 + Math.random() * 90,
+                    chars,
+                    alpha: 0.18 + Math.random() * 0.28,
+                });
+            }
+        }
+
+        if (this.bgType === 'industrial') {
+            // Smoke puffs — tied to chimneys generated in buildings
+            for (let i = 0; i < 20; i++) {
+                this._smokePuffs.push({
+                    x: 30 + Math.random() * (PLAY_W - 60),
+                    y: PLAY_H * 0.5 + Math.random() * PLAY_H * 0.25,
+                    size: 8 + Math.random() * 18,
+                    alpha: 0.04 + Math.random() * 0.08,
+                    speed: 15 + Math.random() * 30,
+                    dx: (Math.random() - 0.5) * 12,
+                });
+            }
         }
     },
 
     update(dt) {
+        this.time += dt;
         this.gridOffset += dt * 120;
         if (this.gridOffset > 60) this.gridOffset -= 60;
 
-        // Parallax scroll — far layer (slow)
         for (const s of this.farStars) {
             s.y += s.speed * dt;
-            if (s.y > PLAY_H) { s.y = -2; s.x = Math.random() * PLAY_W; }
+            s.phase += s.twinkleSpeed * dt;
+            if (s.y > PLAY_H * 0.82) { s.y = -2; s.x = Math.random() * PLAY_W; }
         }
 
-        // Mid layer (medium)
+        for (const n of this.nebulae) {
+            n.y += n.speed * dt;
+            if (n.y > PLAY_H * 0.65 + n.ry) { n.y = -n.ry; n.x = Math.random() * PLAY_W; }
+        }
+
         for (const m of this.midLayer) {
             m.y += m.speed * dt;
             if (m.y > PLAY_H + 10) { m.y = -10; m.x = Math.random() * PLAY_W; }
         }
+
+        for (const f of this.foreground) {
+            f.y += f.speed * dt;
+            if (f.y > PLAY_H + f.length) { f.y = -f.length; f.x = Math.random() * PLAY_W; }
+        }
+
+        for (const p of this._smokePuffs) {
+            p.y -= p.speed * dt;
+            p.x += p.dx * dt;
+            p.size += 4 * dt;
+            p.alpha -= 0.015 * dt;
+            if (p.alpha <= 0 || p.y < PLAY_H * 0.3) {
+                p.y = PLAY_H * 0.72 + Math.random() * PLAY_H * 0.06;
+                p.x = 30 + Math.random() * (PLAY_W - 60);
+                p.size = 8 + Math.random() * 18;
+                p.alpha = 0.04 + Math.random() * 0.08;
+                p.speed = 15 + Math.random() * 30;
+                p.dx = (Math.random() - 0.5) * 12;
+            }
+        }
     },
 
     draw(ctx) {
-        const themes = {
-            synthwave: { sky: ['#0a0620','#1a0a3e','#2d0a4e','#5c1a6e','#ff006e'], sun: 'rgba(255,100,0,0.4)', grid: 'rgba(255,0,255,0.25)', vgrid: 'rgba(0,255,255,0.2)', silhouette: '#0d0520', accent: '#ff00ff', windowColor: 'rgba(255,200,100,' },
-            industrial: { sky: ['#0a0808','#1a0a08','#2d1510','#4a1a10','#ff4400'], sun: 'rgba(255,60,0,0.5)', grid: 'rgba(255,80,0,0.2)', vgrid: 'rgba(255,120,0,0.15)', silhouette: '#0a0504', accent: '#ff4400', windowColor: 'rgba(255,100,30,' },
-            space: { sky: ['#020210','#050520','#080840','#0a0a50','#0a0a30'], sun: 'rgba(50,50,255,0.2)', grid: 'rgba(80,80,255,0.15)', vgrid: 'rgba(100,100,255,0.1)', silhouette: '#030318', accent: '#4466aa', windowColor: 'rgba(100,150,255,' },
-            sky: { sky: ['#081830','#102848','#204070','#4080b0','#80c0e0'], sun: 'rgba(255,220,100,0.4)', grid: 'rgba(255,255,255,0.08)', vgrid: 'rgba(255,255,200,0.06)', silhouette: '#1a3050', accent: '#6090c0', windowColor: 'rgba(255,255,200,' },
-            digital: { sky: ['#050010','#100020','#200040','#400060','#ff00ff'], sun: 'rgba(200,0,255,0.4)', grid: 'rgba(255,0,255,0.3)', vgrid: 'rgba(0,255,255,0.25)', silhouette: '#0a0018', accent: '#cc44ff', windowColor: 'rgba(180,0,255,' },
-            void: { sky: ['#000000','#020204','#040208','#020204','#000000'], sun: 'rgba(100,0,0,0.2)', grid: 'rgba(255,0,0,0.1)', vgrid: 'rgba(255,0,0,0.08)', silhouette: '#040204', accent: '#440022', windowColor: 'rgba(255,0,50,' }
-        };
-        const t = themes[this.bgType] || themes.synthwave;
+        const t = this._theme();
+        this._drawSky(ctx, t);
+        this._drawStars(ctx, t);
+        this._drawNebulae(ctx, t);
+        this._drawHorizonFeature(ctx, t);
+        this._drawMidLayer(ctx, t);
+        this._drawDistantBuildings(ctx, t);
+        this._drawBuildings(ctx, t);
+        this._drawGrid(ctx, t);
+        this._drawForeground(ctx, t);
+        this._drawOverlay(ctx, t);
+    },
 
-        // === Sky gradient (cached) ===
-        if (!this._cachedSkyGrad || this._cachedTheme !== this.bgType) {
+    _theme() {
+        const T = {
+            synthwave: {
+                sky: ['#04011a', '#0e0438', '#1c0650', '#3a0d70', '#6a12a0'],
+                nebC1: '#cc00ff', nebC2: '#6600cc',
+                grid: 'rgba(255,0,220,0.28)', vgrid: 'rgba(0,255,220,0.20)',
+                sil: '#080220', silFar: '#0f0430',
+                accent: '#ff00ff', accent2: '#00ffee',
+                winA: 'rgba(255,210,70,', winB: 'rgba(0,255,240,',
+                streak: '#ffffff',
+            },
+            industrial: {
+                sky: ['#060404', '#150808', '#271008', '#451808', '#782000'],
+                nebC1: '#ff2200', nebC2: '#992200',
+                grid: 'rgba(255,90,0,0.22)', vgrid: 'rgba(255,150,0,0.14)',
+                sil: '#0c0404', silFar: '#180808',
+                accent: '#ff4400', accent2: '#ff9900',
+                winA: 'rgba(255,110,10,', winB: 'rgba(255,50,0,',
+                streak: '#ff6600',
+            },
+            space: {
+                sky: ['#010108', '#020318', '#050838', '#060a48', '#040630'],
+                nebC1: '#2233bb', nebC2: '#551199',
+                grid: 'rgba(70,70,255,0.18)', vgrid: 'rgba(90,90,255,0.12)',
+                sil: '#030318', silFar: '#050530',
+                accent: '#4466cc', accent2: '#88aaff',
+                winA: 'rgba(120,170,255,', winB: 'rgba(80,220,200,',
+                streak: '#aabbff',
+            },
+            sky: {
+                sky: ['#040c18', '#0a1e38', '#163660', '#2860a0', '#5090c8'],
+                nebC1: '#7ab0d8', nebC2: '#3870b0',
+                grid: 'rgba(180,210,255,0.10)', vgrid: 'rgba(160,200,255,0.07)',
+                sil: '#182840', silFar: '#0e1e30',
+                accent: '#60a0c8', accent2: '#c0e0ff',
+                winA: 'rgba(255,250,200,', winB: 'rgba(200,240,255,',
+                streak: '#c0d4ec',
+            },
+            digital: {
+                sky: ['#030010', '#09001e', '#150038', '#280055', '#550088'],
+                nebC1: '#bb00ff', nebC2: '#0077ff',
+                grid: 'rgba(255,0,230,0.32)', vgrid: 'rgba(0,255,190,0.26)',
+                sil: '#09001a', silFar: '#110022',
+                accent: '#cc44ff', accent2: '#00ffcc',
+                winA: 'rgba(180,0,255,', winB: 'rgba(0,255,190,',
+                streak: '#00ffcc',
+            },
+            void: {
+                sky: ['#000000', '#010002', '#020005', '#010002', '#000000'],
+                nebC1: '#3a0018', nebC2: '#1a0028',
+                grid: 'rgba(220,0,50,0.11)', vgrid: 'rgba(180,0,40,0.07)',
+                sil: '#040104', silFar: '#020102',
+                accent: '#770022', accent2: '#330011',
+                winA: 'rgba(240,0,55,', winB: 'rgba(160,0,36,',
+                streak: '#550018',
+            },
+        };
+        return T[this.bgType] || T.synthwave;
+    },
+
+    _drawSky(ctx, t) {
+        if (this._cachedTheme !== this.bgType) {
             this._cachedTheme = this.bgType;
             this._cachedSkyGrad = ctx.createLinearGradient(0, 0, 0, PLAY_H);
-            this._cachedSkyGrad.addColorStop(0, t.sky[0]);
-            this._cachedSkyGrad.addColorStop(0.3, t.sky[1]);
-            this._cachedSkyGrad.addColorStop(0.6, t.sky[2]);
-            this._cachedSkyGrad.addColorStop(0.85, t.sky[3]);
-            this._cachedSkyGrad.addColorStop(1, t.sky[4]);
-            const sunY = PLAY_H * 0.82;
-            this._cachedSunGrad = ctx.createRadialGradient(PLAY_W / 2, sunY, 10, PLAY_W / 2, sunY, 200);
-            this._cachedSunGrad.addColorStop(0, t.sun);
-            this._cachedSunGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0)');
-            this._cachedSunGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+            const s = t.sky;
+            this._cachedSkyGrad.addColorStop(0,    s[0]);
+            this._cachedSkyGrad.addColorStop(0.25, s[1]);
+            this._cachedSkyGrad.addColorStop(0.55, s[2]);
+            this._cachedSkyGrad.addColorStop(0.82, s[3]);
+            this._cachedSkyGrad.addColorStop(1,    s[4]);
         }
         ctx.fillStyle = this._cachedSkyGrad;
         ctx.fillRect(0, 0, PLAY_W, PLAY_H);
 
-        // === Far parallax layer — stars ===
-        for (const s of this.farStars) {
-            ctx.fillStyle = `rgba(255, 255, 255, ${s.brightness})`;
-            ctx.fillRect(s.x, s.y, s.size, s.size);
-        }
-
-        // === Sun / horizon glow (cached) ===
-        const sunY = PLAY_H * 0.82;
-        ctx.fillStyle = this._cachedSunGrad;
-        ctx.fillRect(0, sunY - 200, PLAY_W, 400);
-
-        // === Mid parallax layer — theme-specific ambient particles ===
-        this._drawMidLayer(ctx, t);
-
-        // === Near layer — horizon silhouettes ===
-        this._drawSilhouettes(ctx, t);
-
-        // === Perspective grid ===
-        this._drawGrid(ctx, t);
-
-        // === Void glitch effects ===
-        if (this.bgType === 'void') {
-            this._drawGlitch(ctx);
+        // Synthwave aurora bands
+        if (this.bgType === 'synthwave') {
+            for (let b = 0; b < 3; b++) {
+                const by = PLAY_H * (0.12 + b * 0.14) + Math.sin(this.time * 0.18 + b * 1.4) * 15;
+                const bAlpha = 0.025 + b * 0.01;
+                const bGrad = ctx.createLinearGradient(0, by - 30, 0, by + 30);
+                bGrad.addColorStop(0,   'rgba(0,0,0,0)');
+                bGrad.addColorStop(0.4, b % 2 === 0 ? `rgba(200,0,255,${bAlpha})` : `rgba(0,220,255,${bAlpha})`);
+                bGrad.addColorStop(1,   'rgba(0,0,0,0)');
+                ctx.fillStyle = bGrad;
+                ctx.fillRect(0, by - 30, PLAY_W, 60);
+            }
         }
     },
 
-    _drawMidLayer(ctx, theme) {
+    _drawStars(ctx, t) {
+        const starColors = ['255,255,255', '160,200,255', '255,220,160'];
+        for (const s of this.farStars) {
+            const twinkle = 0.5 + 0.5 * Math.sin(s.phase);
+            const alpha = s.brightness * (0.25 + twinkle * 0.75);
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = `rgba(${starColors[s.hue]},1)`;
+            ctx.fillRect(s.x, s.y, s.size, s.size);
+        }
+        ctx.globalAlpha = 1;
+    },
+
+    _drawNebulae(ctx, t) {
+        for (const n of this.nebulae) {
+            ctx.globalAlpha = n.alpha;
+            ctx.fillStyle = t.nebC1;
+            ctx.beginPath();
+            ctx.ellipse(n.x, n.y, n.rx, n.ry, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = n.alpha * 0.55;
+            ctx.fillStyle = t.nebC2;
+            ctx.beginPath();
+            ctx.ellipse(n.x + n.rx * 0.35, n.y + n.ry * 0.25, n.rx * 0.55, n.ry * 0.5, 0.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    },
+
+    _drawHorizonFeature(ctx, t) {
+        const horizY = PLAY_H * 0.80;
+
+        switch (this.bgType) {
+
+            case 'synthwave': {
+                // Classic retrowave striped sun
+                const cx = PLAY_W * 0.5;
+                const sunR = 68;
+                const sunY = horizY - 10;
+
+                // Outer halo
+                const halo = ctx.createRadialGradient(cx, sunY, sunR * 0.4, cx, sunY, sunR * 3.2);
+                halo.addColorStop(0, 'rgba(255,60,180,0.22)');
+                halo.addColorStop(0.4, 'rgba(160,0,220,0.10)');
+                halo.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = halo;
+                ctx.fillRect(cx - sunR * 3.5, sunY - sunR * 3.5, sunR * 7, sunR * 7);
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.arc(cx, sunY, sunR, 0, Math.PI * 2);
+                ctx.clip();
+
+                // Sun gradient
+                const sg = ctx.createLinearGradient(cx, sunY - sunR, cx, sunY + sunR);
+                sg.addColorStop(0, '#ff9900');
+                sg.addColorStop(0.38, '#ff2288');
+                sg.addColorStop(0.7, '#cc00ff');
+                sg.addColorStop(1, '#6600cc');
+                ctx.fillStyle = sg;
+                ctx.fillRect(cx - sunR, sunY - sunR, sunR * 2, sunR * 2);
+
+                // Horizontal stripes (classic look) — drawn only on lower half
+                let sy = sunY + sunR * 0.05;
+                let stripeH = 2;
+                const skyCol = t.sky[0];
+                while (sy < sunY + sunR + 1) {
+                    ctx.fillStyle = skyCol;
+                    ctx.fillRect(cx - sunR, sy, sunR * 2, stripeH);
+                    sy += stripeH + stripeH * 0.6;
+                    stripeH = Math.min(stripeH + 1.2, 14);
+                }
+                ctx.restore();
+
+                // Thin horizon line below sun
+                ctx.strokeStyle = 'rgba(255,0,200,0.35)';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(0, horizY);
+                ctx.lineTo(PLAY_W, horizY);
+                ctx.stroke();
+                break;
+            }
+
+            case 'industrial': {
+                // Molten horizon — layered glow
+                for (let layer = 0; layer < 3; layer++) {
+                    const alpha = 0.12 - layer * 0.03;
+                    const spread = 80 + layer * 60;
+                    const g = ctx.createLinearGradient(0, horizY - spread, 0, horizY + 40);
+                    g.addColorStop(0, 'rgba(0,0,0,0)');
+                    g.addColorStop(0.6, `rgba(255,${60 + layer * 20},0,${alpha})`);
+                    g.addColorStop(1, `rgba(255,${80 + layer * 30},0,${alpha * 0.6})`);
+                    ctx.fillStyle = g;
+                    ctx.fillRect(0, horizY - spread, PLAY_W, spread + 40);
+                }
+                // Smog band
+                const smog = ctx.createLinearGradient(0, horizY - 120, 0, horizY - 30);
+                smog.addColorStop(0, 'rgba(0,0,0,0)');
+                smog.addColorStop(1, 'rgba(30,10,4,0.55)');
+                ctx.fillStyle = smog;
+                ctx.fillRect(0, horizY - 120, PLAY_W, 90);
+                break;
+            }
+
+            case 'space': {
+                // Large planet — partial disc at horizon
+                const px = PLAY_W * 0.72;
+                const pr = 140;
+                const pCy = horizY + pr * 0.55; // mostly below horizon
+
+                ctx.save();
+                // Clip to above-horizon only
+                ctx.beginPath();
+                ctx.rect(0, 0, PLAY_W, horizY);
+                ctx.clip();
+
+                // Planet glow
+                const pg = ctx.createRadialGradient(px, pCy, pr * 0.3, px, pCy, pr * 1.6);
+                pg.addColorStop(0, 'rgba(60,80,200,0.12)');
+                pg.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = pg;
+                ctx.fillRect(px - pr * 2, pCy - pr * 2, pr * 4, pr * 4);
+
+                // Planet body
+                const pb = ctx.createRadialGradient(px - pr * 0.3, pCy - pr * 0.3, pr * 0.1, px, pCy, pr);
+                pb.addColorStop(0, '#3050b8');
+                pb.addColorStop(0.5, '#1a2880');
+                pb.addColorStop(0.85, '#0a1040');
+                pb.addColorStop(1, '#050820');
+                ctx.fillStyle = pb;
+                ctx.beginPath();
+                ctx.arc(px, pCy, pr, 0, Math.PI * 2);
+                ctx.fill();
+
+                // Atmosphere rim
+                ctx.strokeStyle = 'rgba(80,120,255,0.4)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(px, pCy, pr, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.restore();
+
+                // Horizon haze
+                const haze = ctx.createLinearGradient(0, horizY - 60, 0, horizY);
+                haze.addColorStop(0, 'rgba(0,0,0,0)');
+                haze.addColorStop(1, 'rgba(10,10,50,0.5)');
+                ctx.fillStyle = haze;
+                ctx.fillRect(0, horizY - 60, PLAY_W, 60);
+                break;
+            }
+
+            case 'sky': {
+                // Sun with halo
+                const sx = PLAY_W * 0.38;
+                const sy = PLAY_H * 0.28;
+                const sR = 42;
+
+                const sg = ctx.createRadialGradient(sx, sy, 0, sx, sy, sR * 3.5);
+                sg.addColorStop(0,    'rgba(255,250,200,0.55)');
+                sg.addColorStop(0.18, 'rgba(255,220,100,0.30)');
+                sg.addColorStop(0.45, 'rgba(255,190,60,0.12)');
+                sg.addColorStop(1,    'rgba(0,0,0,0)');
+                ctx.fillStyle = sg;
+                ctx.fillRect(sx - sR * 4, sy - sR * 4, sR * 8, sR * 8);
+
+                ctx.globalAlpha = 0.9;
+                ctx.fillStyle = '#fff8e0';
+                ctx.beginPath();
+                ctx.arc(sx, sy, sR, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+
+                // Atmospheric haze at horizon
+                const atm = ctx.createLinearGradient(0, horizY - 80, 0, horizY);
+                atm.addColorStop(0, 'rgba(0,0,0,0)');
+                atm.addColorStop(1, 'rgba(80,130,200,0.35)');
+                ctx.fillStyle = atm;
+                ctx.fillRect(0, horizY - 80, PLAY_W, 80);
+                break;
+            }
+
+            case 'digital': {
+                // Pulsing energy portal
+                const pcx = PLAY_W * 0.5;
+                const pcy = horizY - 5;
+                const pulse = 0.85 + 0.15 * Math.sin(this.time * 2.2);
+                const pr2 = 55 * pulse;
+
+                const pg2 = ctx.createRadialGradient(pcx, pcy, 0, pcx, pcy, pr2 * 3);
+                pg2.addColorStop(0,   'rgba(200,0,255,0.35)');
+                pg2.addColorStop(0.3, 'rgba(120,0,200,0.18)');
+                pg2.addColorStop(0.7, 'rgba(50,0,100,0.06)');
+                pg2.addColorStop(1,   'rgba(0,0,0,0)');
+                ctx.fillStyle = pg2;
+                ctx.fillRect(pcx - pr2 * 3.5, pcy - pr2 * 3.5, pr2 * 7, pr2 * 7);
+
+                ctx.strokeStyle = `rgba(220,0,255,${0.5 + 0.3 * Math.sin(this.time * 3)})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(pcx, pcy, pr2, 0, Math.PI * 2);
+                ctx.stroke();
+
+                ctx.strokeStyle = `rgba(0,255,200,${0.3 + 0.2 * Math.sin(this.time * 2.8 + 1)})`;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.arc(pcx, pcy, pr2 * 1.35, 0, Math.PI * 2);
+                ctx.stroke();
+                break;
+            }
+
+            case 'void': {
+                // Dark singularity — deep black disc with event-horizon glow
+                const vcx = PLAY_W * 0.5;
+                const vcy = horizY + 20;
+                const vr = 45;
+
+                const vg = ctx.createRadialGradient(vcx, vcy, 0, vcx, vcy, vr * 3.5);
+                vg.addColorStop(0,    'rgba(0,0,0,1)');
+                vg.addColorStop(0.28, 'rgba(60,0,10,0.8)');
+                vg.addColorStop(0.55, 'rgba(120,0,30,0.2)');
+                vg.addColorStop(1,    'rgba(0,0,0,0)');
+                ctx.fillStyle = vg;
+                ctx.fillRect(vcx - vr * 4, vcy - vr * 4, vr * 8, vr * 8);
+
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(0, 0, PLAY_W, horizY);
+                ctx.clip();
+                const rim = ctx.createRadialGradient(vcx, vcy, vr * 0.7, vcx, vcy, vr * 1.1);
+                rim.addColorStop(0, 'rgba(0,0,0,0)');
+                rim.addColorStop(0.7, 'rgba(180,0,40,0.22)');
+                rim.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.fillStyle = rim;
+                ctx.fillRect(vcx - vr * 1.5, vcy - vr * 1.5, vr * 3, vr * 3);
+                ctx.restore();
+                break;
+            }
+        }
+    },
+
+    _drawMidLayer(ctx, t) {
         for (const m of this.midLayer) {
-            ctx.globalAlpha = 0.2;
             switch (this.bgType) {
+                case 'synthwave':
+                    ctx.globalAlpha = 0.06;
+                    ctx.strokeStyle = t.accent;
+                    ctx.lineWidth = 0.5;
+                    ctx.beginPath();
+                    ctx.arc(m.x, m.y, m.size * 2.5, 0, Math.PI * 2);
+                    ctx.stroke();
+                    break;
+                case 'industrial':
+                    // Smoke handled separately in _smokePuffs; mid layer = ember sparks
+                    if (m.y < PLAY_H * 0.78) {
+                        ctx.globalAlpha = 0.18 + 0.12 * Math.sin(this.time * 3 + m.phase);
+                        ctx.fillStyle = m.type < 2 ? '#ff6600' : '#ffaa00';
+                        ctx.fillRect(m.x, m.y, m.size * 0.6, m.size * 0.6);
+                    }
+                    break;
                 case 'space':
-                    ctx.fillStyle = '#6688cc';
-                    ctx.fillRect(m.x, m.y, m.size, m.size * 0.6);
-                    // Occasional twinkling
-                    if (Math.sin(this.gridOffset * 0.02 + m.x) > 0.8) {
-                        ctx.globalAlpha = 0.35;
-                        ctx.fillStyle = '#aaccff';
-                        ctx.fillRect(m.x - 1, m.y - 1, m.size + 2, m.size * 0.6 + 2);
+                    // Slowly blinking satellite lights
+                    if (Math.sin(this.time * 0.8 + m.phase) > 0.6) {
+                        ctx.globalAlpha = 0.3;
+                        ctx.fillStyle = '#88aaff';
+                        ctx.fillRect(m.x, m.y, m.size * 0.8, m.size * 0.8);
                     }
                     break;
                 case 'sky':
-                    ctx.globalAlpha = 0.12;
-                    ctx.fillStyle = '#ffffff';
+                    // Wispy cirrus streaks
+                    ctx.globalAlpha = 0.06 + 0.03 * Math.sin(this.time * 0.3 + m.phase);
+                    ctx.strokeStyle = '#c8e0f8';
+                    ctx.lineWidth = m.size * 0.4;
                     ctx.beginPath();
-                    ctx.ellipse(m.x, m.y, m.size * 3, m.size, 0, 0, Math.PI * 2);
-                    ctx.fill();
+                    ctx.moveTo(m.x - m.size * 5, m.y);
+                    ctx.lineTo(m.x + m.size * 5, m.y + m.size * 0.5);
+                    ctx.stroke();
                     break;
                 case 'digital':
-                    ctx.fillStyle = m.type === 0 ? '#cc44ff' : m.type === 1 ? '#00ffcc' : '#ff00aa';
-                    ctx.font = (8 + m.type * 2) + 'px monospace';
-                    ctx.fillText(m.type === 0 ? '0' : m.type === 1 ? '1' : ':', m.x, m.y);
+                    // Floating hex digits
+                    ctx.globalAlpha = 0.15 + 0.1 * Math.sin(this.time * 1.5 + m.phase);
+                    ctx.fillStyle = m.type % 2 === 0 ? t.accent : t.accent2;
+                    ctx.font = `${7 + m.size}px monospace`;
+                    ctx.fillText(m.type === 0 ? '0' : m.type === 1 ? '1' : m.type === 2 ? 'F' : 'A', m.x, m.y);
                     break;
                 case 'void':
-                    ctx.fillStyle = Math.random() > 0.5 ? '#ff0066' : '#660033';
-                    ctx.fillRect(m.x, m.y, m.size * 0.5, m.size * 0.5);
-                    break;
-                case 'industrial':
-                    ctx.fillStyle = `rgba(255, ${80 + m.type * 40}, 0, 0.15)`;
-                    ctx.beginPath();
-                    ctx.arc(m.x, m.y, m.size, 0, Math.PI * 2);
-                    ctx.fill();
-                    break;
-                default: // synthwave
-                    // Faint geometric shapes
-                    ctx.strokeStyle = 'rgba(255, 0, 255, 0.06)';
-                    ctx.lineWidth = 0.5;
-                    ctx.beginPath();
-                    ctx.arc(m.x, m.y, m.size * 2, 0, Math.PI * 2);
-                    ctx.stroke();
+                    if (Math.sin(this.time * 2 + m.phase) > 0.5) {
+                        ctx.globalAlpha = 0.12;
+                        ctx.fillStyle = '#ff0033';
+                        ctx.fillRect(m.x, m.y, m.size * 0.5, m.size * 0.5);
+                    }
                     break;
             }
         }
         ctx.globalAlpha = 1;
     },
 
-    _drawSilhouettes(ctx, theme) {
+    _drawDistantBuildings(ctx, t) {
+        if (this.distantBuildings.length === 0) return;
         const baseY = PLAY_H * 0.78;
-        ctx.fillStyle = theme.silhouette;
-        ctx.shadowColor = theme.accent;
-        ctx.shadowBlur = 0;
-
-        for (const el of this.nearLayer) {
-            switch (el.type) {
-                case 'building':
-                    // City buildings with windows
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.fillRect(el.x, baseY - el.h, el.w, el.h + 200);
-                    ctx.strokeStyle = theme.accent;
-                    ctx.globalAlpha = 0.25;
-                    ctx.lineWidth = 1;
-                    ctx.beginPath();
-                    ctx.moveTo(el.x, baseY - el.h);
-                    ctx.lineTo(el.x + el.w, baseY - el.h);
-                    ctx.stroke();
-                    ctx.globalAlpha = 1;
-                    // Windows
-                    for (let wy = baseY - el.h + 8; wy < baseY; wy += 10) {
-                        for (let wx = el.x + 4; wx < el.x + el.w - 4; wx += 8) {
-                            if (Math.random() > 0.5) {
-                                ctx.fillStyle = theme.windowColor + (0.1 + Math.random() * 0.2) + ')';
-                                ctx.fillRect(wx, wy, 3, 3);
-                            }
-                        }
-                    }
-                    ctx.fillStyle = theme.silhouette;
-                    break;
-
-                case 'antenna':
-                    // Tall thin antenna with blinking top
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.fillRect(el.x + el.w / 2 - 2, baseY - el.h, 4, el.h + 200);
-                    // Cross bar
-                    ctx.fillRect(el.x, baseY - el.h * 0.6, el.w, 3);
-                    // Blinking light
-                    if (Math.sin(this.gridOffset * 0.1 + el.x) > 0.3) {
-                        ctx.fillStyle = '#ff4444';
-                        ctx.shadowColor = '#ff4444';
-                        ctx.shadowBlur = 0;
-                        ctx.fillRect(el.x + el.w / 2 - 2, baseY - el.h - 2, 4, 4);
-                        ctx.shadowBlur = 0;
-                    }
-                    break;
-
-                case 'dish':
-                    // Satellite dish
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.fillRect(el.x + el.w / 2 - 3, baseY - el.h * 0.5, 6, el.h * 0.5 + 200);
-                    ctx.beginPath();
-                    ctx.arc(el.x + el.w / 2, baseY - el.h * 0.5, el.w / 2, Math.PI, 0);
-                    ctx.fill();
-                    break;
-
-                case 'debris':
-                    // Floating wreckage — irregular shape
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.beginPath();
-                    ctx.moveTo(el.x, baseY - el.h * 0.3);
-                    ctx.lineTo(el.x + el.w * 0.3, baseY - el.h);
-                    ctx.lineTo(el.x + el.w * 0.7, baseY - el.h * 0.8);
-                    ctx.lineTo(el.x + el.w, baseY - el.h * 0.2);
-                    ctx.lineTo(el.x + el.w, baseY + 200);
-                    ctx.lineTo(el.x, baseY + 200);
-                    ctx.closePath();
-                    ctx.fill();
-                    break;
-
-                case 'cloud':
-                    // Soft cloud bank
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.globalAlpha = 0.4;
-                    ctx.beginPath();
-                    ctx.ellipse(el.x + el.w / 2, baseY - el.h / 2, el.w / 2, el.h / 2, 0, 0, Math.PI * 2);
-                    ctx.fill();
-                    // Secondary puff
-                    ctx.beginPath();
-                    ctx.ellipse(el.x + el.w * 0.3, baseY - el.h * 0.3, el.w * 0.3, el.h * 0.4, 0, 0, Math.PI * 2);
-                    ctx.fill();
-                    ctx.globalAlpha = 1;
-                    break;
-
-                case 'datatower':
-                    // Thin geometric data towers
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.fillRect(el.x, baseY - el.h, el.w, el.h + 200);
-                    // Glowing data lines running up the tower
-                    ctx.strokeStyle = theme.accent;
-                    ctx.globalAlpha = 0.3;
-                    ctx.lineWidth = 1;
-                    for (let dy = baseY; dy > baseY - el.h; dy -= 12) {
-                        const lit = Math.sin(this.gridOffset * 0.08 + dy * 0.1 + el.x) > 0.5;
-                        if (lit) {
-                            ctx.globalAlpha = 0.4;
-                            ctx.beginPath();
-                            ctx.moveTo(el.x, dy);
-                            ctx.lineTo(el.x + el.w, dy);
-                            ctx.stroke();
-                        }
-                    }
-                    ctx.globalAlpha = 1;
-                    // Antenna on top
-                    ctx.fillStyle = theme.accent;
-                    ctx.globalAlpha = 0.5;
-                    ctx.fillRect(el.x + el.w / 2 - 1, baseY - el.h - 8, 2, 8);
-                    ctx.globalAlpha = 1;
-                    break;
-
-                case 'corrupt':
-                    // Jagged corrupted fragments
-                    ctx.fillStyle = theme.silhouette;
-                    ctx.beginPath();
-                    ctx.moveTo(el.x, baseY + 200);
-                    ctx.lineTo(el.x, baseY - el.h * 0.4);
-                    ctx.lineTo(el.x + el.w * 0.2, baseY - el.h);
-                    ctx.lineTo(el.x + el.w * 0.5, baseY - el.h * 0.6);
-                    ctx.lineTo(el.x + el.w * 0.7, baseY - el.h * 0.9);
-                    ctx.lineTo(el.x + el.w, baseY - el.h * 0.3);
-                    ctx.lineTo(el.x + el.w, baseY + 200);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Glitch lines
-                    if (Math.random() < 0.1) {
-                        ctx.strokeStyle = `rgba(255, 0, 100, 0.3)`;
-                        ctx.lineWidth = 1;
-                        ctx.beginPath();
-                        ctx.moveTo(el.x, baseY - el.h * Math.random());
-                        ctx.lineTo(el.x + el.w, baseY - el.h * Math.random());
-                        ctx.stroke();
-                    }
-                    break;
-            }
+        ctx.fillStyle = t.silFar;
+        ctx.globalAlpha = 0.65;
+        for (const b of this.distantBuildings) {
+            ctx.fillRect(b.x, baseY - b.h, b.w, b.h + 120);
         }
-        ctx.shadowBlur = 0;
-        ctx.fillStyle = theme.silhouette;
+        ctx.globalAlpha = 1;
     },
 
-    _drawGrid(ctx, theme) {
-        const horizon = PLAY_H * 0.82;
+    _drawBuildings(ctx, t) {
+        const baseY = PLAY_H * 0.78;
+
+        // Gradient fade at the top of the silhouette region
+        const fade = ctx.createLinearGradient(0, baseY - 160, 0, baseY - 80);
+        fade.addColorStop(0, 'rgba(0,0,0,0)');
+        fade.addColorStop(1, t.sil);
+        ctx.fillStyle = fade;
+        ctx.fillRect(0, baseY - 160, PLAY_W, 80);
+
+        switch (this.bgType) {
+
+            case 'synthwave':
+            case 'industrial': {
+                for (const b of this.buildings) {
+                    const bx = b.x, bw = b.w, bh = b.h;
+
+                    // Main body
+                    ctx.fillStyle = t.sil;
+                    ctx.fillRect(bx, baseY - bh, bw, bh + 120);
+
+                    // Roof accent line
+                    ctx.strokeStyle = t.accent;
+                    ctx.globalAlpha = 0.30;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(bx, baseY - bh);
+                    ctx.lineTo(bx + bw, baseY - bh);
+                    ctx.stroke();
+                    ctx.globalAlpha = 1;
+
+                    // Antenna
+                    const antBlink = Math.sin(this.time * 1.8 + b.antennaPhase) > 0.6;
+                    ctx.fillStyle = t.sil;
+                    ctx.fillRect(bx + bw / 2 - 1, baseY - bh - 10, 2, 10);
+                    if (antBlink) {
+                        ctx.fillStyle = '#ff4444';
+                        ctx.globalAlpha = 0.8;
+                        ctx.fillRect(bx + bw / 2 - 2, baseY - bh - 12, 4, 4);
+                        ctx.globalAlpha = 1;
+                    }
+
+                    // Windows — time-based phases, no per-frame randomness
+                    for (const w of b.windows) {
+                        const lit = Math.sin(this.time * w.speed + w.phase) > (w.lit ? -0.1 : 0.7);
+                        if (!lit) continue;
+                        const alpha = 0.12 + 0.18 * Math.abs(Math.sin(this.time * w.speed + w.phase));
+                        const col = w.phase % 1 < 0.25 ? t.winB : t.winA;
+                        ctx.fillStyle = col + alpha + ')';
+                        ctx.fillRect(bx + w.relX, baseY - bh + w.relY, 3, 3);
+                    }
+                }
+
+                // Smoke for industrial
+                for (const p of this._smokePuffs) {
+                    ctx.globalAlpha = p.alpha;
+                    ctx.fillStyle = '#221006';
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+                break;
+            }
+
+            case 'digital': {
+                for (const b of this.buildings) {
+                    ctx.fillStyle = t.sil;
+                    ctx.fillRect(b.x, baseY - b.h, b.w, b.h + 120);
+
+                    // Scan lines on tower face
+                    const scanY = ((this.time * 60 + b.phase * 40) % b.h);
+                    ctx.strokeStyle = t.accent2;
+                    ctx.globalAlpha = 0.35;
+                    ctx.lineWidth = 1;
+                    for (let dy = 0; dy < b.h; dy += 12) {
+                        const lineAlpha = 0.15 + 0.25 * Math.abs(Math.sin((dy - scanY) * 0.15));
+                        ctx.globalAlpha = lineAlpha;
+                        ctx.beginPath();
+                        ctx.moveTo(b.x, baseY - b.h + dy);
+                        ctx.lineTo(b.x + b.w, baseY - b.h + dy);
+                        ctx.stroke();
+                    }
+                    // Tip glow
+                    ctx.globalAlpha = 0.4 + 0.3 * Math.sin(this.time * 2 + b.phase);
+                    ctx.fillStyle = t.accent;
+                    ctx.fillRect(b.x + b.w / 2 - 1, baseY - b.h - 5, 2, 6);
+                    ctx.globalAlpha = 1;
+                }
+                break;
+            }
+
+            case 'space': {
+                for (const b of this.buildings) {
+                    ctx.fillStyle = t.sil;
+                    switch (b.type) {
+                        case 'antenna':
+                            ctx.fillRect(b.x + b.w / 2 - 2, baseY - b.h, 4, b.h + 120);
+                            ctx.fillRect(b.x, baseY - b.h * 0.55, b.w, 3);
+                            if (Math.sin(this.time * 1.5 + b.phase) > 0.4) {
+                                ctx.fillStyle = '#ff4444';
+                                ctx.globalAlpha = 0.75;
+                                ctx.fillRect(b.x + b.w / 2 - 2, baseY - b.h - 3, 4, 4);
+                                ctx.globalAlpha = 1;
+                            }
+                            break;
+                        case 'dish':
+                            ctx.fillRect(b.x + b.w / 2 - 3, baseY - b.h * 0.5, 6, b.h * 0.5 + 120);
+                            ctx.beginPath();
+                            ctx.arc(b.x + b.w / 2, baseY - b.h * 0.5, b.w / 2, Math.PI, 0);
+                            ctx.fill();
+                            break;
+                        case 'relay':
+                            ctx.fillRect(b.x + b.w / 2 - 2, baseY - b.h, 4, b.h + 120);
+                            ctx.fillRect(b.x + b.w * 0.1, baseY - b.h * 0.7, b.w * 0.8, 3);
+                            ctx.fillRect(b.x + b.w * 0.1, baseY - b.h * 0.4, b.w * 0.8, 3);
+                            break;
+                    }
+                }
+                break;
+            }
+
+            case 'sky': {
+                // Layered clouds — each cloud has its own baseY and scroll speed
+                for (const b of this.buildings) {
+                    const alpha = [0.35, 0.45, 0.55][b.layer];
+                    const drift = Math.sin(this.time * 0.08 * b.scrollSpeed + b.phase) * 6;
+                    ctx.globalAlpha = alpha;
+                    ctx.fillStyle = t.sil;
+                    ctx.beginPath();
+                    ctx.ellipse(b.x + b.w / 2 + drift, b.baseY, b.w / 2, b.h / 2, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.ellipse(b.x + b.w * 0.28 + drift, b.baseY - b.h * 0.25, b.w * 0.32, b.h * 0.42, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                    ctx.beginPath();
+                    ctx.ellipse(b.x + b.w * 0.75 + drift, b.baseY - b.h * 0.15, b.w * 0.28, b.h * 0.36, 0, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                ctx.globalAlpha = 1;
+                break;
+            }
+
+            case 'void': {
+                for (const b of this.buildings) {
+                    ctx.fillStyle = t.sil;
+                    ctx.beginPath();
+                    ctx.moveTo(b.x, baseY + 120);
+                    ctx.lineTo(b.x, baseY - b.h * 0.35);
+                    ctx.lineTo(b.x + b.w * 0.22, baseY - b.h);
+                    ctx.lineTo(b.x + b.w * 0.5,  baseY - b.h * 0.55);
+                    ctx.lineTo(b.x + b.w * 0.72, baseY - b.h * 0.88);
+                    ctx.lineTo(b.x + b.w,         baseY - b.h * 0.28);
+                    ctx.lineTo(b.x + b.w,         baseY + 120);
+                    ctx.closePath();
+                    ctx.fill();
+
+                    // Random glitch seam
+                    if (Math.sin(this.time * 3.5 + b.phase) > 0.85) {
+                        ctx.strokeStyle = 'rgba(255,0,50,0.28)';
+                        ctx.lineWidth = 1;
+                        ctx.beginPath();
+                        ctx.moveTo(b.x, baseY - b.h * Math.abs(Math.sin(this.time + b.phase)));
+                        ctx.lineTo(b.x + b.w, baseY - b.h * Math.abs(Math.cos(this.time + b.phase)));
+                        ctx.stroke();
+                    }
+                }
+                break;
+            }
+        }
+    },
+
+    _drawGrid(ctx, t) {
+        const horizon = PLAY_H * 0.80;
         const gridH = PLAY_H - horizon;
 
         ctx.save();
-
-        // Horizontal lines (perspective) — use theme grid color
-        ctx.strokeStyle = theme.grid;
+        ctx.strokeStyle = t.grid;
         ctx.lineWidth = 1;
-        for (let i = 0; i < 15; i++) {
-            const tt = (i * 60 + this.gridOffset) / (15 * 60);
+
+        // Horizontal lines — perspective spacing
+        for (let i = 0; i < 16; i++) {
+            const tt = (i * 60 + this.gridOffset) / (16 * 60);
             const y = horizon + tt * tt * gridH;
             if (y > PLAY_H) continue;
-            ctx.globalAlpha = Math.min(1, tt * 3) * 0.3;
+            ctx.globalAlpha = Math.min(1, tt * 3) * 0.32;
             ctx.beginPath();
             ctx.moveTo(0, y);
             ctx.lineTo(PLAY_W, y);
             ctx.stroke();
         }
 
-        // Vertical lines (converging) — use theme vgrid color
-        ctx.globalAlpha = 0.2;
-        ctx.strokeStyle = theme.vgrid;
-        const vanishX = PLAY_W / 2;
+        // Vertical lines — converge at vanishing point
+        ctx.globalAlpha = 0.22;
+        ctx.strokeStyle = t.vgrid;
+        const vx = PLAY_W / 2;
         for (let i = -10; i <= 10; i++) {
-            const bottomX = vanishX + i * 55;
             ctx.beginPath();
-            ctx.moveTo(vanishX + i * 3, horizon);
-            ctx.lineTo(bottomX, PLAY_H);
+            ctx.moveTo(vx + i * 3, horizon);
+            ctx.lineTo(vx + i * 58, PLAY_H);
             ctx.stroke();
         }
-
         ctx.restore();
     },
 
-    _drawGlitch(ctx) {
-        const time = this.gridOffset * 0.05;
-        // Scanline static
-        for (let i = 0; i < 5; i++) {
-            const sy = (Math.sin(time * 3 + i * 47) * 0.5 + 0.5) * PLAY_H;
-            const sw = 50 + Math.random() * 200;
-            const sx = Math.random() * PLAY_W;
-            ctx.fillStyle = `rgba(255, 0, 0, ${0.03 + Math.random() * 0.04})`;
-            ctx.fillRect(sx, sy, sw, 2 + Math.random() * 3);
+    _drawForeground(ctx, t) {
+        ctx.save();
+        for (const f of this.foreground) {
+            ctx.globalAlpha = f.alpha;
+            ctx.fillStyle = t.streak;
+            ctx.fillRect(f.x, f.y, f.size * 0.4, f.length);
         }
-        // Horizontal glitch bars
-        if (Math.random() < 0.03) {
-            const gy = Math.random() * PLAY_H;
-            const gh = 5 + Math.random() * 20;
-            ctx.fillStyle = `rgba(${Math.random() > 0.5 ? '255,0,100' : '0,255,255'}, 0.06)`;
-            ctx.fillRect(0, gy, PLAY_W, gh);
+        ctx.restore();
+    },
+
+    _drawOverlay(ctx, t) {
+        switch (this.bgType) {
+
+            case 'digital': {
+                // Falling data-stream columns
+                ctx.save();
+                ctx.font = '9px monospace';
+                for (const ds of this._dataStreams) {
+                    const colH = ds.chars.length * 11;
+                    const baseY = (ds.yOffset + this.time * ds.speed) % (PLAY_H + colH) - colH;
+                    for (let i = 0; i < ds.chars.length; i++) {
+                        const fade = i / (ds.chars.length - 1);
+                        ctx.globalAlpha = ds.alpha * fade;
+                        ctx.fillStyle = i === ds.chars.length - 1 ? '#ffffff' : t.accent2;
+                        ctx.fillText(ds.chars[i], ds.x, baseY + i * 11);
+                    }
+                }
+                ctx.restore();
+                break;
+            }
+
+            case 'void': {
+                // Reality cracks — jagged glowing lines
+                ctx.save();
+                const crackCount = 5;
+                for (let c = 0; c < crackCount; c++) {
+                    const phase = c * 1.3 + this.time * 0.12;
+                    if (Math.sin(phase) < -0.3) continue; // cracks appear/disappear
+                    const x0 = PLAY_W * (c / crackCount) + Math.sin(phase) * 80;
+                    const y0 = PLAY_H * (0.1 + Math.abs(Math.sin(phase * 0.7)) * 0.55);
+                    ctx.strokeStyle = `rgba(255,0,60,${0.15 + 0.12 * Math.sin(phase * 2)})`;
+                    ctx.lineWidth = 1.5;
+                    ctx.beginPath();
+                    ctx.moveTo(x0, y0);
+                    let cx2 = x0, cy2 = y0;
+                    for (let seg = 0; seg < 6; seg++) {
+                        cx2 += (Math.random() - 0.5) * 35;
+                        cy2 += 18 + Math.random() * 20;
+                        ctx.lineTo(cx2, cy2);
+                    }
+                    ctx.stroke();
+                    // Inner bright core
+                    ctx.strokeStyle = `rgba(255,80,120,${0.08 + 0.06 * Math.sin(phase * 2)})`;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+
+                // Scanline static
+                for (let i = 0; i < 4; i++) {
+                    const sy = (Math.sin(this.time * 2.8 + i * 43) * 0.5 + 0.5) * PLAY_H;
+                    ctx.fillStyle = `rgba(255,0,40,${0.025 + Math.random() * 0.03})`;
+                    ctx.fillRect(Math.random() * PLAY_W * 0.5, sy, 60 + Math.random() * 180, 1 + Math.random() * 2);
+                }
+                ctx.restore();
+                break;
+            }
+
+            case 'industrial': {
+                // Ember particles (mid-layer already handles sparks; add heat shimmer lines)
+                ctx.save();
+                ctx.strokeStyle = 'rgba(255,100,0,0.04)';
+                ctx.lineWidth = 1;
+                for (let i = 0; i < 3; i++) {
+                    const lx = 60 + i * 220 + Math.sin(this.time * 0.7 + i) * 30;
+                    ctx.beginPath();
+                    ctx.moveTo(lx, PLAY_H * 0.5);
+                    ctx.lineTo(lx + Math.sin(this.time + i * 2) * 15, PLAY_H * 0.78);
+                    ctx.stroke();
+                }
+                ctx.restore();
+                break;
+            }
         }
-        // Corner static
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
-        for (let i = 0; i < 8; i++) {
-            ctx.fillRect(Math.random() * PLAY_W, Math.random() * PLAY_H, Math.random() * 4, Math.random() * 4);
-        }
-    }
+    },
 };
 
 
@@ -6291,7 +8653,7 @@ const HUD = {
         ctx.textAlign = 'center';
         ctx.shadowColor = '#00ffff';
         ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b1', leftCenter, leftY);
+        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
         ctx.shadowBlur = 0;
         leftY += 50;
 
@@ -6599,6 +8961,7 @@ const HUD = {
             ['FOCUS', Input.getKeyBindDisplay('focus')],
             ['DASH', Input.getKeyBindDisplay('dash')],
             ['BOMB', Input.getKeyBindDisplay('bomb')],
+            ['SURGE', Input.getKeyBindDisplay('surge')],
             ['PAUSE', Input.getKeyBindDisplay('pause')]
         ];
         controls.forEach((c, i) => {
@@ -6758,7 +9121,7 @@ const Menu = {
         ctx.shadowBlur = glow;
         ctx.font = 'bold 72px Share Tech Mono, Consolas, monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('NEON STORM \u03b1', SCREEN_W / 2, 280);
+        ctx.fillText('NEON STORM \u03b2', SCREEN_W / 2, 280);
 
         // Subtitle
         ctx.shadowBlur = 5;
@@ -7204,40 +9567,59 @@ const Game = {
         Menu.selectedIndex = 0;
     },
 
-    startLevel(levelIndex, difficulty, keepWeapons) {
+    // Level scaling. Genre shooters (Cave, Touhou) mostly escalate density and
+    // pattern complexity; bullet speed stays readable, so it is capped.
+    applyLevelScaling(scale, baseDensity) {
+        const t = Math.max(0, scale - 1);
+        GameConfig.bulletDensity = baseDensity * (1 + 0.5 * t);
+        GameConfig._levelHpScale = 1 + 0.6 * t;
+        GameConfig._levelSpeedScale = Math.min(1.2, 1 + 0.15 * t);   // enemy bullet speed
+        GameConfig._levelFireRateScale = 1 + 0.2 * t;                // enemy fire frequency
+    },
+
+    // continuing: true only when advancing from a victory screen within one campaign run.
+    // Level select, custom start, retry and restart all begin a fresh run.
+    startLevel(levelIndex, difficulty, continuing) {
         if (difficulty !== 'custom') {
             GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
             GameConfig.difficulty = difficulty;
+        } else {
+            GameConfig = CustomDifficulty.getConfig();
         }
-        GameConfig.fireMode = Settings.values.fireMode;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
 
         const levelData = ALL_LEVELS[levelIndex];
         this.currentLevelIndex = levelIndex;
+        this.applyLevelScaling(levelData.levelScale || 1.0, GameConfig.bulletDensity || 1.0);
 
-        // Apply level scaling — affects bullet density, enemy HP, and bullet speed
-        const scale = levelData.levelScale || 1.0;
-        GameConfig.bulletDensity = (GameConfig.bulletDensity || 1.0) * scale;
-        // HP scales slightly faster than linear to compensate for weapon persistence
-        GameConfig._levelHpScale = Math.pow(scale, 1.3);
-        GameConfig._levelSpeedScale = 1 + (scale - 1) * 0.4;
-
-        // Weapon persistence between levels — drop 1 level, keep type
-        const prevWeapon = keepWeapons ? Player.primaryWeapon : 'none';
-        const prevPrimaryLvl = keepWeapons ? Player.primaryLevel : 0;
-        const prevDroneLvl = keepWeapons ? Player.droneLevel : 0;
+        // Carry-over between campaign levels: lives, bombs and weapons persist
+        const carry = continuing ? {
+            weapon: Player.primaryWeapon, level: Player.primaryLevel, drones: Player.droneLevel,
+            lives: Player.lives, bombs: Player.bombs
+        } : null;
         Player.init();
-        if (keepWeapons && prevWeapon !== 'none') {
-            Player.primaryWeapon = prevWeapon;
-            Player.primaryLevel = Math.max(1, prevPrimaryLvl - 1); // Drop 1 level, minimum Lv1
-            Player.droneLevel = Math.max(0, prevDroneLvl - 1);     // Drones also drop 1 level
+        if (carry) {
+            Player.primaryWeapon = carry.weapon;
+            Player.primaryLevel = carry.level;
+            Player.droneLevel = carry.drones;
+            Player.lives = carry.lives;
+            Player.bombs = GameConfig.bombs.enabled ? Math.max(carry.bombs, GameConfig.bombs.startCount) : 0;
+        } else if (this._retryLoadout && this._retryLoadout.levelIndex === levelIndex && levelIndex > 0) {
+            // Retrying a later level after game over: minimum loadout (Raiden-style continue)
+            Player.primaryWeapon = this._retryLoadout.weapon;
+            Player.primaryLevel = this._retryLoadout.weapon === 'none' ? 0 : 2;
+            Player.droneLevel = Math.min(1, this._retryLoadout.drones);
         }
+        this._retryLoadout = null;
 
-        // Score: full reset on fresh start, keep cumulative score when continuing
-        if (keepWeapons) {
-            Scoring.softReset(); // Keep score + max chain, reset per-level state
+        // Score: keep cumulative score only when continuing a run
+        if (continuing) {
+            Scoring.softReset();
         } else {
-            Scoring.reset(); // Full reset for fresh run
+            Scoring.reset();
         }
+        Scoring.beginLevel();
+        Scheduler.clear();
         Enemies.clear();
         Particles.clear();
         PowerUps.clear();
@@ -7251,11 +9633,41 @@ const Game = {
         Background.bgType = levelData.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
+        // Bloom intensity per level theme
+        const bloomPresets = {
+            synthwave: { bloomScale: 0.9,  threshold: 0.4  },
+            ocean:     { bloomScale: 1.0,  threshold: 0.35 },
+            volcanic:  { bloomScale: 1.3,  threshold: 0.28 },
+            storm:     { bloomScale: 1.1,  threshold: 0.32 },
+            frozen:    { bloomScale: 0.85, threshold: 0.4  },
+            void:      { bloomScale: 1.6,  threshold: 0.22 }, // Glitch level — strongest bloom
+        };
+        const bp = bloomPresets[Background.bgType] || bloomPresets.synthwave;
+        Renderer.setBloomIntensity(bp.bloomScale, bp.threshold);
+
+        // Per-level colour grade for distinct mood
+        const colorGradePresets = {
+            synthwave: { hue:  0,   saturate:  0.25, contrast: 0.1,  brightness:  0    },
+            ocean:     { hue: -8,   saturate:  0.15, contrast: 0.08, brightness:  0.05 },
+            volcanic:  { hue:  12,  saturate:  0.4,  contrast: 0.2,  brightness:  0.08 },
+            storm:     { hue: -5,   saturate:  0.1,  contrast: 0.18, brightness: -0.05 },
+            frozen:    { hue: -18,  saturate: -0.1,  contrast: 0.12, brightness:  0.06 },
+            void:      { hue:  175, saturate: -0.25, contrast: 0.3,  brightness: -0.08 },
+        };
+        const cg = colorGradePresets[Background.bgType] || colorGradePresets.synthwave;
+        Renderer.setColorGrade(cg);
+
+        // Level 6 glitch atmosphere — persistent chromatic aberration
+        Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
+
         // Activate level-specific systems
         if (levelData.hasAsteroids) Asteroids.activate();
         if (levelData.hasEscort) Escort.activate();
 
         this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this._levelStartWeapon = Player.primaryWeapon;
+        this._levelStartDrones = Player.droneLevel;
         this.state = 'playing';
     },
 
@@ -7268,12 +9680,15 @@ const Game = {
     startEndless(difficulty) {
         GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
         GameConfig.difficulty = difficulty;
-        GameConfig.fireMode = Settings.values.fireMode;
-        GameConfig._levelHpScale = 1;
-        GameConfig._levelSpeedScale = 1;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity;
+        this.applyLevelScaling(1, GameConfig._baseDensity);
         this.currentLevelIndex = -1; // Flag for endless mode
+        this._retryLoadout = null;
         Player.init();
         Scoring.reset();
+        Scoring.beginLevel();
+        Scheduler.clear();
         Enemies.clear();
         Particles.clear();
         PowerUps.clear();
@@ -7284,16 +9699,19 @@ const Game = {
         WaveSystem.waves = [];
         WaveSystem.currentWaveIndex = 0;
         WaveSystem.levelTimer = 0;
+        WaveSystem.waveTime = 0;
         WaveSystem.bossActive = false;
         EndlessMode.init();
         Background.init();
         Background.bgType = 'synthwave';
         Background._generateNearLayer();
         this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
         this.state = 'playing';
     },
 
-    showBriefing(levelIndex) {
+    showBriefing(levelIndex, continuing = false) {
+        this._continuing = continuing;
         const level = ALL_LEVELS[levelIndex];
         this.briefingText = level.briefing || '';
         this.briefingTimer = 0;
@@ -7307,14 +9725,15 @@ const Game = {
 
         const isEndless = this.currentLevelIndex === -1;
 
+        // Bonuses count this level only (maxChain/grazeCount are whole-run totals)
+        const noDeaths = Scoring.levelDeaths === 0;
         const bonus = EndRunBonus.calculate(
-            won, Player.lives, Scoring.maxChain, Scoring.grazeCount, WaveSystem.levelTimer
+            won, Player.lives, Scoring.levelMaxChain, Scoring.levelGrazes, WaveSystem.levelTimer, noDeaths
         );
         Scoring.score += bonus;
 
         if (won) {
             Campaign.completeLevel(this.currentLevelIndex, GameConfig.difficulty);
-            const noDeaths = Player.lives === GameConfig.lives;
             Achievements.onLevelComplete(this.currentLevelIndex, GameConfig.difficulty,
                 noDeaths, Scoring.score, Scoring.maxChain, Scoring.grazeCount);
             if (Campaign.secretUnlocked) Achievements.onSecretUnlocked();
@@ -7322,8 +9741,8 @@ const Game = {
             // Record per-level best score
             if (!isEndless) {
                 const isNewRecord = Campaign.recordLevelScore(
-                    this.currentLevelIndex, Scoring.score, Scoring.maxChain,
-                    Scoring.grazeCount, Scoring.isPerfect, GameConfig.difficulty
+                    this.currentLevelIndex, Scoring.levelScore, Scoring.levelMaxChain,
+                    Scoring.levelGrazes, Scoring.levelDeaths === 0 && Scoring.levelBombs === 0, GameConfig.difficulty
                 );
                 if (isNewRecord) {
                     Scoring.spawnPopup('NEW LEVEL RECORD!', '#00ff88', 20);
@@ -7355,6 +9774,19 @@ const Game = {
                 HighScores.startInitialEntry(Scoring.score, board, scoreEntry);
             }
         }
+    },
+
+    BOSS_GRACE_SECONDS: 8,
+    _lastWaveClearTimer: null,
+    _continuing: false,
+    _retryLoadout: null,
+
+    // Called on game time (Scheduler), so it only fires while the level is being played
+    _endLevel(won) {
+        if (this.state !== 'playing') return;
+        this._processEndRun(won);
+        this.state = won ? 'victory' : 'game_over';
+        Menu.selectedIndex = 0;
     },
 
     update(dt) {
@@ -7554,9 +9986,9 @@ const Game = {
                     Audio.playMenuSelect();
                     const lvlIdx = this.currentLevelIndex;
                     const diff = GameConfig.difficulty;
-                    const keep = lvlIdx > 0;
+                    const continuing = this._continuing;
                     Transition.start(() => {
-                        this.startLevel(lvlIdx, diff, keep);
+                        this.startLevel(lvlIdx, diff, continuing);
                     }, 3.0);
                 }
                 if (Input.isPressed('back')) {
@@ -7581,16 +10013,22 @@ const Game = {
                 Particles.update(dt);
                 Scoring.update(dt);
                 ScreenShake.update(dt);
+                Renderer.updateEffects(dt);
                 WaveSystem.update(dt);
+                Scheduler.update(dt);
                 Asteroids.update(dt);
                 Escort.update(dt);
 
-                // Endless mode wave generation
+                // Endless mode wave generation — rank scales like a level, with density capped
                 if (EndlessMode.active) {
                     EndlessMode.update(dt);
-                    // Apply rank scaling to bullet density dynamically
-                    GameConfig._levelHpScale = EndlessMode.rank;
-                    GameConfig._levelSpeedScale = 1 + (EndlessMode.rank - 1) * 0.4;
+                    this.applyLevelScaling(EndlessMode.rank, GameConfig._baseDensity);
+                    // Caps keep late Endless readable and killable; spawn rate and enemy mix
+                    // keep escalating after these are reached
+                    GameConfig.bulletDensity = Math.min(GameConfig.bulletDensity, GameConfig._baseDensity * 2.2);
+                    GameConfig._levelHpScale = Math.min(GameConfig._levelHpScale, 3);
+                    // Fire frequency too: uncapped, late Endless filled the 800-bullet pool
+                    GameConfig._levelFireRateScale = Math.min(GameConfig._levelFireRateScale, 1.6);
                 }
 
                 // Asteroid collision with player bullets
@@ -7621,25 +10059,25 @@ const Game = {
 
                 // Escort failure check
                 if (Escort.active && !Escort.alive) {
-                    setTimeout(() => {
-                        if (this.state === 'playing') {
-                            this._processEndRun(false);
-                            this.state = 'game_over';
-                            Menu.selectedIndex = 0;
-                        }
-                    }, 1500);
                     Escort.active = false; // prevent re-triggering
+                    Scheduler.after(1.5, () => this._endLevel(false));
                 }
 
                 // Apply settings dynamically
                 if (Settings.values.screenShake === 'off') { ScreenShake.offsetX = 0; ScreenShake.offsetY = 0; }
                 else if (Settings.values.screenShake === 'low') { ScreenShake.offsetX *= 0.5; ScreenShake.offsetY *= 0.5; }
 
-                // Boss trigger — only in campaign mode
-                if (!EndlessMode.active && WaveSystem.currentWaveIndex >= WaveSystem.waves.length && Enemies.list.length === 0 && !Boss.active && !Boss.defeated) {
-                    const levelData = ALL_LEVELS[this.currentLevelIndex];
-                    Boss.init(levelData.bossType || 'architect');
-                    WaveSystem.bossActive = true;
+                // Boss trigger — campaign only. The boss comes once every wave has spawned and the
+                // field is clear, or after a grace period (stragglers then retreat), so a level can't stall.
+                if (!EndlessMode.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
+                    if (this._lastWaveClearTimer === null) this._lastWaveClearTimer = 0;
+                    this._lastWaveClearTimer += dt;
+                    if (Enemies.list.length === 0 || this._lastWaveClearTimer >= this.BOSS_GRACE_SECONDS) {
+                        Enemies.retreatAll();
+                        const levelData = ALL_LEVELS[this.currentLevelIndex];
+                        Boss.init(levelData.bossType || 'architect');
+                        WaveSystem.bossActive = true;
+                    }
                 }
 
                 // Boss update
@@ -7647,27 +10085,15 @@ const Game = {
                     Boss.update(dt, Player.x, Player.y);
                     if (!Boss.active && Boss.defeated) {
                         WaveSystem.bossActive = false;
-                        setTimeout(() => {
-                            if (this.state === 'playing') {
-                                this._processEndRun(true);
-                                this.state = 'victory';
-                                Menu.selectedIndex = 0;
-                            }
-                        }, 1500);
+                        Scheduler.after(1.5, () => this._endLevel(true));
                     }
                 }
 
                 // Game over check — only trigger once
-                if (Player.alive === false && Player.lives <= 0 && this.state === 'playing' && !this._gameOverPending) {
+                if (Player.alive === false && Player.lives <= 0 && !this._gameOverPending) {
                     this._gameOverPending = true;
-                    setTimeout(() => {
-                        if (this.state === 'playing') {
-                            this._processEndRun(false);
-                            this.state = 'game_over';
-                            Menu.selectedIndex = 0;
-                        }
-                        this._gameOverPending = false;
-                    }, 1500);
+                    this._retryLoadout = { levelIndex: this.currentLevelIndex, weapon: this._levelStartWeapon || 'none', drones: this._levelStartDrones || 0 };
+                    Scheduler.after(1.5, () => this._endLevel(false));
                 }
                 break;
 
@@ -7738,7 +10164,7 @@ const Game = {
                         const diff = GameConfig.difficulty;
                         if (hasNextLevel) {
                             switch (Menu.selectedIndex) {
-                                case 0: Transition.start(() => { this.showBriefing(lvlIdx + 1); }); break;
+                                case 0: Transition.start(() => { this.showBriefing(lvlIdx + 1, true); }); break;
                                 case 1: Transition.start(() => { this.startLevel(lvlIdx, diff, false); }); break;
                                 case 2: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; }); break;
                             }
@@ -7952,53 +10378,65 @@ const Game = {
             }
 
             case 'playing':
-            case 'paused':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Escort.draw(ctx);
-                PowerUps.draw(ctx);
-                Enemies.draw(ctx);
-                Player.draw(ctx);
-                if (Boss.active) Boss.draw(ctx);
-                Particles.draw(ctx);
-                Scoring.drawPopups(ctx);
-                ctx.restore();
+            case 'paused': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Escort.draw(pctx);
+                PowerUps.draw(pctx);
+                Enemies.draw(pctx);
+                Player.draw(pctx);
+                if (Boss.active) Boss.draw(pctx);
+                Particles.draw(pctx);
+                Scoring.drawPopups(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame(); // Still composites glow + game
+                    Renderer.blitToOverlay(ctx, PLAY_X + ScreenShake.offsetX, PLAY_Y + ScreenShake.offsetY);
+                }
                 HUD.draw(ctx);
                 if (this.state === 'paused') Menu.drawPause(ctx);
                 break;
+            }
 
-            case 'game_over':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Asteroids.draw(ctx);
-                Enemies.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'game_over': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Asteroids.draw(pctx);
+                Enemies.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawGameOver(ctx);
                 break;
+            }
 
-            case 'victory':
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
-                ctx.clip();
-                ctx.translate(PLAY_X, PLAY_Y);
-                Background.draw(ctx);
-                Particles.draw(ctx);
-                ctx.restore();
+            case 'victory': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(pctx);
+                if (Renderer.usePixi) {
+                    Renderer.endFrame();
+                } else {
+                    Renderer.endFrame();
+                    Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
                 break;
+            }
 
             case 'campaign_complete': {
                 // Animated celebration background
@@ -8071,8 +10509,8 @@ const Game = {
                 // Thank you
                 ctx.fillStyle = '#667788';
                 ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b1', SCREEN_W / 2, 580);
-                ctx.fillText('This is an alpha build — more to come!', SCREEN_W / 2, 605);
+                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
+                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
 
                 // Menu options
                 const items = ['PLAY AGAIN', 'MAIN MENU'];
@@ -8114,12 +10552,15 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
-// Initialize and start
-Game.init().then(() => {
+// Initialize renderer, then game, then start
+(async function boot() {
+    await Renderer.init();
+    resizeCanvas(); // Re-run after Pixi canvas exists
+    await Game.init();
     requestAnimationFrame((timestamp) => {
         Game.lastTime = timestamp;
         gameLoop(timestamp);
     });
-});
+})();
 
 

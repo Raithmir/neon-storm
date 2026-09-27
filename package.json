@@ -1,10 +1,13 @@
 {
   "name": "neon-storm",
-  "version": "0.1.0-alpha",
-  "description": "Neon Storm α — Vertical scrolling bullet hell shooter",
+  "version": "0.2.0-beta",
+  "description": "Neon Storm β — Vertical scrolling bullet hell shooter with PixiJS renderer",
   "scripts": {
     "build": "node build.js",
-    "dev": "npx http-server dist -p 8080 -c-1"
+    "dev": "npx http-server . -p 8080 -c-1",
+    "sim:checks": "node tools/sim/checks.js",
+    "sim:weapons": "node tools/sim/weapons.js",
+    "sim:boss-ttk": "node tools/sim/boss-ttk.js"
   },
   "private": true
 }

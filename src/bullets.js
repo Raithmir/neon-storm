@@ -1,5 +1,5 @@
 // ============================================================
-//  BULLET POOL — optimised: no shadowBlur, hand-drawn glow
+//  BULLET POOL — optimised with hand-drawn glow
 // ============================================================
 class BulletPool {
     constructor(maxSize = 500) {
@@ -18,8 +18,34 @@ class BulletPool {
             active: true,
             type: opts.type || 'normal',
             life: opts.life || 5,
-            grazed: false
+            grazed: false,
+            pierce: !!opts.pierce,          // passes through enemies (hits each once)
+            harmless: opts.harmless || 0,   // seconds of telegraph before it can hit
+            turnRate: opts.turnRate || 5.0, // homing turn rate (rad/s)
+            _p: null,   // Pixi outer glow Particle
+            _pc: null,  // Pixi white-core Particle
         };
+        if (Renderer.usePixi && Renderer.bulletLayer && Renderer.glowTex) {
+            const hexColor = Renderer.colorToHex(bullet.color);
+            const outerScale = (bullet.radius * 5) / 32;
+            const coreScale  = (bullet.radius * 0.8) / 32;
+            bullet._p = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: outerScale, scaleY: outerScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: hexColor, alpha: 0.8,
+            });
+            bullet._pc = new PIXI.Particle({
+                texture: Renderer.glowTex,
+                x: bullet.x, y: bullet.y,
+                scaleX: coreScale, scaleY: coreScale,
+                anchorX: 0.5, anchorY: 0.5,
+                tint: 0xffffff, alpha: 0.95,
+            });
+            Renderer.bulletLayer.addParticle(bullet._p);
+            Renderer.bulletLayer.addParticle(bullet._pc);
+        }
         this.pool.push(bullet);
         return bullet;
     }
@@ -29,6 +55,7 @@ class BulletPool {
             const b = this.pool[i];
             b.prevX = b.x;
             b.prevY = b.y;
+            if (b.harmless > 0) b.harmless = Math.max(0, b.harmless - dt);
 
             if (b.type === 'homing' && homingTargets && homingTargets.length > 0) {
                 let nearest = null, nearDist = Infinity;
@@ -43,8 +70,7 @@ class BulletPool {
                     let diff = desired - current;
                     while (diff > Math.PI) diff -= Math.PI * 2;
                     while (diff < -Math.PI) diff += Math.PI * 2;
-                    const turnRate = 5.0;
-                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), b.turnRate * dt);
                     const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
                     b.vx = Math.cos(newAngle) * speed;
                     b.vy = Math.sin(newAngle) * speed;
@@ -55,12 +81,37 @@ class BulletPool {
             b.y += b.vy * dt;
             b.life -= dt;
             if (b.x < -20 || b.x > PLAY_W + 20 || b.y < -20 || b.y > PLAY_H + 20 || b.life <= 0 || !b.active) {
+                if (b._p)  { Renderer.bulletLayer.removeParticle(b._p);  b._p  = null; }
+                if (b._pc) { Renderer.bulletLayer.removeParticle(b._pc); b._pc = null; }
                 this.pool.splice(i, 1);
+            } else if (b._p) {
+                // Sync Pixi particle positions each frame
+                const outerScale = (b.radius * 5) / 32;
+                const coreScale  = (b.radius * 0.8) / 32;
+                b._p.x = b.x;  b._p.y = b.y;
+                b._p.scaleX = outerScale; b._p.scaleY = b.type === 'laser' ? outerScale * 3 : outerScale;
+                b._pc.x = b.x; b._pc.y = b.y;
+                b._pc.scaleX = coreScale; b._pc.scaleY = b.type === 'laser' ? coreScale * 3 : coreScale;
+                // Telegraphed bullets stay faint until they become dangerous
+                b._p.alpha = b.harmless > 0 ? 0.25 : 0.8;
+                b._pc.alpha = b.harmless > 0 ? 0.2 : 0.95;
+                if (b.type === 'homing') {
+                    b._p.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
+                }
             }
         }
     }
 
     draw(ctx) {
+        // In Pixi mode the particles are synced in update(); only keep addGlow for bloom source
+        if (Renderer.usePixi) {
+            for (const b of this.pool) {
+                Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 7, 0.5);
+            }
+            return;
+        }
+
+        // Canvas 2D fallback path
         const prevComposite = ctx.globalCompositeOperation;
         ctx.globalCompositeOperation = 'lighter';
 
@@ -79,11 +130,25 @@ class BulletPool {
     }
 
     _drawNormal(ctx, b) {
+        if (b.harmless > 0) {
+            // Telegraph: faint outline only
+            ctx.globalAlpha = 0.35;
+            ctx.strokeStyle = b.color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            return;
+        }
+        // GPU glow halo behind bullet
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
+
         // Motion trail
         const dx = b.x - b.prevX, dy = b.y - b.prevY;
         const trailLen = Math.sqrt(dx * dx + dy * dy);
         if (trailLen > 2) {
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = 0.3;
             ctx.fillStyle = b.color;
             ctx.beginPath();
             ctx.moveTo(b.x + b.radius * 0.5, b.y);
@@ -94,11 +159,11 @@ class BulletPool {
             ctx.fill();
         }
 
-        // Soft outer glow (replaces shadowBlur)
-        ctx.globalAlpha = 0.2;
+        // Soft outer glow
+        ctx.globalAlpha = 0.35;
         ctx.fillStyle = b.color;
         ctx.beginPath();
-        ctx.arc(b.x, b.y, b.radius * 2.2, 0, Math.PI * 2);
+        ctx.arc(b.x, b.y, b.radius * 2.5, 0, Math.PI * 2);
         ctx.fill();
 
         // Main bullet body
@@ -116,6 +181,9 @@ class BulletPool {
     }
 
     _drawHoming(ctx, b) {
+        // GPU glow halo
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.45);
+
         const angle = Math.atan2(b.vy, b.vx);
 
         // Exhaust trail
@@ -153,6 +221,9 @@ class BulletPool {
     }
 
     _drawLaser(ctx, b) {
+        // GPU glow halo (elongated by using wider size)
+        Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 8, 0.5);
+
         const len = Math.min(35, Math.abs(b.vy) * 0.035);
 
         // Wide outer glow
@@ -170,5 +241,13 @@ class BulletPool {
         ctx.fillRect(b.x - b.radius * 0.35, b.y - len * 0.6, b.radius * 0.7, len * 1.2);
     }
 
-    clear() { this.pool.length = 0; }
+    clear() {
+        if (Renderer.usePixi && Renderer.bulletLayer) {
+            for (const b of this.pool) {
+                if (b._p)  Renderer.bulletLayer.removeParticle(b._p);
+                if (b._pc) Renderer.bulletLayer.removeParticle(b._pc);
+            }
+        }
+        this.pool.length = 0;
+    }
 }

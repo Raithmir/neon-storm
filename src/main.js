@@ -12,11 +12,14 @@ function gameLoop(timestamp) {
     requestAnimationFrame(gameLoop);
 }
 
-// Initialize and start
-Game.init().then(() => {
+// Initialize renderer, then game, then start
+(async function boot() {
+    await Renderer.init();
+    resizeCanvas(); // Re-run after Pixi canvas exists
+    await Game.init();
     requestAnimationFrame((timestamp) => {
         Game.lastTime = timestamp;
         gameLoop(timestamp);
     });
-});
+})();
 
