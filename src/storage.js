@@ -198,6 +198,7 @@ const Settings = {
         screenShake: 'high',    // 'off', 'low', 'high'
         particleDensity: 'high', // 'low', 'medium', 'high'
         showHitbox: false,
+        showFps: false,
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
@@ -212,6 +213,7 @@ const Settings = {
         { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
+        { key: 'showFps', label: 'SHOW FPS', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },
         { key: 'colorblind', label: 'COLORBLIND MODE', type: 'toggle' },
         { key: 'fireMode', label: 'FIRE MODE', type: 'cycle', options: ['manual', 'auto'] },

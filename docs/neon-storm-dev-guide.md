@@ -4,9 +4,9 @@
 
 Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, and a full meta-game with persistent unlockables.
 
-**Tech stack:** PixiJS v8 (WebGPU/WebGL) for gameplay rendering, HTML5 Canvas 2D for UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX, localStorage/Artifact Storage API for persistence.
+**Tech stack:** PixiJS v8 (WebGPU/WebGL) with pixi-filters v6 for gameplay rendering and GLSL shader backgrounds, HTML5 Canvas 2D for gameplay art (neon line art via a sprite atlas) and UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX, localStorage/Artifact Storage API for persistence.
 
-**Target:** Desktop browsers at 1920×1080. Scales to fit the browser window.
+**Target:** Desktop browsers; laid out at 1920×1080 and scaled to fit the window, rendering at the display's pixel density (up to 2× on HIGH graphics quality).
 
 **Balance reference:** `docs/neon-storm-gameplay-review.md` records the review, the genre targets used (Cave / Touhou / Raiden) and the measured results; `tools/sim/` contains the headless simulation tools and regression checks used to tune it (see *Testing* below).
 
@@ -14,63 +14,68 @@ Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level
 
 ## File Structure
 
-The project is split into 21 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file. For the web server approach, `index.html` loads them directly via `<script>` tags.
+The project is split into 24 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
 
 ### Module Map (in dependency order)
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
 | `constants.js` | ~45 | Canvas setup, screen constants, dual-canvas sizing |
-| `renderer.js` | ~850 | PixiJS pipeline, offscreen Canvas 2D bridge, bloom/glow/screen effects |
+| `backdrops.js` | ~405 | GPU fragment shaders for the six level backgrounds |
+| `renderer.js` | ~1085 | PixiJS pipeline, offscreen Canvas 2D bridge, FX texture sheet, backdrop, bloom/screen effects, resolution & graphics quality |
 | `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
 | `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions (incl. `surge`) |
-| `audio.js` | ~330 | Web Audio API procedural SFX + music hooks |
-| `storage.js` | ~810 | Persistence, high scores, settings, NC, achievements, end-of-level bonuses |
-| `ui-systems.js` | ~380 | Custom difficulty, hangar/shop, tutorial |
-| `particles.js` | ~270 | Particles, screen shake, screen transitions |
-| `bullets.js` | ~255 | BulletPool class (player + enemy projectiles; pierce, telegraph, homing) |
-| `scoring.js` | ~265 | Chain combo, graze, surge meter, per-level counters, extends, popups |
-| `enemies.js` | ~915 | Enemy types, AI, fire rules, retreat, patterns, power-ups |
-| `midbosses.js` | ~300 | Mid-boss types, movement, patterns, rewards, HP bar |
+| `audio.js` | ~330 | Web Audio API procedural SFX + music hooks (no music yet) |
+| `storage.js` | ~725 | Persistence, high scores, settings (+ screen), controls screen, NC, achievements, end-of-level bonuses |
+| `ui-systems.js` | ~500 | Custom difficulty, hangar/shop (with live previews), tutorial |
+| `neon.js` | ~315 | Neon line-art helpers (strokes, lights, text, bars) and the sprite atlas |
+| `ui-kit.js` | ~270 | UI building blocks: animated menu background, panels, titles, menu items, tabs |
+| `particles.js` | ~415 | Particles, sparks, explosions, outline shatter, screen shake, transitions |
+| `bullets.js` | ~315 | BulletPool class (player + enemy projectiles; shapes, pierce, telegraph, homing) |
+| `scoring.js` | ~260 | Chain combo, graze, surge meter, per-level counters, extends, popups |
+| `enemies.js` | ~960 | Enemy types, AI, fire rules, retreat, patterns, neon art, power-ups |
+| `midbosses.js` | ~535 | Mid-boss types, movement, patterns, rewards, neon art, HP bar |
 | `waves.js` | ~470 | Game-time Scheduler, wave sequencer, level 1-6 data, Endless generator |
-| `level-systems.js` | ~245 | Asteroids, escort, campaign progression |
-| `bosses.js` | ~1225 | Boss types, patterns, armor, phase timeouts, visuals, defeat sequences |
-| `player.js` | ~950 | Player ship, weapons, drones, abilities, collision |
-| `background.js` | ~955 | 6-theme parallax backgrounds |
-| `hud.js` | ~385 | HUD panels (left + right) |
-| `menus.js` | ~540 | All menu screens |
-| `game.js` | ~1000 | Main game state machine, level scaling, level flow |
+| `level-systems.js` | ~285 | Asteroids, escort (with neon art), campaign progression |
+| `bosses.js` | ~1270 | Boss types, patterns, armor, phase timeouts, neon art, defeat sequences |
+| `player.js` | ~965 | Player ship, weapons, drones, abilities, collision, trails |
+| `background.js` | ~960 | Painted Canvas 2D backgrounds (the no-WebGL fallback) |
+| `hud.js` | ~275 | HUD panels (left + right) and the FPS meter |
+| `menus.js` | ~370 | Title, difficulty, briefing, level select, scores, achievements, pause, results |
+| `game.js` | ~805 | Main game state machine, level scaling, level flow |
 | `main.js` | ~25 | Boot sequence + game loop |
 
 ### Rendering Architecture
 
-The game uses a dual-canvas architecture:
-
 ```
+  Level backdrop shader (backdrops.js)   ◄── PixiJS Mesh, bottom of the play area
   Gameplay .draw(ctx) methods
            │
            ▼
-  Offscreen Canvas 2D (720×960)    ◄── All existing draw code draws here
+  Offscreen Canvas 2D (720×960 × render scale)   ◄── Neon art stamped from the sprite atlas
            │
            ▼
-  PixiJS Texture Upload            ◄── GPU texture from offscreen canvas
+  PixiJS texture upload + native particles       ◄── Bullets/particles from the FX sheet
            │
            ▼
-  PixiJS Sprite + Filters          ◄── Bloom, blur, distortion (Phase 2+)
+  Filters: colour grade, bloom, shockwave, god-rays, chroma, CRT, glitch
            │
            ▼
-  Pixi Canvas (play area)          ◄── Positioned over the play area
+  Pixi canvas (play area)
 
-  Overlay Canvas 2D (1920×1080)    ◄── Menus, HUD, transitions (unchanged)
+  Overlay Canvas 2D (1920×1080 × render scale)   ◄── Menus, HUD, transitions (UI kit)
 ```
 
-The `Renderer` module manages this pipeline:
-- `Renderer.getPlayCtx()` — returns the offscreen Canvas 2D context
-- `Renderer.beginFrame()` — clears the offscreen canvas
-- `Renderer.endFrame()` — uploads to GPU and renders via PixiJS
-- `Renderer.setShake(x, y)` — applies screen shake to the PixiJS sprite
+- `Renderer.getPlayCtx()` / `beginFrame()` / `endFrame()` — frame lifecycle for the offscreen canvas.
+- `Renderer.setBackdrop(theme)` — picks the level's shader; `_updateBackdrop` feeds it pulse/boss/Surge/bullet-density uniforms.
+- `Renderer.fx` — the shared particle texture sheet (glow, orb, core, shadow, streak, needle, missile, spark, pixel).
+- `Renderer.applyResolution()` — both canvases render at CSS scale × `devicePixelRatio`, capped by GRAPHICS QUALITY (high 2×, medium 1.5×, low 1×; auto steps down on slow frames). Draw code keeps logical coordinates.
+- `Renderer.calm()` — true with Flash Reduction on; every flash, glitch and pulse checks it.
+- Screen effects use pixi-filters v6 (`PIXI.filters`); centres are play-area pixels.
 
-When PixiJS isn't available, `endFrame()` is a no-op and `Game.draw()` blits the offscreen canvas directly onto the overlay canvas with `ctx.drawImage()`. All gameplay draw code is identical in both paths — only the final compositing differs.
+When PixiJS isn't available, `endFrame()` is a no-op, the painted Canvas 2D backgrounds are used, and `Game.draw()` blits the offscreen canvas onto the overlay.
+
+The art conventions (neon style rules, `_bake`/`_neon` split, sprite keys, adding art for new entities) are documented in `CLAUDE.md` → Art Style and in the header of `src/neon.js`.
 
 ---
 
@@ -181,7 +186,7 @@ my_enemy: {
 
 2. Add a firing pattern case in `Enemies._firePattern()`. If the pattern's bullet *count* should scale with density, add the type to `Enemies.COUNT_SCALED`; otherwise density scales its fire frequency.
 
-3. Add a drawing case in `Enemies.draw()` inside the switch.
+3. Add its neon art: a `_bake` entry for the static body and a `_neon` entry for the live parts (see `CLAUDE.md` → Art Style). Add its outline to `Enemies._OUTLINES` so it shatters on death.
 
 4. If needed, add special movement in `Enemies._updateMovement()`.
 
@@ -265,23 +270,15 @@ Targets: ~2.3× power from Lv1 to Lv5, all weapons within ~20% on a single targe
 
 ### Background Themes
 
-Backgrounds are theme-based via `bgType`. Available themes:
-- `synthwave` — Purple/magenta gradient, neon city skyline
-- `industrial` — Dark reds/oranges, burning infrastructure
-- `space` — Deep blues, nebula, sparse stars
-- `sky` — Blue to gold gradient, cloud-like
-- `digital` — Purple to magenta, data-stream feel
-- `void` — Near-black, glitch aesthetic
+Each level's `bgType` selects a GPU fragment shader in `BACKDROP_SHADERS` (`src/backdrops.js`), drawn under all gameplay with the world streaming toward the player:
+- `synthwave` — perspective neon grid, striped sun and wireframe mountains on a horizon near the top
+- `industrial` — top-down foundry deck: vents, conveyor belts, pipes, girders overhead, embers
+- `space` — parallax star layers, nebula, ringed planet
+- `sky` — city lights far below moonlit cloud layers
+- `digital` — circuit board with chips and data pulses along the traces
+- `void` — warping tunnel with glitch bands and tears
 
-To add a new theme, add an entry to the `themes` object in `Background.draw()`:
-```javascript
-my_theme: {
-    sky: ['#color1', '#color2', '#color3', '#color4', '#color5'], // gradient stops
-    sun: 'rgba(r,g,b,a)',   // horizon glow
-    grid: 'rgba(r,g,b,a)',  // horizontal grid lines
-    vgrid: 'rgba(r,g,b,a)'  // vertical grid lines
-}
-```
+Shared uniforms (`uTime`, `uRes`, `uPulse`, `uBoss`, `uSurge`, `uDim`, `uCalm`) and helpers (`hash`, `noise`, `fbm`, `stars`, `line`, `finish`) are in `BACKDROP_COMMON`. **To add a theme:** add a `void main()` fragment to `BACKDROP_SHADERS`, keep it darker and less saturated than anything collidable, stop strobing when `uCalm` is 1, and add bloom/colour-grade presets for it in `Game.startLevel()`. Add a painted fallback in `background.js` if the level must look right without WebGL. `npm run sim:render` catches shader compile errors.
 
 ### Audio
 
@@ -343,7 +340,13 @@ Data is stored via the `Storage` abstraction which tries `window.storage` (Artif
 
 ### Applying Cosmetics to Gameplay
 
-The Hangar tracks equipped cosmetics (`Hangar.equipped.skin`, `.trail`, `.bullet`, `.explosion`) and these are applied in gameplay rendering. Ship skins change the player ship fill colour (including Chromatic Shift and Ghost Frame special skins), engine trails use `Hangar.trailColor`, bullet styles apply base shot colour, and explosion effects vary particle colours on enemy death.
+Cosmetics change the look, not just the colour:
+- **Skins** — the ship's neon colour (`Hangar.skinColor`; Chromatic cycles, Ghost is translucent).
+- **Trails** — `Player.drawTrail(ctx, pts, style, color, r, t)`: thrust ribbon, flame, scatter, lightning, void.
+- **Bullet styles** — player shot shape in `BulletPool._addParticles`/`_syncParticles`: streak (neon), orb (plasma), square (retro), spinning diamond (shards). Missiles and the laser keep their own shapes.
+- **Explosions** — `variant` passed to `Particles.spawnExplosion` on enemy deaths: burst, shatter (more/faster outline pieces), pixel (drifting squares), supernova (bigger flash and ring).
+
+The Hangar preview (`Hangar._drawPreview`) reuses `Player.drawTrail` and mirrors the other styles; a new cosmetic needs its in-game look and a preview case.
 
 ### Tuning Difficulty
 
@@ -372,12 +375,15 @@ The input system supports gamepad via `Input.gpBindings`. Button indices follow 
 
 ## Testing
 
-There are no unit tests; gameplay is verified headlessly with `tools/sim/` (Playwright + Chromium on a fake 60 fps clock, rendering stubbed). See `tools/sim/README.md` for setup.
+There are no unit tests; the game is verified headlessly with `tools/sim/` (Playwright + Chromium). See `tools/sim/README.md` for setup.
 
-- `npm run sim:checks` — regression checks for every gameplay bug fixed in the review, plus balance guards (weapon monotonicity, Endless caps, mid-boss behaviour). All must pass.
+- `npm run sim:checks` — regression checks for every gameplay bug fixed in the review, plus balance guards (weapon monotonicity, Endless caps, mid-boss behaviour). Rendering is stubbed. All must pass.
+- `npm run sim:render` — render smoke test: every screen and Hangar preview, and every level through its boss with rendering on (plus Flash Reduction and the Canvas 2D fallback). Fails on any page or console error, including shader compile errors.
 - `npm run sim:weapons`, `npm run sim:boss-ttk` — weapon DPS and boss time-to-kill.
 - `tools/sim/playthrough.js`, `tools/sim/campaign.js` — single levels and whole campaigns played by a bot (perfect, or human-like with reaction time and perception noise).
-- `tools/sim/perf.js` — game-logic cost per frame (logic only; profile rendering in a real browser).
+- `tools/sim/perf.js` — game-logic cost per frame (logic only). For rendering, use Settings → SHOW FPS in a real browser.
+
+**CI** (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: build, a check that the committed `dist/` matches `src/`, `sim:checks` and `sim:render`. **Hosting** (`.github/workflows/pages.yml`) publishes the build from main to GitHub Pages.
 
 Checks reach into game globals (`Player`, `Boss`, `WaveSystem`…); keep them in step when renaming.
 
@@ -388,8 +394,9 @@ Checks reach into game globals (`Player`, `Boss`, `WaveSystem`…); keep them in
 See `neon-storm-checklist.md` for the complete remaining work tracker.
 
 ### Renderer
-- [ ] Canvas 2D fallback has no glow/shadowBlur effects (intentional — graceful degradation, not parity)
-- [ ] Rendering performance not yet profiled in a real browser under heavy scenes (late Endless)
+- [ ] Canvas 2D fallback (no WebGL) keeps the older painted backgrounds and has no shader/filter effects (intentional — graceful degradation, not parity)
+- [ ] Rendering performance not yet measured on real hardware, especially HIGH quality at 4K and late Endless (use Settings → SHOW FPS)
+- [ ] Hangar colour swatches use the catalogue colours, so the dark Void Trail swatch doesn't match its glowing purple trail
 
 ### Gameplay
 - [ ] Human play-testing of the tuned balance — especially Hardcore's difficulty curve and the bomb economy (the simulation bot almost never bombs)

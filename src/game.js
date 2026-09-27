@@ -801,5 +801,6 @@ const Game = {
 
         // Transition overlay — always drawn on top of everything
         Transition.draw(ctx);
+        FpsMeter.draw(ctx);
     }
 };

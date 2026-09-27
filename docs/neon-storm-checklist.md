@@ -6,6 +6,34 @@
 
 ---
 
+## Recommended Next Steps (priority order)
+
+1. **Music and SFX** — the biggest gap now the game looks the part: there is no music at all (the `playMusic`/`stopMusic`/`crossfadeMusic` hooks in `audio.js` are empty and the MUSIC VOLUME slider does nothing). Suggested approach: procedural synthwave generated with Web Audio (keeps the single offline HTML, no licensing) — a menu theme, per-level variations, a boss track, victory/game-over stings, reacting to play (boss intensity, Surge filter sweep). Then upgrade the ~17 procedural SFX to match the new visuals (weightier explosions, graze, boss warning siren, shatter/impact sounds).
+2. **Act on play-test results** — the gameplay review follow-ups below, plus anything found in γ's visuals. Use Settings → SHOW FPS for performance reports.
+3. **Save-data versioning** — add a save version now so future balance or format changes can migrate or reset old data cleanly (see Gameplay Review Follow-ups).
+4. **Gamepad button prompts** — small with the UI kit; see UI / UX Polish.
+5. **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
+6. **More to play, reusing existing systems** — Boss Rush / Boss Practice (all bosses exist), an adaptive rank system, ship selection (neon art makes new ships cheap).
+
+**One-time setup:** repo Settings → Pages → Source: **GitHub Actions**, so pushes to main publish to https://raithmir.github.io/neon-storm/.
+
+---
+
+## Gamma Graphics Overhaul (done)
+
+- [x] Neon vector art for every entity (player, 9 enemies, 6 distinct mid-bosses, 6 bosses, power-ups, asteroids, escort) with a sprite atlas; old flat-fill art removed
+- [x] GPU shader backgrounds for all six levels, reacting to bombs, bosses, Surge and bullet density
+- [x] Shaped bullets (readable enemy orbs with shadows, needles, streaks, missiles, continuous laser), impact sparks, muzzle flashes
+- [x] Explosions with flash, neon rings, sparks and embers; ships shatter into their outline pieces
+- [x] UI kit and restyled title, menus, briefing (live backdrop + boss preview), results, hangar (live previews) and HUD
+- [x] Cosmetics with distinct looks (bullet shapes, trail styles, explosion styles)
+- [x] High-DPI rendering with GRAPHICS QUALITY (auto/high/medium/low); FLASH REDUCTION covers every effect
+- [x] pixi-filters v6 bundled: bomb shockwave, boss god-rays and phase glitch now work
+- [x] SHOW FPS counter; CI (build + dist check, gameplay checks, render smoke test); GitHub Pages hosting from main
+- [ ] Hangar swatch for Void Trail still shows its dark catalogue colour rather than the glowing purple trail
+
+---
+
 ## Renderer Visual Upgrades (Phase 2+)
 
 The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
@@ -22,10 +50,10 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 
 The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 30 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
 
-- [ ] Human play-testing of the tuned balance — feel, bullet readability with bloom, boss/mid-boss timer lengths
+- [ ] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
 - [ ] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
 - [ ] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
-- [ ] Profile rendering performance in a real browser, especially late Endless
+- [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS)
 - [ ] Save-data versioning: per-level records now store level score (previously run score) and high scores were set under the old balance — reset or migrate old saves
 
 ---
@@ -82,6 +110,7 @@ Features that add entirely new ways to play.
 ## Audio
 
 - [ ] Music tracks — original or royalty-free synthwave music for: menu theme, per-level gameplay (6 tracks), boss theme, victory sting, game over sting. Music system hooks already exist (playMusic/stopMusic/crossfadeMusic)
+- [ ] SFX upgrade to match the γ visuals — weightier layered explosions, distinct graze sound, boss WARNING siren, shatter/impact sounds, UI sounds for the new menus
 
 ---
 

@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npx http-server . -p 8080 -c-1
 # Open http://localhost:8080
 
-# Build single-file distributable (downloads PixiJS on first run)
+# Build single-file distributable (bundles vendor/pixi.min.js and vendor/pixi-filters.min.js; downloads them if missing)
 node build.js
 # Output: dist/neon-storm-gamma.html (offline-capable), dist/neon-storm.js (debug)
 ```
@@ -19,7 +19,12 @@ There are no unit tests, no lint, and no transpilation — vanilla JS only.
 ```bash
 # Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
 npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
+npm run sim:render     # render smoke test: every screen + every level drawn, fails on any error
 ```
+
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks` and `sim:render`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
+
+Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 
 See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-through tools.
 
@@ -48,6 +53,7 @@ Menus / HUD / transitions → Overlay Canvas 2D (1920×1080) directly
 - Each level's background is a GPU fragment shader in `backdrops.js` (`BACKDROP_SHADERS[bgType]`), drawn by `Renderer.setBackdrop()` under everything else. Its uniforms (`Renderer._updateBackdrop`) react to bombs/flashes (`bgPulse`), bosses, Surge and bullet density (it dims under dense patterns). When it is active, `Background.draw()` skips the painted Canvas 2D background, which remains the no-WebGL fallback
 - Bullets and particles are native Pixi particles using shapes from one FX texture sheet (`Renderer.fx`: glow, orb, core, shadow, streak, needle, missile, spark). Enemy bullets get a dark shadow (normal blend) under an additive orb/needle and core; player shots are streaks/missiles pointing along their velocity. `Particles.flash/impact/spawnExplosion/shatter` build effects; `shatter` breaks an entity's neon outline (`Enemies.outline`, `MidBoss.outline`, `Boss.outlines`) into spinning line segments
 - Resolution: both the overlay and the play area render at the display's pixel density (CSS scale × `devicePixelRatio`), capped by the GRAPHICS QUALITY setting (`Renderer.QUALITY`: high 2×, medium 1.5×, low 1×; `auto` starts high and steps down after ~3 s of slow frames in play). Draw code keeps using logical coordinates; `Renderer.applyResolution()` sets the canvas transforms (`Renderer.uiScale`, `Renderer.playScale`). Pixi filters use `resolution: 'inherit'`. Caches drawn onto the overlay must be baked at `Renderer.uiScale` (see `UI._bakeBackground`)
+- Screen effects (bomb shockwave, boss god-rays, phase-change glitch) use pixi-filters v6 (the PixiJS v8 line, `PIXI.filters`), bundled by `build.js`; `Renderer._filtersLib()` guards them, and their centres are in play-area pixels
 - When PixiJS is unavailable, `endFrame()` is a no-op and `Game.draw()` blits the offscreen canvas directly to the overlay canvas — all draw code works identically in both paths
 
 ### State Machine (`game.js`)

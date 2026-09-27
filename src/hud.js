@@ -223,3 +223,53 @@ const HUD = {
         ctx.fillRect(PLAY_X + PLAY_W - edgeW, PLAY_Y, edgeW, PLAY_H);
     }
 };
+
+// ============================================================
+//  FPS METER (Settings → SHOW FPS)
+//  Top-left readout for play-testing: frames per second, average and
+//  worst frame time over the last second, graphics quality/resolution,
+//  and live object counts (enemies, bullets, particles).
+// ============================================================
+const FpsMeter = {
+    _frames: [],      // recent frame durations (ms)
+    _acc: 0,
+    _shown: { fps: 0, avg: 0, worst: 0 },
+
+    // Called once per animation frame with the real (uncapped) frame time
+    tick(frameMs) {
+        if (!(frameMs > 0) || frameMs > 1000) return;
+        this._frames.push(frameMs);
+        this._acc += frameMs;
+        if (this._acc >= 500) {
+            // Refresh the readout twice a second so it's readable
+            const recent = this._frames.slice(-120);
+            const sum = recent.reduce((a, b) => a + b, 0);
+            this._shown.avg = sum / recent.length;
+            this._shown.fps = 1000 / this._shown.avg;
+            this._shown.worst = Math.max(...recent);
+            this._frames = recent.slice(-60);
+            this._acc = 0;
+        }
+    },
+
+    draw(ctx) {
+        if (!Settings.values.showFps) return;
+        const s = this._shown;
+        const color = s.fps >= 55 ? '#00ff88' : s.fps >= 40 ? '#ffee33' : '#ff3355';
+        const q = (Renderer.quality || '').toUpperCase() + (Renderer._autoQuality ? ' (AUTO)' : '');
+        const lines = [
+            [Math.round(s.fps) + ' FPS', color, 20],
+            ['AVG ' + s.avg.toFixed(1) + ' ms   WORST ' + s.worst.toFixed(1) + ' ms', UI.TEXT, 13],
+            [q + '   ' + (Renderer.playScale || 1) + '×' + (Renderer.usePixi ? '' : '   CANVAS 2D'), UI.DIM, 13],
+            ['ENEMIES ' + Enemies.list.length + '   BULLETS ' + Enemies.enemyBullets.pool.length + '/' + Player.bullets.pool.length +
+                '   PARTICLES ' + Particles.particles.length, UI.DIM, 13],
+        ];
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(8, 8, 360, 94);
+        let y = 32;
+        for (const [text, c, size] of lines) {
+            Neon.text(ctx, text, 18, y, c, size, { align: 'left', halo: 0, weight: size > 14 ? 'bold' : '' });
+            y += size > 14 ? 24 : 19;
+        }
+    },
+};

@@ -6,6 +6,7 @@
     "build": "node build.js",
     "dev": "npx http-server . -p 8080 -c-1",
     "sim:checks": "node tools/sim/checks.js",
+    "sim:render": "node tools/sim/render-smoke.js",
     "sim:weapons": "node tools/sim/weapons.js",
     "sim:boss-ttk": "node tools/sim/boss-ttk.js"
   },

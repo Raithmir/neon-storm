@@ -1,0 +1,57 @@
+# Runs on every pull request and on pushes to main/gamma:
+#   1. builds the game and checks the committed dist/ matches src/
+#   2. gameplay regression checks (tools/sim/checks.js)
+#   3. render smoke test: every screen and level drawn, fails on any error
+#      (tools/sim/render-smoke.js)
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, gamma]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build
+        run: node build.js
+
+      - name: Check dist/ is up to date
+        run: |
+          if ! git diff --quiet -- dist/; then
+            echo "::error::dist/ doesn't match src/. Run 'node build.js' and commit the result."
+            git diff --stat -- dist/
+            exit 1
+          fi
+
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --no-save playwright
+          npx playwright install --with-deps chromium
+
+      - name: Gameplay regression checks
+        run: npm run sim:checks
+
+      - name: Render smoke test
+        run: npm run sim:render
+
+      - name: Upload simulation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-results
+          path: tools/sim/out/
+          if-no-files-found: ignore
