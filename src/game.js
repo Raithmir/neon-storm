@@ -159,6 +159,7 @@ const Game = {
         WaveSystem.waves = [];
         WaveSystem.currentWaveIndex = 0;
         WaveSystem.levelTimer = 0;
+        WaveSystem.waveTime = 0;
         WaveSystem.bossActive = false;
         EndlessMode.init();
         Background.init();

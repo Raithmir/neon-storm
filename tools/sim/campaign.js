@@ -93,6 +93,7 @@ const MAX_LEVEL_MS = 420000;
             totalDeaths: C.levels.reduce((a, l) => a + l.deaths, 0),
             extendsEarned: C.extends,
             weaponReached: C.weaponReached,
+            midBosses: (B.midBosses || []).map(m => ({ level: m.level, type: m.type, outcome: m.outcome, seconds: m.end !== null ? +(m.end - m.start).toFixed(1) : null })),
             pickupsTaken: B.pickupsTaken,
             firstPickups: B.pickupLog.slice(0, 12),
             deathBombAttempts: B.deathBombs,

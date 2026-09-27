@@ -358,7 +358,7 @@ const checks = {
         await g.ev(() => {
             Game.startLevel(0, 'normal', false); Asteroids.clear(); Enemies.clear();
             WaveSystem.currentWaveIndex = WaveSystem.waves.length - 1;
-            WaveSystem.levelTimer = WaveSystem.waves[WaveSystem.waves.length - 1].time - 0.1;
+            WaveSystem.levelTimer = WaveSystem.waveTime = WaveSystem.waves[WaveSystem.waves.length - 1].time - 0.1;
             Player.invincible = true; Player.invincibleTimer = 999;
         });
         await g.run(300);
@@ -422,6 +422,41 @@ const checks = {
             densityVsBase: +(GameConfig.bulletDensity / GameConfig._baseDensity).toFixed(2), bulletSpeed: +GameConfig._levelSpeedScale.toFixed(2) }));
         return { section: '§4.2', expect: 'Late Endless keeps HP ≤ 3×, density ≤ 2.2× and bullet speed ≤ 1.2×',
             pass: r.hpScale <= 3 && r.densityVsBase <= 2.2 && r.bulletSpeed <= 1.2, evidence: r };
+    },
+
+    async midBossPausesStageAndEscapes(g) {
+        await g.ev(() => {
+            Game.startLevel(0, 'normal', false); Asteroids.clear(); Enemies.clear();
+            const idx = WaveSystem.waves.findIndex(w => w.midboss);
+            WaveSystem.currentWaveIndex = idx;
+            WaveSystem.levelTimer = WaveSystem.waveTime = WaveSystem.waves[idx].time - 0.1;
+            Player.invincible = true; Player.invincibleTimer = 999; Player.x = 60; // out of its way, not firing
+            window.__idx = idx; window.__score0 = Scoring.score;
+        });
+        await g.run(1000);
+        const spawned = await g.ev(() => !!MidBoss.current());
+        await g.run(20000);
+        const during = await g.ev(() => ({ alive: !!MidBoss.current(), waveIndex: WaveSystem.currentWaveIndex - window.__idx }));
+        await g.run(25000); // past the 35 s limit
+        const after = await g.ev(() => ({ alive: !!MidBoss.current(), stillOnField: Enemies.list.some(e => e.midboss),
+            wavesResumed: WaveSystem.currentWaveIndex - window.__idx > 1 }));
+        return { section: '§8', expect: 'A mid-boss pauses the stage, then escapes after its time limit and the stage resumes',
+            pass: spawned && during.alive && during.waveIndex === 1 && !after.alive && after.wavesResumed,
+            evidence: { spawned, during, after } };
+    },
+
+    async midBossRewards(g) {
+        const r = await g.ev(() => {
+            Game.startLevel(0, 'normal', false); WaveSystem.waves = []; Asteroids.clear(); Enemies.clear(); PowerUps.clear();
+            const e = MidBoss.spawn('sentinel'); e.y = 150;
+            for (let i = 0; i < 20; i++) Enemies.enemyBullets.spawn(100 + i * 20, 400, 0, 50, {});
+            const score0 = Scoring.score;
+            Enemies.hit(e, e.maxHp + 10, 300);
+            return { powerUps: PowerUps.list.length, bulletsLeft: Enemies.enemyBullets.pool.filter(b => b.active).length,
+                bonus: Scoring.score - score0, alive: Enemies.list.includes(e) };
+        });
+        return { section: '§8', expect: 'Destroying a mid-boss pays a bonus, clears bullets and drops 2 power-ups',
+            pass: !r.alive && r.powerUps === 2 && r.bulletsLeft === 0 && r.bonus >= 8000, evidence: r };
     },
 
     // --- Boss patterns --------------------------------------------------------

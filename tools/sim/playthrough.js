@@ -30,7 +30,7 @@ const MAX_MS = 360000;
         Game.startLevel(lvl, diff, false);
         Player.primaryWeapon = weapon; Player.primaryLevel = weaponLevel; Player.droneLevel = 0;
         PowerUps.spawn = () => {}; // fixed loadout, so levels are comparable
-        window.__stats = { lastWaveAt: null, bossStartAt: null, bossDefeatedAt: null };
+        window.__stats = { lastWaveAt: null, bossStartAt: null, bossDefeatedAt: null, escortMinHp: null, escortLog: [] };
     }, [lvl, diff, weapon, weaponLevel]);
     await g.page.evaluate(installBot, { human: HUMAN, countHits: !HUMAN, abilities: HUMAN, seekPickups: false });
     await g.ev(() => {
@@ -41,6 +41,11 @@ const MAX_MS = 360000;
             if (S.lastWaveAt === null && WaveSystem.currentWaveIndex >= WaveSystem.waves.length) S.lastWaveAt = WaveSystem.levelTimer;
             if (S.bossStartAt === null && Boss.active && Boss.entered) S.bossStartAt = WaveSystem.levelTimer;
             if (S.bossDefeatedAt === null && Boss.defeated) S.bossDefeatedAt = WaveSystem.levelTimer;
+            if (Escort.active || Escort.alive === false) {
+                S.escortMinHp = S.escortMinHp === null ? Escort.hp : Math.min(S.escortMinHp, Escort.hp);
+                const bucket = Math.floor(WaveSystem.levelTimer / 15);
+                if (S.escortLog.length <= bucket) S.escortLog.push(Math.round(Escort.hp));
+            }
         };
     });
 
@@ -69,6 +74,8 @@ const MAX_MS = 360000;
             secondsUntilLastWave: S.lastWaveAt !== null ? +S.lastWaveAt.toFixed(1) : null,
             bossDelayAfterLastWave: S.bossStartAt !== null && S.lastWaveAt !== null ? +(S.bossStartAt - S.lastWaveAt).toFixed(1) : null,
             bossFightSeconds: S.bossDefeatedAt !== null ? +(S.bossDefeatedAt - S.bossStartAt).toFixed(1) : null,
+            midBoss: (window.__bot.midBosses || []).map(m => ({ type: m.type, outcome: m.outcome, seconds: m.end !== null ? +(m.end - m.start).toFixed(1) : null })),
+            escort: S.escortMinHp === null ? undefined : { minHp: Math.round(S.escortMinHp), hpEvery15s: S.escortLog },
             maxBulletsOnScreen: B.maxBullets,
             score: Scoring.score,
             enemiesLeftOnField: Enemies.list.map(e => e.type + '@' + Math.round(e.x) + ',' + Math.round(e.y)),

@@ -191,6 +191,11 @@ const Enemies = {
     },
 
     _updateMovement(e, dt) {
+        // Mid-bosses have their own movement (midbosses.js) until they retreat
+        if (e.midboss && !e.retreating) {
+            MidBoss.updateMovement(e, dt, Player.x);
+            return;
+        }
         // Fly in from beside the play area first
         if (e.entryX !== null) {
             const step = Math.max(80, e.speed) * 1.5 * dt;
@@ -239,6 +244,10 @@ const Enemies = {
         const angle = Math.atan2(dy, dx);
         const bs = e.bulletSpeed;
 
+        if (e.midboss) {
+            MidBoss.fire(e, px, py);
+            return;
+        }
         switch (e.type) {
             case 'scout_drone':
                 // Fires from sensor at centre
@@ -376,6 +385,7 @@ const Enemies = {
             }
         }
 
+        if (enemy.midboss) MidBoss.onDefeat(enemy);
         Scoring.addKill(enemy.score, playerDist);
         Achievements.onEnemyKill();
         Audio.playExplosionSmall();
@@ -392,10 +402,10 @@ const Enemies = {
 
     draw(ctx) {
         const isGlitchLevel = Background.bgType === 'void';
-        // Phase shifter warp-in markers (teleport telegraph)
+        // Warp-in markers (phase shifter and teleporting mid-boss telegraph)
         for (const e of this.list) {
-            if (e.type !== 'phase_shifter' || !(e.warpTimer > 0) || !e.warpTo) continue;
-            const t = 1 - e.warpTimer / 0.45;
+            if (!(e.warpTimer > 0) || !e.warpTo) continue;
+            const t = Math.max(0, 1 - e.warpTimer / 0.5);
             ctx.strokeStyle = e.color;
             ctx.globalAlpha = 0.3 + 0.5 * t;
             ctx.lineWidth = 1.5;
@@ -676,6 +686,10 @@ const Enemies = {
                     break;
 
                 default:
+                    if (e.midboss) {
+                        MidBoss.draw(ctx, e, flash);
+                        break;
+                    }
                     // Fallback circle
                     ctx.beginPath();
                     ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
@@ -683,8 +697,8 @@ const Enemies = {
                     break;
             }
 
-            // HP bar for tough enemies
-            if (e.maxHp > 2) {
+            // HP bar for tough enemies (mid-bosses use the top-of-screen bar)
+            if (e.maxHp > 2 && !e.midboss) {
                 const barW = e.radius * 2;
                 const barH = 3;
                 const barY = -e.radius - 8;
@@ -697,6 +711,8 @@ const Enemies = {
 
             ctx.restore();
         }
+
+        MidBoss.drawBar(ctx);
 
         // Apply colorblind override to enemy bullets before drawing
         if (Settings.values.colorblind) {

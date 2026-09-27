@@ -54,6 +54,7 @@ encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNot
 | `endBonusesPerLevel` | 5.4 |
 | `levelSelectStartsFresh` | 7 |
 | `pauseKeepsScheduledSpawns`, `victoryAfterPause`, `bossWaitsForFinalWave` | 8 |
+| `midBossPausesStageAndEscapes`, `midBossRewards` | 8 (mid-bosses) |
 | `hoverEnemiesLeave`, `noOffscreenFire`, `asteroidRateIndependentOfFps` | 6 |
 | `architectSweepSpreads`, `casualRingsHaveNoGap`, `denseRingsHaveNoDuplicates`, `wallsStayOnScreen` | 3.2 |
 

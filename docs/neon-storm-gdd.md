@@ -368,14 +368,40 @@ Multi-stage boss fight. Rules shared by all six bosses:
 
 ---
 
+### 7.4 Mid-Bosses
+One per level, about a third of the way in (Cave / Touhou convention):
+
+| Level | Mid-boss | Movement | Patterns |
+|---|---|---|---|
+| 1 | Sentinel | sways across the top | aimed fan, ring, wide fan |
+| 2 | Forge Walker | sways | bomb drop + ring, wall with a gap near the player, heavy aimed shots |
+| 3 | Debris Hauler | sways | spiral, thrown debris + aimed shots, ring |
+| 4 | Strike Leader | darts between three positions | fast aimed fan, calls in scouts, cross streams |
+| 5 | Core Warden | telegraphed teleports | double ring, triple spiral, aimed fan |
+| 6 | Glitch Echo | mirrors the player | mirrored spread, random burst, ring + aimed shots |
+
+- 250 base HP (150 for the mobile Strike Leader), × the level's HP scaling; bombs take 10% like a boss
+- The wave clock pauses while it is alive; nothing else spawns
+- Escapes after 35 s (on-screen timer) with no reward
+- Destroyed: 8,000 bonus (× difficulty multiplier), every enemy bullet cancelled, 2 guaranteed power-ups
+
+---
+
 ## 8. Level Pacing
 
 ### Wave Structure
 
-*Implemented levels run ~70–92 s of waves, then the boss (about 2.8–3.3 min per level in simulated
-Normal play). The boss arrives once every wave has spawned and the field is clear, or 8 s after the last
-wave — stragglers retreat. Hover and strafe enemies retreat after 14–16 s if not killed. The original
-~5-minute plan below would need more wave content per level.*
+*Implemented structure (every level, ~4–4.5 min in simulated Normal play, matching the genre's 3–5 min):*
+
+| Segment | Wave clock | Content |
+|---|---|---|
+| Opening | 0 – ~46 s | The level's original early waves |
+| **Mid-boss** | clock paused | One themed mid-boss (§7.4); ~20–25 s at typical power, escapes after 35 s |
+| Escalation | ~46 – ~92 s | The level's original later waves |
+| Finale | ~80 – ~140 s | Six new, denser mixed waves ending in a generous pre-boss wave |
+| Boss | — | Arrives when the field is clear or 8 s after the last wave (stragglers retreat) |
+
+*Hover and strafe enemies retreat after 14–16 s if not killed. The table below is the original v1.0 plan.*
 
 | Segment | Time | Content | Music |
 |---------|------|---------|-------|

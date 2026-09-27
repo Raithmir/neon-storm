@@ -559,7 +559,9 @@ const Player = {
         for (const e of [...Enemies.list]) {
             const baseHp = (Enemies.types[e.type] || {}).hp || e.maxHp;
             let bombDmg;
-            if (baseHp <= 3) {
+            if (e.midboss) {
+                bombDmg = Math.ceil(e.maxHp * 0.1);          // Mid-bosses: like bosses, 10%
+            } else if (baseHp <= 3) {
                 bombDmg = e.maxHp + e.shieldHp + 5;          // Guaranteed kill: scouts, snipers, shield walls
             } else if (baseHp <= 6) {
                 bombDmg = Math.ceil(e.maxHp * 0.75);        // Gunships, turrets, phase shifters — nearly dead

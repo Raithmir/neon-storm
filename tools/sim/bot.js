@@ -50,6 +50,13 @@ function installBot(opts) {
             this.invincible = true; this.invincibleTimer = 1.0;
         };
     }
+    // Mid-boss fights: spawn time, and how each one ended
+    S.midBosses = [];
+    const mbSpawn = MidBoss.spawn.bind(MidBoss);
+    MidBoss.spawn = (type) => { const e = mbSpawn(type); if (e) S.midBosses.push({ level: Game.currentLevelIndex + 1, type, start: WaveSystem.levelTimer, end: null, outcome: null, ref: e }); return e; };
+    const mbDefeat = MidBoss.onDefeat.bind(MidBoss);
+    MidBoss.onDefeat = (e) => { const m = S.midBosses.find(x => x.ref === e); if (m) { m.end = WaveSystem.levelTimer; m.outcome = 'destroyed'; } return mbDefeat(e); };
+
     const collect = Player._collectPowerUp.bind(Player);
     Player._collectPowerUp = (p) => {
         S.pickupsTaken++;
@@ -191,6 +198,9 @@ function installBot(opts) {
         if (Game.state === 'playing') botStep(dt);
         update(dt);
         S.maxBullets = Math.max(S.maxBullets, Enemies.enemyBullets.pool.length);
+        for (const m of S.midBosses) {
+            if (m.outcome === null && m.ref.retreating) { m.end = WaveSystem.levelTimer; m.outcome = 'escaped'; }
+        }
     };
 }
 
