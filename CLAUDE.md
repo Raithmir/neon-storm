@@ -27,7 +27,7 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 23 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 24 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -76,6 +76,7 @@ Other states: settings, high_scores, hangar, tutorial
 | `Game` | game.js | Main state machine |
 | `Settings` | storage.js | Persisted player preferences |
 | `Neon` | neon.js | Line-art helpers for the neon vector style |
+| `UI` | ui-kit.js | Menu/HUD building blocks: background, panels, titles, menu items |
 | `Hangar` | ui-systems.js | Cosmetics/unlock shop |
 | `Campaign` | level-systems.js | Level progression |
 | `WaveSystem` | waves.js | Wave sequencer |
@@ -99,6 +100,14 @@ Entities are drawn as neon line art using the `Neon` helpers in `neon.js`; the s
 Each module keeps its art next to its logic: `Enemies._neon` / `_bake`, `MidBoss._neon` / `_bake`, `Boss._neon` / `_bake`, `Player._drawShipNeon`, `PowerUps._drawNeon`. The `_bake` functions draw the static body and run once per sprite key via `Neon.sprite()`, which caches the result in a shared texture atlas; the `_neon` functions stamp that sprite and draw the animated parts (lights, rotors, flames) live. Sprite keys include the colour and flash state, so a new colour just bakes a new sprite. Set `Neon.BAKE = false` in the console to draw everything live when checking art changes.
 
 **Adding art for a new enemy/boss:** add a `_bake` entry for the static body and a `_neon` entry that calls `Neon.sprite(ctx, key, halfSize, bakeFn, ...)` then draws the live parts; `halfSize` must cover the art plus its glow. Every enemy type needs a `_neon` entry (mid-bosses: `MidBoss._neon`).
+
+### UI
+
+Menus, briefing, results screens and the HUD are drawn on the overlay canvas with the `UI` kit (`ui-kit.js`): `UI.background` (animated neon horizon), `UI.panel`, `UI.title`, `UI.item` (menu entries), `UI.hint`, plus `Neon.text` / `Neon.bar` / `Neon.topBar`. Screen code sets `Menu.items` while drawing, and `Game.update()` reads it for navigation, so keep the item lists in step with the handlers. The briefing renders the upcoming level's backdrop in the play area.
+
+Flash Reduction (`Settings.values.flashReduction`) is honoured through `Renderer.calm()`: every flash, glitch, chromatic split and backdrop pulse must check it.
+
+Hangar cosmetics change the look, not just the colour: bullet styles pick the player shot shape (`BulletPool._addParticles`), trails pick the style in `Player.drawTrail`, explosions pass `variant` to `Particles.spawnExplosion`. The Hangar preview reuses the same drawing where it can.
 
 ### Persistence
 

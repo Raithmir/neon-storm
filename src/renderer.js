@@ -284,6 +284,7 @@ const Renderer = {
     //   needle  fast enemy shot: long thin diamond
     //   missile homing shot: arrowhead with fins
     //   spark   thin line for sparks and debris
+    //   pixel   hard square (Pixel Retro bullets, Pixel Dissolve explosions)
     _createFxTextures() {
         const W = 256, H = 64;
         const c = document.createElement('canvas');
@@ -323,13 +324,16 @@ const Renderer = {
         grad.addColorStop(1, 'rgba(255,255,255,0)');
         g.fillStyle = grad;
         g.fillRect(210.5, 0, 3, 32);
+        // pixel (216..224 x 0..8): hard square for retro bullets and pixel explosions
+        g.fillStyle = '#fff';
+        g.fillRect(217, 1, 6, 6);
 
         const src = new PIXI.CanvasSource({ resource: c, width: W, height: H });
         const tex = (x, y, w, h) => new PIXI.Texture({ source: src, frame: new PIXI.Rectangle(x, y, w, h) });
         return {
             glow: tex(0, 0, 64, 64), orb: tex(64, 0, 32, 32), core: tex(96, 0, 32, 32),
             shadow: tex(128, 0, 32, 32), streak: tex(160, 0, 16, 64), needle: tex(176, 0, 16, 64),
-            missile: tex(192, 0, 16, 32), spark: tex(208, 0, 8, 32),
+            missile: tex(192, 0, 16, 32), spark: tex(208, 0, 8, 32), pixel: tex(216, 0, 8, 8),
         };
     },
 

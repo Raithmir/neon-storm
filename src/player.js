@@ -697,6 +697,66 @@ const Player = {
     _neonBank: 0,
     _neonLastX: null,
 
+    // Draw an engine trail along pts (ship first). Styles match the Hangar
+    // trails: thrust ribbon, flickering flame, particle scatter, lightning
+    // arc and void (dark core, glowing edges). Also used by the Hangar preview.
+    drawTrail(ctx, pts, style, color, r, t) {
+        const n = pts.length;
+        const calm = Renderer.calm();
+        const ribbon = (fill, widthK, alpha, jitter) => {
+            ctx.fillStyle = fill;
+            for (let i = 0; i < n - 1; i++) {
+                const p0 = pts[i], p1 = pts[i + 1];
+                const j0 = jitter ? 1 + Math.sin(t * 40 + i * 1.7) * jitter : 1;
+                const j1 = jitter ? 1 + Math.sin(t * 40 + (i + 1) * 1.7) * jitter : 1;
+                const w0 = r * widthK * (1 - i / n) * j0, w1 = r * widthK * (1 - (i + 1) / n) * j1;
+                ctx.globalAlpha = (1 - i / n) * alpha;
+                ctx.beginPath();
+                ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
+                ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        };
+        switch (style) {
+            case 'flame':
+                ribbon(color, 0.6, 0.45, calm ? 0 : 0.25);
+                ribbon('#ffcc33', 0.3, 0.6, calm ? 0 : 0.3);
+                ribbon('#ffffff', 0.1, 0.6, 0);
+                break;
+            case 'scatter':
+                for (let i = 1; i < n; i++) {
+                    const k = 1 - i / n;
+                    for (let j = 0; j < 2; j++) {
+                        const h = Math.sin(i * 12.9 + j * 78.2 + Math.floor(t * 12)) * 43758.5;
+                        const off = (h - Math.floor(h) - 0.5) * r * 1.2 * (1 - k);
+                        Neon.light(ctx, pts[i].x + off, pts[i].y, 1.2 + k * 1.2, color, k);
+                    }
+                }
+                break;
+            case 'lightning': {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < n; i++) {
+                    const h = Math.sin(i * 91.3 + (calm ? 0 : Math.floor(t * 20)) * 7.1) * 43758.5;
+                    ctx.lineTo(pts[i].x + (h - Math.floor(h) - 0.5) * r * 1.1, pts[i].y);
+                }
+                ctx.globalAlpha = 0.9;
+                Neon.stroke(ctx, color, 1.1, false);
+                ctx.globalAlpha = 1;
+                ribbon(color, 0.25, 0.25, 0);
+                break;
+            }
+            case 'void':
+                ribbon('#aa33ff', 0.62, 0.5, 0);
+                ribbon('#05000c', 0.48, 0.95, 0);
+                break;
+            default: // thrust
+                ribbon(color, 0.5, 0.35, 0);
+                ribbon('#ffffff', 0.14, 0.5, 0);
+        }
+    },
+
     _HEX: Neon.polygon(6, Math.PI / 6),
     _DRONE: [0, -1, 0.7, 0, 0, 1, -0.7, 0],
     _bakeDrone(c) {
@@ -791,27 +851,13 @@ const Player = {
 
         const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
 
-        // Engine trail: a tapering ribbon from the engines that streams down
-        // behind the ship (the world scrolls past) and bends as it moves
+        // Engine trail streams down behind the ship (the world scrolls past)
+        // and bends as it moves; its look comes from the equipped trail
         const trail = this.trailPositions;
-        const trailColor = this.dashing ? '#ffffff' : Hangar.trailColor;
         if (trail.length > 1) {
-            const n = trail.length;
-            const pt = (i) => ({ x: trail[i].x, y: trail[i].y + this.radius * 0.7 + i * 7 });
-            for (let pass = 0; pass < 2; pass++) {
-                ctx.fillStyle = pass === 0 ? trailColor : '#ffffff';
-                for (let i = 0; i < n - 1; i++) {
-                    const p0 = pt(i), p1 = pt(i + 1);
-                    const w0 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - i / n);
-                    const w1 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - (i + 1) / n);
-                    ctx.globalAlpha = (1 - i / n) * (pass === 0 ? 0.35 : 0.5);
-                    ctx.beginPath();
-                    ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
-                    ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
-                    ctx.fill();
-                }
-            }
-            ctx.globalAlpha = 1;
+            const pts = trail.map((p, i) => ({ x: p.x, y: p.y + this.radius * 0.7 + i * 7 }));
+            this.drawTrail(ctx, pts, this.dashing ? 'thrust' : Hangar.equipped.trail,
+                this.dashing ? '#ffffff' : Hangar.trailColor, this.radius, this.engineFlicker / 20);
         }
 
         // Drones: small spinning neon diamonds with a hot core

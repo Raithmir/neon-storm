@@ -360,16 +360,22 @@ const Enemies = {
         const accent = enemy.accent || explColor;
 
         // Layered explosion: use spawnExplosion for the main burst
+        const variant = Hangar.equipped.explosion;
         Particles.spawnExplosion(enemy.x, enemy.y, {
             style: isBig ? 'large' : 'medium',
             color: explColor,
             color2: '#ffffff',
+            variant,
         });
         // Extra accent-coloured sparks for visual variety
         Particles.spawn(enemy.x, enemy.y, isBig ? 12 : 6, { color: accent, speed: 180, life: 0.7, size: 3 });
         // The ship's neon outline breaks apart
         const outline = MidBoss.isType(enemy.type) ? MidBoss.outline(enemy) : this.outline(enemy);
-        if (outline) Particles.shatter(enemy.x, enemy.y, outline.pts, outline.scale, enemy.rotation || 0, enemy.color, isBig ? 1.3 : 1);
+        if (outline) {
+            const heavy = variant === 'shatter';   // the Shatter style throws more, faster pieces
+            Particles.shatter(enemy.x, enemy.y, outline.pts, outline.scale, enemy.rotation || 0, enemy.color,
+                (isBig ? 1.3 : 1) * (heavy ? 1.7 : 1), heavy ? 3 : 2);
+        }
         if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel

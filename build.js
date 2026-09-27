@@ -24,6 +24,7 @@ const SOURCE_FILES = [
     'storage.js',
     'ui-systems.js',
     'neon.js',
+    'ui-kit.js',
     'particles.js',
     'bullets.js',
     'scoring.js',

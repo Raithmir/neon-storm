@@ -740,6 +740,7 @@ const Renderer = {
     //   needle  fast enemy shot: long thin diamond
     //   missile homing shot: arrowhead with fins
     //   spark   thin line for sparks and debris
+    //   pixel   hard square (Pixel Retro bullets, Pixel Dissolve explosions)
     _createFxTextures() {
         const W = 256, H = 64;
         const c = document.createElement('canvas');
@@ -779,13 +780,16 @@ const Renderer = {
         grad.addColorStop(1, 'rgba(255,255,255,0)');
         g.fillStyle = grad;
         g.fillRect(210.5, 0, 3, 32);
+        // pixel (216..224 x 0..8): hard square for retro bullets and pixel explosions
+        g.fillStyle = '#fff';
+        g.fillRect(217, 1, 6, 6);
 
         const src = new PIXI.CanvasSource({ resource: c, width: W, height: H });
         const tex = (x, y, w, h) => new PIXI.Texture({ source: src, frame: new PIXI.Rectangle(x, y, w, h) });
         return {
             glow: tex(0, 0, 64, 64), orb: tex(64, 0, 32, 32), core: tex(96, 0, 32, 32),
             shadow: tex(128, 0, 32, 32), streak: tex(160, 0, 16, 64), needle: tex(176, 0, 16, 64),
-            missile: tex(192, 0, 16, 32), spark: tex(208, 0, 8, 32),
+            missile: tex(192, 0, 16, 32), spark: tex(208, 0, 8, 32), pixel: tex(216, 0, 8, 8),
         };
     },
 
@@ -2223,34 +2227,20 @@ const HighScores = {
     },
 
     drawInitialEntry(ctx, x, y) {
-        ctx.fillStyle = '#ffff00';
-        ctx.font = 'bold 18px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('NEW HIGH SCORE!', x, y);
-
-        ctx.fillStyle = '#aaaaaa';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('ENTER YOUR INITIALS', x, y + 25);
-
+        Neon.text(ctx, 'NEW HIGH SCORE!', x, y + 10, '#ffee33', 28, { core: 0.4 });
+        UI.label(ctx, 'ENTER YOUR INITIALS', x, y + 40, UI.TEXT, 16);
         for (let i = 0; i < 3; i++) {
-            const cx = x - 30 + i * 30;
+            const cx = x - 56 + i * 56;
             const selected = i === this.initialCursor;
-            ctx.fillStyle = selected ? '#00ffff' : '#888888';
-            ctx.shadowColor = selected ? '#00ffff' : 'transparent';
-            ctx.shadowBlur = selected ? 10 : 0;
-            ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(this.currentInitials[i], cx, y + 65);
+            const c = selected ? UI.CYAN : UI.DIM;
+            UI.panel(ctx, cx - 22, y + 58, 44, 56, c, { fill: selected ? 'rgba(0,255,255,0.08)' : 'rgba(6,2,18,0.6)' });
+            Neon.text(ctx, this.currentInitials[i], cx, y + 100, selected ? '#ffffff' : UI.TEXT, 38, { halo: selected ? 0.5 : 0 });
             if (selected) {
-                ctx.fillStyle = '#00ffff';
-                ctx.fillText('▲', cx, y + 42);
-                ctx.fillText('▼', cx, y + 82);
+                Neon.text(ctx, '▲', cx, y + 52, UI.CYAN, 14, { halo: 0 });
+                Neon.text(ctx, '▼', cx, y + 132, UI.CYAN, 14, { halo: 0 });
             }
         }
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = '#778899';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ CHANGE  ←→ MOVE  ENTER CONFIRM', x, y + 105);
+        UI.label(ctx, '↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM', x, y + 160, UI.DIM, 14);
     },
 
     drawBoard(ctx, difficulty, x, y, w) {
@@ -2405,79 +2395,59 @@ const Settings = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'SETTINGS', 110);
+        const cx = SCREEN_W / 2;
+        const rowH = 58, top = 200;
+        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * rowH + 30, UI.CYAN);
 
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('SETTINGS', SCREEN_W / 2, 120);
-        ctx.shadowBlur = 0;
-
-        const startY = 220;
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
-            const y = startY + i * 55;
+            const y = top + i * rowH;
             const selected = i === this.selectedIndex;
+            const valColor = selected ? UI.CYAN : UI.TEXT;
 
-            // Label (skip for action items — they draw their own centered label)
-            if (item.type !== 'action') {
-                ctx.fillStyle = selected ? '#ffffff' : '#667788';
-                ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.textAlign = 'right';
-                ctx.fillText(item.label, SCREEN_W / 2 - 20, y);
+            if (item.type === 'action') {
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 520, size: 20 });
+                continue;
             }
+            if (selected) {
+                ctx.fillStyle = UI.CYAN;
+                ctx.globalAlpha = 0.12;
+                ctx.fillRect(cx - 400, y - 26, 800, 42);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 400, y - 26, 3, 42);
+            }
+            Neon.text(ctx, item.label, cx - 30, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
+                { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
 
-            // Value
-            ctx.textAlign = 'left';
-            ctx.fillStyle = selected ? '#00ffff' : '#888888';
-            ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-
+            const vx = cx + 20;
             if (item.type === 'slider') {
                 const val = this.values[item.key];
-                const barW = 150;
-                const barH = 8;
-                const barX = SCREEN_W / 2 + 20;
-                ctx.fillStyle = '#222233';
-                ctx.fillRect(barX, y - barH / 2 - 2, barW, barH);
-                ctx.fillStyle = selected ? '#00ffff' : '#667788';
-                ctx.fillRect(barX, y - barH / 2 - 2, barW * (val / item.max), barH);
-                ctx.fillStyle = selected ? '#ffffff' : '#aaaaaa';
-                ctx.fillText(val + '%', barX + barW + 15, y);
+                Neon.bar(ctx, vx + 24, y - 10, 220, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
+                Neon.text(ctx, val + '%', vx + 270, y + 2, valColor, 18, { align: 'left', halo: 0 });
                 if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.fillText('◂', barX - 15, y);
-                    ctx.fillText('▸', barX + barW + 55, y);
+                    Neon.text(ctx, '◂', vx + 8, y + 2, UI.CYAN, 18, { halo: 0 });
+                    Neon.text(ctx, '▸', vx + 340, y + 2, UI.CYAN, 18, { halo: 0 });
                 }
             } else if (item.type === 'cycle') {
-                const val = this.values[item.key].toUpperCase();
-                ctx.fillText(selected ? '◂ ' + val + ' ▸' : val, SCREEN_W / 2 + 20, y);
+                const val = this.values[item.key].toString().toUpperCase();
+                Neon.text(ctx, selected ? '◂  ' + val + '  ▸' : val, vx, y + 2, valColor, 18, { align: 'left', halo: selected ? 0.3 : 0 });
             } else if (item.type === 'toggle') {
-                const val = this.values[item.key];
-                ctx.fillStyle = val ? '#00ff88' : '#ff4444';
-                ctx.fillText(val ? 'ON' : 'OFF', SCREEN_W / 2 + 20, y);
-            } else if (item.type === 'action') {
-                ctx.textAlign = 'center';
-                if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('▸ ' + item.label + ' ◂', SCREEN_W / 2, y);
-                } else {
-                    ctx.fillStyle = '#667788';
-                    ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText(item.label, SCREEN_W / 2, y);
-                }
+                const on = this.values[item.key];
+                // Switch: a pill with a knob
+                const sx = vx, sy = y - 12;
+                ctx.fillStyle = on ? 'rgba(0,255,136,0.25)' : 'rgba(255,51,85,0.15)';
+                ctx.fillRect(sx, sy, 56, 22);
+                ctx.strokeStyle = on ? '#00ff88' : '#ff3355';
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(sx + 0.5, sy + 0.5, 55, 21);
+                ctx.fillStyle = on ? '#00ff88' : '#ff3355';
+                ctx.fillRect(on ? sx + 34 : sx + 4, sy + 4, 18, 14);
+                Neon.text(ctx, on ? 'ON' : 'OFF', sx + 72, y + 2, on ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: 0 });
             }
         }
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ SELECT  ←→ ADJUST  ENTER CONFIRM  ESC BACK', SCREEN_W / 2, SCREEN_H - 50);
+        UI.hint(ctx, '↑↓ SELECT   ←→ ADJUST   ENTER CONFIRM   ESC BACK');
     }
 };
 
@@ -2575,102 +2545,50 @@ const ControlsScreen = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('CONTROLS', SCREEN_W / 2, 80);
-        ctx.shadowBlur = 0;
-
-        // Column headers
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('ACTION', SCREEN_W / 2 - 200, 130);
-        ctx.fillText('KEYBOARD', SCREEN_W / 2, 130);
-        ctx.fillText('GAMEPAD', SCREEN_W / 2 + 200, 130);
-
-        // Separator line
-        ctx.strokeStyle = '#333355';
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(SCREEN_W / 2 - 320, 140);
-        ctx.lineTo(SCREEN_W / 2 + 320, 140);
-        ctx.stroke();
-
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'CONTROLS', 100);
+        const cx = SCREEN_W / 2;
         const items = this.getItems();
-        const startY = 170;
-        const lineH = 40;
+        const top = 220, lineH = 50;
+        UI.panel(ctx, cx - 440, top - 70, 880, items.length * lineH + 60, UI.CYAN);
+        UI.label(ctx, 'ACTION', cx - 260, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'KEYBOARD', cx, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'GAMEPAD', cx + 260, top - 30, UI.DIM, 14);
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
-            const y = startY + i * lineH;
+            const y = top + i * lineH;
             const selected = i === this.selectedIndex;
-            const isAction = item.action === 'back' || item.action === 'reset';
-
-            if (isAction) {
-                ctx.textAlign = 'center';
-                ctx.fillStyle = selected ? (item.action === 'reset' ? '#ffaa00' : '#00ffff') : '#667788';
-                ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(selected ? '▸ ' + item.label + ' ◂' : item.label, SCREEN_W / 2, y);
+            if (item.action === 'back' || item.action === 'reset') {
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 460, size: 20, color: item.action === 'reset' ? '#ffaa00' : UI.CYAN });
                 continue;
             }
-
-            // Selection highlight
             if (selected) {
-                ctx.strokeStyle = '#00ffff';
-                ctx.shadowColor = '#00ffff';
-                ctx.shadowBlur = 6;
-                ctx.lineWidth = 1;
-                ctx.strokeRect(SCREEN_W / 2 - 320, y - 15, 640, 32);
-                ctx.shadowBlur = 0;
+                ctx.fillStyle = UI.CYAN;
+                ctx.globalAlpha = 0.12;
+                ctx.fillRect(cx - 420, y - 26, 840, 40);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 420, y - 26, 3, 40);
             }
-
-            // Action name
-            ctx.textAlign = 'center';
-            ctx.fillStyle = selected ? '#ffffff' : '#99aabb';
-            ctx.font = selected ? 'bold 15px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(item.label, SCREEN_W / 2 - 200, y);
-
-            // Keyboard binding
-            const isListeningKey = this.mode === 'rebind_key' && selected;
-            ctx.fillStyle = isListeningKey ? '#ffff00' : (selected ? '#00ffff' : '#888888');
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(isListeningKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), SCREEN_W / 2, y);
-
-            // Gamepad binding
-            const isListeningBtn = this.mode === 'rebind_button' && selected;
-            ctx.fillStyle = isListeningBtn ? '#ffff00' : (selected ? '#00ffff' : '#888888');
-            ctx.fillText(isListeningBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), SCREEN_W / 2 + 200, y);
+            Neon.text(ctx, item.label, cx - 260, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
+            const listenKey = this.mode === 'rebind_key' && selected;
+            const listenBtn = this.mode === 'rebind_button' && selected;
+            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), cx, y,
+                listenKey ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenKey ? 0.4 : 0, weight: '' });
+            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), cx + 260, y,
+                listenBtn ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenBtn ? 0.4 : 0, weight: '' });
         }
 
-        // Instructions
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
         if (this.mode === 'rebind_key') {
-            ctx.fillStyle = '#ffff00';
-            ctx.fillText('Press any key to bind, or ESC to cancel', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'Press any key to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
         } else if (this.mode === 'rebind_button') {
-            ctx.fillStyle = '#ffff00';
-            ctx.fillText('Press any gamepad button to bind, or ESC to cancel', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
         } else {
-            ctx.fillText('ENTER/→ = Rebind keyboard    ← = Rebind gamepad (if connected)', SCREEN_W / 2, SCREEN_H - 80);
+            UI.label(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, SCREEN_H - 90, UI.DIM, 15);
         }
-        ctx.fillStyle = '#667788';
-        ctx.fillText('ESC = Back', SCREEN_W / 2, SCREEN_H - 55);
-
-        // Gamepad status
-        ctx.fillStyle = Input.gamepadState ? '#00ff88' : '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', SCREEN_W / 2, SCREEN_H - 30);
+        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, SCREEN_H - 62,
+            Input.gamepadState ? '#00ff88' : UI.DIM, 14);
+        UI.hint(ctx, 'ESC BACK', SCREEN_H - 34);
     }
 };
 
@@ -2882,24 +2800,15 @@ const EndRunBonus = {
     draw(ctx, x, startY) {
         let y = startY;
         for (const b of this.bonuses) {
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.textAlign = 'right';
-            ctx.fillText(b.label, x - 10, y);
-            ctx.textAlign = 'left';
-            ctx.fillStyle = '#00ff88';
-            ctx.fillText('+' + b.value.toLocaleString(), x + 10, y);
-            y += 22;
+            Neon.text(ctx, b.label, x - 16, y, UI.DIM, 17, { align: 'right', halo: 0, weight: '' });
+            Neon.text(ctx, '+' + b.value.toLocaleString(), x + 16, y, '#00ff88', 17, { align: 'left', halo: 0.2 });
+            y += 28;
         }
         if (this.bonuses.length > 0) {
-            y += 5;
-            ctx.textAlign = 'center';
-            ctx.fillStyle = '#ffffff';
-            ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('TOTAL BONUS: +' + this.totalBonus.toLocaleString(), x, y);
+            y += 8;
+            Neon.text(ctx, 'TOTAL BONUS  +' + this.totalBonus.toLocaleString(), x, y, '#ffffff', 19, { halo: 0.2 });
         }
-        ctx.textAlign = 'center';
-        return y + 10;
+        return y + 14;
     }
 };
 
@@ -3007,65 +2916,38 @@ const CustomDifficulty = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        ctx.fillStyle = '#cc44ff';
-        ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#cc44ff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('CUSTOM DIFFICULTY', SCREEN_W / 2, 80);
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('Scores will not be recorded to leaderboards', SCREEN_W / 2, 108);
-
-        const startY = 145;
-        const lineH = 38;
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'CUSTOM DIFFICULTY', 90, '#cc44ff');
+        UI.label(ctx, 'Scores will not be recorded to leaderboards', SCREEN_W / 2, 140, UI.DIM, 15);
+        const cx = SCREEN_W / 2;
+        const top = 200, lineH = 44;
+        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * lineH + 30, '#cc44ff');
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
-            const y = startY + i * lineH;
+            const y = top + i * lineH;
             const selected = i === this.selectedIndex;
-
             if (item.type === 'action') {
-                ctx.textAlign = 'center';
-                ctx.fillStyle = selected ? (item.key === 'start' ? '#00ff88' : '#00ffff') : '#667788';
-                ctx.font = selected ? 'bold 16px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(selected ? '▸ ' + item.label + ' ◂' : item.label, SCREEN_W / 2, y);
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 480, size: 20, color: item.key === 'start' ? '#00ff88' : UI.CYAN });
                 continue;
             }
-
-            ctx.textAlign = 'right';
-            ctx.fillStyle = selected ? '#ffffff' : '#667788';
-            ctx.font = selected ? 'bold 14px Share Tech Mono, Consolas, monospace' : '13px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(item.label, SCREEN_W / 2 - 20, y);
-
-            ctx.textAlign = 'left';
+            if (selected) {
+                ctx.fillStyle = '#cc44ff';
+                ctx.globalAlpha = 0.14;
+                ctx.fillRect(cx - 400, y - 24, 800, 36);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 400, y - 24, 3, 36);
+            }
+            Neon.text(ctx, item.label, cx - 30, y, selected ? '#ffffff' : UI.DIM, selected ? 18 : 17, { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
             const val = item.key === 'startLevel' ? this.startLevel : this._getVal(item);
-
             if (item.type === 'toggle') {
-                ctx.fillStyle = val ? '#00ff88' : '#ff4444';
-                ctx.font = selected ? 'bold 14px Share Tech Mono, Consolas, monospace' : '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(val ? 'ON' : 'OFF', SCREEN_W / 2 + 20, y);
+                Neon.text(ctx, val ? 'ON' : 'OFF', cx + 20, y, val ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: selected ? 0.3 : 0 });
             } else if (item.type === 'cycle') {
                 const idx = item.options.indexOf(val);
-                let display = item.labels ? item.labels[idx] : String(val) + (item.suffix || '');
-                display = display.toUpperCase();
-                ctx.fillStyle = selected ? '#00ffff' : '#888888';
-                ctx.font = selected ? 'bold 14px Share Tech Mono, Consolas, monospace' : '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(selected ? '◂ ' + display + ' ▸' : display, SCREEN_W / 2 + 20, y);
+                const display = (item.labels ? item.labels[idx] : String(val) + (item.suffix || '')).toUpperCase();
+                Neon.text(ctx, selected ? '◂  ' + display + '  ▸' : display, cx + 20, y, selected ? UI.CYAN : UI.TEXT, 17, { align: 'left', halo: selected ? 0.3 : 0 });
             }
         }
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#667788';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ SELECT  ←→ ADJUST  ENTER CONFIRM  ESC BACK', SCREEN_W / 2, SCREEN_H - 40);
+        UI.hint(ctx, '↑↓ SELECT   ←→ ADJUST   ENTER CONFIRM   ESC BACK');
     }
 };
 
@@ -3170,59 +3052,218 @@ const Hangar = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#00ffff'; ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-        ctx.fillText('HANGAR', SCREEN_W / 2, 80); ctx.shadowBlur = 0;
-        ctx.fillStyle = '#ffaa00'; ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('NEON CREDITS: ' + NeonCredits.balance, SCREEN_W / 2, 115);
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'HANGAR', 100);
+        Neon.text(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, 158, '#ffaa00', 20, { halo: 0.3 });
 
-        if (this.mode === 'categories') {
-            const startY = 220;
+        const cx = SCREEN_W / 2;
+        const lx = cx - 600, lw = 540, top = 210, ph = 640;
+        const inItems = this.mode !== 'categories';
+        UI.panel(ctx, lx, top, lw, ph, UI.CYAN, { title: inItems ? this.categories[this.categoryIndex] : 'CATEGORIES' });
+
+        let previewCat, previewItem;
+        if (!inItems) {
+            const keys = ['skins', 'trails', 'bullets', 'explosions'];
+            const equipKeys = ['skin', 'trail', 'bullet', 'explosion'];
             for (let i = 0; i < this.categories.length; i++) {
+                const y = top + 90 + i * 100;
                 const selected = i === this.categoryIndex;
-                ctx.fillStyle = selected ? '#00ffff' : '#667788';
-                ctx.font = selected ? 'bold 22px Share Tech Mono, Consolas, monospace' : '18px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(selected ? '▸ ' + this.categories[i] + ' ◂' : this.categories[i], SCREEN_W / 2, startY + i * 55);
+                UI.item(ctx, this.categories[i], lx + lw / 2, y, selected, { w: lw - 60, size: 26 });
+                if (i < 4) {
+                    const eq = this.catalog[keys[i]].find(it => it.id === this.equipped[equipKeys[i]]);
+                    UI.label(ctx, 'EQUIPPED: ' + (eq ? eq.name.toUpperCase() : '-'), lx + lw / 2, y + 30, selected ? UI.TEXT : UI.DIM, 14);
+                }
+            }
+            if (this.categoryIndex < 4) {
+                previewCat = keys[this.categoryIndex];
+                previewItem = this.catalog[previewCat].find(it => it.id === this.equipped[equipKeys[this.categoryIndex]]);
             }
         } else {
             const items = this.catalog[this._getCatalogKey()];
             const unlockKey = this._getUnlockKey();
             const equipKey = this._getEquipKey();
-            ctx.fillStyle = '#888888'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(this.categories[this.categoryIndex], SCREEN_W / 2, 155);
-            const startY = 200;
             for (let i = 0; i < items.length; i++) {
-                const item = items[i]; const y = startY + i * 60;
+                const item = items[i];
+                const y = top + 80 + i * 108;
                 const selected = i === this.itemIndex;
                 const owned = this.unlocked[unlockKey].includes(item.id);
                 const isEquipped = this.equipped[equipKey] === item.id;
                 if (selected) {
-                    ctx.strokeStyle = item.color; ctx.shadowColor = item.color; ctx.shadowBlur = 8;
-                    ctx.lineWidth = 2; ctx.strokeRect(SCREEN_W / 2 - 220, y - 18, 440, 45); ctx.shadowBlur = 0;
+                    ctx.fillStyle = item.color;
+                    ctx.globalAlpha = 0.12;
+                    ctx.fillRect(lx + 20, y - 36, lw - 40, 84);
+                    ctx.globalAlpha = 1;
+                    ctx.fillRect(lx + 20, y - 36, 3, 84);
                 }
-                ctx.fillStyle = item.color; ctx.shadowColor = item.color; ctx.shadowBlur = 6;
-                ctx.beginPath(); ctx.arc(SCREEN_W / 2 - 180, y + 5, 8, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
-                ctx.textAlign = 'left'; ctx.fillStyle = selected ? '#ffffff' : '#aaaaaa';
-                ctx.font = selected ? 'bold 15px Share Tech Mono, Consolas, monospace' : '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(item.name, SCREEN_W / 2 - 155, y + 3);
-                ctx.textAlign = 'right';
-                if (isEquipped) { ctx.fillStyle = '#00ff88'; ctx.font = 'bold 13px Share Tech Mono, Consolas, monospace'; ctx.fillText('EQUIPPED', SCREEN_W / 2 + 200, y + 3); }
-                else if (owned) {
-                    ctx.fillStyle = '#888888'; ctx.font = '13px Share Tech Mono, Consolas, monospace'; ctx.fillText('OWNED', SCREEN_W / 2 + 200, y - 2);
-                    if (selected) { ctx.fillStyle = '#00ffff'; ctx.font = '13px Share Tech Mono, Consolas, monospace'; ctx.fillText('ENTER TO EQUIP', SCREEN_W / 2 + 200, y + 14); }
-                } else {
-                    ctx.fillStyle = NeonCredits.balance >= item.cost ? '#ffaa00' : '#ff4444';
-                    ctx.font = 'bold 13px Share Tech Mono, Consolas, monospace'; ctx.fillText(item.cost + ' NC', SCREEN_W / 2 + 200, y - 2);
-                    if (selected) { ctx.fillStyle = NeonCredits.balance >= item.cost ? '#00ffff' : '#ff4444'; ctx.font = '13px Share Tech Mono, Consolas, monospace'; ctx.fillText(NeonCredits.balance >= item.cost ? 'ENTER TO BUY' : 'NOT ENOUGH NC', SCREEN_W / 2 + 200, y + 14); }
+                // Swatch
+                ctx.save();
+                ctx.translate(lx + 64, y);
+                ctx.rotate(Math.PI / 4);
+                ctx.fillStyle = item.color;
+                ctx.globalAlpha = owned ? 0.9 : 0.35;
+                ctx.fillRect(-11, -11, 22, 22);
+                ctx.strokeStyle = '#ffffff';
+                ctx.globalAlpha = selected ? 0.9 : 0.3;
+                ctx.lineWidth = 1.5;
+                ctx.strokeRect(-11, -11, 22, 22);
+                ctx.restore();
+                Neon.text(ctx, item.name.toUpperCase(), lx + 100, y + 6, selected ? '#ffffff' : (owned ? UI.TEXT : UI.DIM), selected ? 22 : 20,
+                    { align: 'left', halo: selected ? 0.3 : 0, weight: selected ? 'bold' : '' });
+                let status, statusColor;
+                if (isEquipped) { status = 'EQUIPPED'; statusColor = '#00ff88'; }
+                else if (owned) { status = selected ? 'ENTER TO EQUIP' : 'OWNED'; statusColor = selected ? UI.CYAN : UI.DIM; }
+                else {
+                    const afford = NeonCredits.balance >= item.cost;
+                    status = item.cost + ' NC' + (selected ? (afford ? '  •  ENTER TO BUY' : '  •  NOT ENOUGH NC') : '');
+                    statusColor = afford ? '#ffaa00' : '#ff3355';
+                }
+                UI.label(ctx, status, lx + 100, y + 32, statusColor, 15, 'left');
+            }
+            previewCat = this._getCatalogKey();
+            previewItem = items[this.itemIndex];
+        }
+
+        // Preview
+        const px = cx + 60, pw = 540;
+        UI.panel(ctx, px, top, pw, ph, previewItem ? previewItem.color : UI.DIM, { title: 'PREVIEW', fill: 'rgba(3, 1, 12, 0.85)' });
+        if (previewItem) {
+            ctx.save();
+            ctx.beginPath(); ctx.rect(px + 2, top + 28, pw - 4, ph - 30); ctx.clip();
+            this._drawPreview(ctx, previewCat, previewItem, px + pw / 2, top + 30 + (ph - 30) / 2, pw, ph - 30);
+            ctx.restore();
+            UI.label(ctx, previewItem.name.toUpperCase(), px + pw / 2, top + ph - 24, previewItem.color, 18);
+        }
+        UI.hint(ctx, '↑↓ SELECT   ENTER CONFIRM   ESC BACK');
+    },
+
+    // Animated preview of a cosmetic, centred on (cx, cy)
+    _drawPreview(ctx, cat, item, cx, cy, w, h) {
+        const t = UI.time();
+        // Faint scrolling grid for motion
+        ctx.strokeStyle = 'rgba(255, 43, 214, 0.12)';
+        ctx.lineWidth = 1;
+        const off = (t * 60) % 40;
+        for (let y = cy - h / 2 + off; y < cy + h / 2; y += 40) { ctx.beginPath(); ctx.moveTo(cx - w / 2, y); ctx.lineTo(cx + w / 2, y); ctx.stroke(); }
+        for (let x = cx - w / 2; x < cx + w / 2; x += 40) { ctx.beginPath(); ctx.moveTo(x, cy - h / 2); ctx.lineTo(x, cy + h / 2); ctx.stroke(); }
+
+        const skin = this.equipped.skin === 'chromatic' ? `hsl(${(t * 120) % 360}, 100%, 70%)` : (this.skinColor || '#00ffff');
+        const ship = (x, y, r, color, alpha) => {
+            ctx.save();
+            ctx.globalAlpha = alpha || 1;
+            const f = Math.sin(t * 30) * 2;
+            Neon.flame(ctx, x - r * 0.22, y + r * 0.62, r * 0.12, r * 0.45 + f, this.trailColor, 0.9);
+            Neon.flame(ctx, x + r * 0.22, y + r * 0.62, r * 0.12, r * 0.45 - f, this.trailColor, 0.9);
+            UI.ship(ctx, x, y, r, color);
+            ctx.restore();
+        };
+
+        if (cat === 'skins') {
+            const color = item.id === 'chromatic' ? `hsl(${(t * 120) % 360}, 100%, 70%)` : item.color;
+            ship(cx, cy + Math.sin(t * 2) * 8, 90, color, item.id === 'ghost' ? 0.6 : 1);
+        } else if (cat === 'trails') {
+            const sx = cx + Math.sin(t * 1.5) * 90, sy = cy - 110;
+            const pts = [];
+            for (let i = 0; i < 14; i++) pts.push({ x: cx + Math.sin(t * 1.5 - i * 0.12) * 90, y: sy + 28 + i * 20 });
+            Player.drawTrail(ctx, pts, item.id, item.color, 40, t);
+            ship(sx, sy, 40, skin);
+        } else if (cat === 'bullets') {
+            const sy = cy + h / 2 - 90;
+            ship(cx, sy, 36, skin);
+            const style = item.id;
+            for (let i = 0; i < 14; i++) {
+                const p = ((t * 1.4 + i / 14) % 1);
+                const lane = (i % 3) - 1;
+                const x = cx + lane * 34 * (0.2 + p), y = sy - 40 - p * (h - 150);
+                this._drawBulletShape(ctx, style, x, y, item.color, 4.5, t + i);
+            }
+        } else if (cat === 'explosions') {
+            const period = 1.6;
+            const p = (t % period) / period;
+            this._drawExplosionPreview(ctx, item.id, item.color, cx, cy, p, Math.floor(t / period));
+        }
+    },
+
+    _drawBulletShape(ctx, style, x, y, color, r, t) {
+        ctx.save();
+        ctx.translate(x, y);
+        if (style === 'plasma') {
+            Neon.light(ctx, 0, 0, r * 1.2 * (1 + Math.sin(t * 20) * 0.1), color, 1);
+        } else if (style === 'retro') {
+            ctx.fillStyle = color;
+            ctx.fillRect(-r, -r, r * 2, r * 2);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(-r * 0.4, -r * 0.4, r * 0.8, r * 0.8);
+        } else if (style === 'shards') {
+            ctx.rotate(t * 8);
+            Neon.path(ctx, [0, -2.2, 0.7, 0, 0, 2.2, -0.7, 0], r, true);
+            ctx.fillStyle = color;
+            ctx.fill();
+            Neon.stroke(ctx, color, 0.8, false);
+        } else {
+            ctx.beginPath(); ctx.moveTo(0, -r * 1.2); ctx.lineTo(0, r * 4);
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = color; ctx.lineWidth = r * 1.6; ctx.globalAlpha = 0.6; ctx.stroke();
+            ctx.strokeStyle = '#ffffff'; ctx.lineWidth = r * 0.6; ctx.globalAlpha = 1; ctx.stroke();
+        }
+        ctx.restore();
+    },
+
+    _drawExplosionPreview(ctx, variant, color, cx, cy, p, seed) {
+        const rnd = (i) => { const h = Math.sin(i * 12.9898 + seed * 78.233) * 43758.5453; return h - Math.floor(h); };
+        const ease = 1 - (1 - p) * (1 - p);
+        const fade = 1 - p;
+        const nova = variant === 'supernova';
+        // Flash
+        if (p < 0.15 && !Renderer.calm()) {
+            ctx.globalAlpha = (1 - p / 0.15) * 0.8;
+            Neon.light(ctx, cx, cy, nova ? 60 : 30, '#ffffff', 1);
+        }
+        // Rings
+        ctx.globalAlpha = fade;
+        Neon.ring(ctx, cx, cy, ease * (nova ? 230 : 150), color, 1.4, false);
+        if (nova) Neon.ring(ctx, cx, cy, ease * 140, '#ffffff', 0.8, false);
+        if (variant === 'pixel') {
+            for (let i = 0; i < 40; i++) {
+                const a = rnd(i) * Math.PI * 2, d = ease * (40 + rnd(i + 50) * 140);
+                const sz = 8 * fade + 2;
+                ctx.globalAlpha = fade;
+                ctx.fillStyle = i % 4 ? color : '#ffffff';
+                ctx.fillRect(cx + Math.cos(a) * d - sz / 2, cy + Math.sin(a) * d + p * p * 60 - sz / 2, sz, sz);
+            }
+        } else if (variant === 'shatter') {
+            const pts = Neon.polygon(6, 0);
+            for (let i = 0; i < 6; i++) {
+                for (let k = 0; k < 3; k++) {
+                    const a0 = (i + k / 3) / 6 * Math.PI * 2, a1 = (i + (k + 1) / 3) / 6 * Math.PI * 2;
+                    const mid = (a0 + a1) / 2;
+                    const d = 50 + ease * (120 + rnd(i * 3 + k) * 80);
+                    const spin = p * (rnd(i * 7 + k) - 0.5) * 10;
+                    const half = 50 * Math.sin((a1 - a0) / 2);
+                    const mx = cx + Math.cos(mid) * d, my = cy + Math.sin(mid) * d;
+                    const ang = mid + Math.PI / 2 + spin;
+                    ctx.beginPath();
+                    ctx.moveTo(mx - Math.cos(ang) * half, my - Math.sin(ang) * half);
+                    ctx.lineTo(mx + Math.cos(ang) * half, my + Math.sin(ang) * half);
+                    ctx.globalAlpha = fade;
+                    Neon.stroke(ctx, color, 1.3, false);
                 }
             }
+        } else {
+            const n = nova ? 44 : 28;
+            ctx.lineCap = 'round';
+            for (let i = 0; i < n; i++) {
+                const a = rnd(i) * Math.PI * 2, d = ease * (60 + rnd(i + 99) * (nova ? 220 : 150));
+                const len = 18 * fade + 4;
+                ctx.globalAlpha = fade;
+                ctx.strokeStyle = i % 3 ? color : '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(cx + Math.cos(a) * d, cy + Math.sin(a) * d);
+                ctx.lineTo(cx + Math.cos(a) * (d + len), cy + Math.sin(a) * (d + len));
+                ctx.stroke();
+            }
         }
-        ctx.textAlign = 'center'; ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('↑↓ SELECT  ENTER CONFIRM  ESC BACK', SCREEN_W / 2, SCREEN_H - 40);
+        ctx.globalAlpha = 1;
     }
 };
 
@@ -3251,34 +3292,26 @@ const Tutorial = {
     },
 
     draw(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'HOW TO PLAY', 100);
         const page = this.pages[this.pageIndex];
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#00ffff'; ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-        ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace'; ctx.fillText('HOW TO PLAY', SCREEN_W / 2, 80); ctx.shadowBlur = 0;
-        ctx.fillStyle = '#888888'; ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length, SCREEN_W / 2, 110);
-        ctx.fillStyle = '#ff00ff'; ctx.font = 'bold 24px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#ff00ff'; ctx.shadowBlur = 8;
-        ctx.fillText(page.title, SCREEN_W / 2, 170); ctx.shadowBlur = 0;
-        ctx.textAlign = 'left';
-        let y = 220;
+        const cx = SCREEN_W / 2;
+        UI.panel(ctx, cx - 420, 170, 840, 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
+        Neon.text(ctx, page.title, cx, 250, UI.MAGENTA, 38, { core: 0.4 });
+        let y = 320;
         for (const line of page.lines) {
-            ctx.fillStyle = line.startsWith('  ') ? '#00ffff' : '#cccccc';
-            ctx.font = '15px Share Tech Mono, Consolas, monospace'; ctx.fillText(line, SCREEN_W / 2 - 280, y); y += 24;
+            const indent = line.startsWith('  ');
+            Neon.text(ctx, line.trim(), cx - 340 + (indent ? 40 : 0), y, indent ? UI.CYAN : UI.TEXT, 20, { align: 'left', halo: 0, weight: indent ? 'bold' : '' });
+            y += 36;
         }
-        ctx.textAlign = 'center'; ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
+        for (let i = 0; i < this.pages.length; i++) {
+            UI.pip(ctx, cx + (i - (this.pages.length - 1) / 2) * 30, SCREEN_H - 110, 6, UI.CYAN, i === this.pageIndex);
+        }
         const nav = [];
         if (this.pageIndex > 0) nav.push('← PREV');
-        if (this.pageIndex < this.pages.length - 1) nav.push('NEXT →'); else nav.push('ENTER TO FINISH');
+        nav.push(this.pageIndex < this.pages.length - 1 ? 'NEXT →' : 'ENTER TO FINISH');
         nav.push('ESC BACK');
-        ctx.fillText(nav.join('    '), SCREEN_W / 2, SCREEN_H - 50);
-        for (let i = 0; i < this.pages.length; i++) {
-            ctx.fillStyle = i === this.pageIndex ? '#00ffff' : '#333344';
-            ctx.beginPath(); ctx.arc(SCREEN_W / 2 + (i - (this.pages.length - 1) / 2) * 20, SCREEN_H - 80, 4, 0, Math.PI * 2); ctx.fill();
-        }
+        UI.hint(ctx, nav.join('     '));
     }
 };
 // ============================================================
@@ -3599,6 +3632,274 @@ const Neon = {
 };
 
 
+// === ui-kit.js ===
+// ============================================================
+//  UI KIT — neon building blocks for menus, briefings and the HUD
+//
+//  Everything draws on the 1920×1080 overlay canvas in logical
+//  coordinates. Screens are composed from:
+//    UI.background()  animated neon horizon (menus)
+//    UI.dim()         darkens the screen behind an overlay (pause, results)
+//    UI.title()       big glowing heading
+//    UI.panel()       translucent card with a neon frame and corner brackets
+//    UI.item()        menu entry; the selected one gets a highlight bar
+//    UI.hint()        footer key hints
+// ============================================================
+const UI = {
+    CYAN: '#00ffff',
+    MAGENTA: '#ff2bd6',
+    DIM: '#6f7f99',
+    TEXT: '#c8d2e6',
+
+    time() {
+        return performance.now() / 1000;
+    },
+
+    // --- Backgrounds ---
+
+    _bgCache: null,
+    _bakeBackground() {
+        const c = document.createElement('canvas');
+        c.width = SCREEN_W; c.height = SCREEN_H;
+        const g = c.getContext('2d');
+        const horizon = SCREEN_H * 0.62;
+        const sky = g.createLinearGradient(0, 0, 0, horizon);
+        sky.addColorStop(0, '#03010d');
+        sky.addColorStop(0.6, '#10042e');
+        sky.addColorStop(1, '#3a0a5c');
+        g.fillStyle = sky;
+        g.fillRect(0, 0, SCREEN_W, horizon);
+        const floor = g.createLinearGradient(0, horizon, 0, SCREEN_H);
+        floor.addColorStop(0, '#2a0845');
+        floor.addColorStop(0.25, '#0b0220');
+        floor.addColorStop(1, '#030008');
+        g.fillStyle = floor;
+        g.fillRect(0, horizon, SCREEN_W, SCREEN_H - horizon);
+        // Stars (seeded so they stay put)
+        let seed = 7;
+        const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+        for (let i = 0; i < 260; i++) {
+            const y = rnd() * horizon * 0.9;
+            g.fillStyle = `rgba(255,255,255,${(0.2 + rnd() * 0.6) * (1 - y / horizon)})`;
+            g.fillRect(rnd() * SCREEN_W, y, rnd() < 0.15 ? 2 : 1, rnd() < 0.15 ? 2 : 1);
+        }
+        // Striped sun with halo
+        const cx = SCREEN_W / 2, sy = horizon - 30, R = 150;
+        const halo = g.createRadialGradient(cx, sy, R * 0.5, cx, sy, R * 3);
+        halo.addColorStop(0, 'rgba(255,40,170,0.35)');
+        halo.addColorStop(1, 'rgba(255,40,170,0)');
+        g.fillStyle = halo;
+        g.fillRect(cx - R * 3, sy - R * 3, R * 6, R * 3 + 30);
+        g.save();
+        g.beginPath(); g.arc(cx, sy, R, Math.PI, 0); g.lineTo(cx + R, horizon); g.lineTo(cx - R, horizon); g.closePath(); g.clip();
+        const sun = g.createLinearGradient(0, sy - R, 0, horizon);
+        sun.addColorStop(0, '#ffd23a'); sun.addColorStop(0.55, '#ff3d8b'); sun.addColorStop(1, '#b400ff');
+        g.fillStyle = sun;
+        g.fillRect(cx - R, sy - R, R * 2, R + 30);
+        let yy = sy - R * 0.15, h = 3;
+        g.fillStyle = '#2a0845';
+        while (yy < horizon) { g.fillRect(cx - R, yy, R * 2, h); yy += h * 2.4; h += 1.3; }
+        g.restore();
+        // Wireframe mountains either side of the sun
+        g.strokeStyle = 'rgba(255,43,214,0.9)';
+        g.fillStyle = '#07011a';
+        g.lineWidth = 2;
+        for (const side of [-1, 1]) {
+            g.beginPath();
+            g.moveTo(cx + side * 220, horizon);
+            let x = cx + side * 220;
+            let k = 0;
+            while (Math.abs(x - cx) < SCREEN_W / 2 + 40) {
+                x += side * (40 + rnd() * 70);
+                const peak = 30 + rnd() * 140 * Math.min(1, Math.abs(x - cx) / 500);
+                g.lineTo(x, horizon - (k++ % 2 ? peak : peak * 0.35));
+            }
+            g.lineTo(x, horizon);
+            g.closePath();
+            g.fill();
+            g.stroke();
+        }
+        return c;
+    },
+
+    // Animated neon horizon: cached sky, sun and mountains, plus a perspective
+    // grid scrolling toward the viewer. opts.dim darkens it for busy screens.
+    background(ctx, opts) {
+        const o = opts || {};
+        if (!this._bgCache) this._bgCache = this._bakeBackground();
+        ctx.drawImage(this._bgCache, 0, 0);
+        const horizon = SCREEN_H * 0.62;
+        const cx = SCREEN_W / 2;
+        const t = this.time();
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        // Receding horizontal lines
+        const scroll = (t * 0.6) % 1;
+        for (let i = 0; i < 18; i++) {
+            const z = (i + 1 - scroll);
+            const y = horizon + (SCREEN_H - horizon) * (1 / z) * 0.9 - 0;
+            if (y <= horizon + 2 || y > SCREEN_H) continue;
+            const k = (y - horizon) / (SCREEN_H - horizon);
+            ctx.strokeStyle = `rgba(255,43,214,${0.15 + k * 0.6})`;
+            ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(SCREEN_W, y); ctx.stroke();
+        }
+        // Converging lines
+        for (let i = -24; i <= 24; i++) {
+            ctx.strokeStyle = i % 4 === 0 ? 'rgba(0,229,255,0.45)' : 'rgba(255,43,214,0.35)';
+            ctx.beginPath();
+            ctx.moveTo(cx + i * 30, horizon);
+            ctx.lineTo(cx + i * 260, SCREEN_H);
+            ctx.stroke();
+        }
+        // Horizon glow line
+        ctx.strokeStyle = 'rgba(255,120,220,0.9)';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, horizon); ctx.lineTo(SCREEN_W, horizon); ctx.stroke();
+        ctx.restore();
+        if (o.dim) this.dim(ctx, o.dim);
+    },
+
+    dim(ctx, alpha) {
+        ctx.fillStyle = `rgba(4, 1, 14, ${alpha})`;
+        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+    },
+
+    // --- Text ---
+
+    title(ctx, text, y, color, size) {
+        const c = color || this.CYAN;
+        Neon.text(ctx, text, SCREEN_W / 2, y, c, size || 52, { core: 0.45, halo: 0.5 });
+        // Underline flourish
+        const w = Math.min(520, text.length * (size || 52) * 0.4);
+        ctx.fillStyle = c;
+        ctx.globalAlpha = 0.6;
+        ctx.fillRect(SCREEN_W / 2 - w / 2, y + 16, w, 2);
+        ctx.globalAlpha = 1;
+    },
+
+    hint(ctx, text, y) {
+        Neon.text(ctx, text, SCREEN_W / 2, y || SCREEN_H - 40, this.DIM, 15, { weight: '', halo: 0 });
+    },
+
+    label(ctx, text, x, y, color, size, align) {
+        Neon.text(ctx, text, x, y, color || this.DIM, size || 14, { weight: '', halo: 0, align: align || 'center' });
+    },
+
+    // --- Containers ---
+
+    panel(ctx, x, y, w, h, color, opts) {
+        const o = opts || {};
+        const c = color || this.CYAN;
+        ctx.save();
+        ctx.fillStyle = o.fill || 'rgba(8, 3, 24, 0.72)';
+        ctx.fillRect(x, y, w, h);
+        ctx.strokeStyle = c;
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 0.5, y + 0.5, w - 1, h - 1);
+        // Corner brackets
+        ctx.globalAlpha = 0.95;
+        ctx.lineWidth = 2;
+        const L = Math.min(18, w / 4, h / 4);
+        ctx.beginPath();
+        ctx.moveTo(x, y + L); ctx.lineTo(x, y); ctx.lineTo(x + L, y);
+        ctx.moveTo(x + w - L, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y + L);
+        ctx.moveTo(x + w, y + h - L); ctx.lineTo(x + w, y + h); ctx.lineTo(x + w - L, y + h);
+        ctx.moveTo(x + L, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - L);
+        ctx.stroke();
+        ctx.restore();
+        if (o.title) {
+            ctx.fillStyle = c;
+            ctx.globalAlpha = 0.18;
+            ctx.fillRect(x, y, w, 26);
+            ctx.globalAlpha = 1;
+            Neon.text(ctx, o.title, x + 14, y + 18, c, 13, { align: 'left', halo: 0.2 });
+        }
+    },
+
+    // Menu entry centred on cx. Selected entries get a glowing bar and chevrons.
+    // opts: { w, color, desc, disabled, size, right (text on the right) }
+    item(ctx, label, cx, y, selected, opts) {
+        const o = opts || {};
+        const w = o.w || 420;
+        const color = o.color || this.CYAN;
+        const size = o.size || 24;
+        if (selected) {
+            const pulse = Renderer.calm() ? 0.25 : 0.2 + Math.sin(this.time() * 4) * 0.06;
+            const g = ctx.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
+            g.addColorStop(0, 'rgba(0,0,0,0)');
+            g.addColorStop(0.5, color);
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.globalAlpha = pulse;
+            ctx.fillRect(cx - w / 2, y - size * 0.95, w, size * 1.35);
+            ctx.globalAlpha = 0.9;
+            ctx.fillRect(cx - w / 2, y + size * 0.4, w, 1.5);
+            ctx.globalAlpha = 1;
+            const ax = w / 2 - 16;
+            for (const s of [-1, 1]) {
+                ctx.fillStyle = color;
+                ctx.beginPath();
+                ctx.moveTo(cx + s * ax, y - size * 0.3);
+                ctx.lineTo(cx + s * (ax - 10), y - size * 0.3 - 8);
+                ctx.lineTo(cx + s * (ax - 10), y - size * 0.3 + 8);
+                ctx.fill();
+            }
+        }
+        const textColor = o.disabled ? '#3a4458' : (selected ? '#ffffff' : color);
+        ctx.globalAlpha = selected || o.disabled ? 1 : 0.65;
+        Neon.text(ctx, label, cx, y, selected ? color : textColor, selected ? size + 2 : size, {
+            halo: selected ? 0.45 : 0, core: selected ? 0.55 : 0, weight: selected ? 'bold' : '',
+        });
+        ctx.globalAlpha = 1;
+        if (o.desc) {
+            Neon.text(ctx, o.desc, cx, y + size * 0.95, selected ? this.TEXT : this.DIM, 14, { weight: '', halo: 0 });
+        }
+    },
+
+    // Horizontal row of tabs; returns nothing. colors[] optional per tab.
+    tabs(ctx, labels, selectedIndex, cx, y, colors) {
+        const tw = 170;
+        const x0 = cx - (labels.length * tw) / 2;
+        for (let i = 0; i < labels.length; i++) {
+            const x = x0 + i * tw + tw / 2;
+            const sel = i === selectedIndex;
+            const c = (colors && colors[i]) || this.CYAN;
+            if (sel) {
+                ctx.fillStyle = c;
+                ctx.globalAlpha = 0.16;
+                ctx.fillRect(x - tw / 2 + 6, y - 22, tw - 12, 32);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(x - tw / 2 + 6, y + 10, tw - 12, 2);
+            }
+            Neon.text(ctx, labels[i], x, y, sel ? c : this.DIM, sel ? 17 : 15, { halo: sel ? 0.35 : 0, weight: sel ? 'bold' : '' });
+        }
+    },
+
+    // --- Icons ---
+
+    // The player's ship in neon at any size (drawn live, so it stays crisp)
+    ship(ctx, x, y, r, color) {
+        ctx.save();
+        ctx.translate(x, y);
+        Player._bakeShipNeon(ctx, color || Hangar.skinColor || this.CYAN, r, false);
+        ctx.restore();
+    },
+
+    // Diamond pip, filled when on
+    pip(ctx, x, y, s, color, on) {
+        ctx.beginPath();
+        ctx.moveTo(x, y - s); ctx.lineTo(x + s, y); ctx.lineTo(x, y + s); ctx.lineTo(x - s, y); ctx.closePath();
+        if (on) { ctx.fillStyle = color; ctx.fill(); }
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = on ? 1 : 0.4;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+    },
+};
+
+
 // === particles.js ===
 // ============================================================
 //  PARTICLE SYSTEM
@@ -3634,6 +3935,7 @@ const Particles = {
                 color: opts.color || '#00ffff',
                 decay: opts.decay || 1,
                 streak: !!opts.streak,
+                pixel: !!opts.pixel,
                 drag: opts.drag !== undefined ? opts.drag : 0.5,
                 gravity: opts.gravity || 0,
                 _pp: null,
@@ -3646,7 +3948,7 @@ const Particles = {
         p._hex = Renderer.colorToHex(p.color);
         if (Renderer.usePixi && Renderer.particleLayer && Renderer.fx) {
             p._pp = new PIXI.Particle({
-                texture: p.streak ? Renderer.fx.spark : Renderer.fx.glow,
+                texture: p.streak ? Renderer.fx.spark : (p.pixel ? Renderer.fx.pixel : Renderer.fx.glow),
                 x: p.x, y: p.y,
                 anchorX: 0.5, anchorY: 0.5,
                 tint: p._hex,
@@ -3683,22 +3985,32 @@ const Particles = {
             mega:   { shock: 160, core: 36, coreSpd: 370, coreLife: 1.0, coreSize: 5,   spark: 48, sparkSpd: 520, sparkLife: 0.7,  ember: 16, fScale: 5.5, fDur: 0.65 },
         };
         const s = styles[style] || styles.medium;
-        this.flash(x, y, s.shock * 0.7, '#ffffff', 0.1);
-        this.spawnShockwave(x, y, color, s.shock, 0.4);
-        if (style !== 'small') this.spawnShockwave(x, y, color2, s.shock * 0.6, 0.25);
-        this.spawn(x, y, s.spark, { color, speed: s.sparkSpd, life: s.sparkLife, size: 1.6, streak: true, drag: 0.15 });
-        this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd, life: s.coreLife * 0.5, size: s.coreSize * 0.7 });
-        this.spawn(x, y, s.ember, { color, speed: 40, life: 1.4, size: 1.6, drag: 0.3, gravity: -25 });
+        // Hangar explosion styles (opts.variant): burst (default), shatter, pixel, supernova
+        const v = opts.variant || 'burst';
+        const nova = v === 'supernova';
+        this.flash(x, y, s.shock * (nova ? 1.2 : 0.7), '#ffffff', nova ? 0.16 : 0.1);
+        this.spawnShockwave(x, y, color, s.shock * (nova ? 1.5 : 1), nova ? 0.55 : 0.4);
+        if (style !== 'small' || nova) this.spawnShockwave(x, y, color2, s.shock * 0.6, 0.25);
+        if (v === 'pixel') {
+            // Pixel Dissolve: the burst breaks into squares that drift down and fade
+            this.spawn(x, y, s.spark + s.core, { color, speed: s.coreSpd * 0.6, life: 0.9, size: 3, pixel: true, drag: 1.5, gravity: 40 });
+            this.spawn(x, y, s.core, { color: color2, speed: s.coreSpd * 0.4, life: 0.6, size: 2, pixel: true, drag: 1.5 });
+        } else {
+            const sparkK = v === 'shatter' ? 0.5 : (nova ? 1.6 : 1);
+            this.spawn(x, y, s.spark * sparkK, { color, speed: s.sparkSpd * (nova ? 1.3 : 1), life: s.sparkLife, size: 1.6, streak: true, drag: 0.15 });
+            this.spawn(x, y, s.core,  { color: color2, speed: s.coreSpd, life: s.coreLife * 0.5, size: s.coreSize * 0.7 });
+            if (v !== 'shatter') this.spawn(x, y, s.ember, { color, speed: 40, life: 1.4, size: 1.6, drag: 0.3, gravity: -25 });
+        }
         Renderer.addGlow(x, y, Renderer.colorToHex(color2), s.shock * 0.9, 0.95);
         Renderer.spawnExplosionSprite(x, y, s.fScale, Renderer.colorToHex(color), s.fDur);
     },
 
     // Break a neon outline into spinning line segments.
     // pts: flat closed outline [x0, y0, ...] in units of `scale`, rotated by `rot`.
-    shatter(x, y, pts, scale, rot, color, speed) {
+    shatter(x, y, pts, scale, rot, color, speed, cuts) {
         const n = pts.length / 2;
         const cos = Math.cos(rot || 0), sin = Math.sin(rot || 0);
-        const pieces = Math.round(this._density() * 2) || 1;   // cuts per edge
+        const pieces = Math.max(1, Math.round(this._density() * (cuts || 2)));   // cuts per edge
         const sp = speed || 1;
         for (let i = 0; i < n && this.shards.length < this.maxShards; i++) {
             const j = (i + 1) % n;
@@ -3746,6 +4058,9 @@ const Particles = {
             pp.rotation = Math.atan2(p.vy, p.vx) + Math.PI / 2;
             pp.scaleX = p.size * 0.45;
             pp.scaleY = (3 + speed * 0.045) * (0.4 + t * 0.6) / 32;
+            pp.alpha = t;
+        } else if (p.pixel) {
+            pp.scaleX = pp.scaleY = p.size * 0.5 * (0.5 + t * 0.5);
             pp.alpha = t;
         } else if (p.flash) {
             const s = (p.size * 2 * (0.6 + t * 0.4)) / 32;
@@ -3814,6 +4129,13 @@ const Particles = {
                 const t = p.life / p.maxLife;
                 const currentSize = p.size * (0.3 + t * 0.7);
 
+                if (p.pixel) {
+                    const sz = p.size * 1.5 * (0.5 + t * 0.5);
+                    ctx.globalAlpha = t;
+                    ctx.fillStyle = p.color;
+                    ctx.fillRect(p.x - sz / 2, p.y - sz / 2, sz, sz);
+                    continue;
+                }
                 if (p.streak) {
                     const len = 3 + Math.sqrt(p.vx * p.vx + p.vy * p.vy) * 0.03;
                     const a = Math.atan2(p.vy, p.vx);
@@ -4043,10 +4365,13 @@ class BulletPool {
             b._ps = new PIXI.Particle({ texture: fx.shadow, x: b.x, y: b.y, anchorX: 0.5, anchorY: 0.5, tint: 0xffffff, alpha: 1 });
             Renderer.bulletShadowLayer.addParticle(b._ps);
         } else {
-            b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : 'streak');
-            // Laser shots are long soft glows that overlap into one continuous beam
-            body = b._shape === 'missile' ? fx.missile : (b._shape === 'beam' ? fx.glow : fx.streak);
-            core = b._shape === 'missile' || b._shape === 'beam' ? fx.core : fx.streak;
+            // Regular shots take the Hangar bullet style; missiles and laser keep their own
+            const style = { plasma: 'plasma', retro: 'pixel', shards: 'shard' }[Hangar.equipped.bullet] || 'streak';
+            b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : style);
+            const bodies = { missile: fx.missile, beam: fx.glow, plasma: fx.orb, pixel: fx.pixel, shard: fx.needle, streak: fx.streak };
+            const cores = { missile: fx.core, beam: fx.core, plasma: fx.core, pixel: fx.pixel, shard: fx.core, streak: fx.streak };
+            body = bodies[b._shape];
+            core = cores[b._shape];
             ay = b._shape === 'streak' ? 0.18 : 0.5;   // streak head sits on the bullet
         }
         b._p = new PIXI.Particle({ texture: body, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: b._hex, alpha: 0.9 });
@@ -4095,6 +4420,19 @@ class BulletPool {
             p.scaleX = p.scaleY = r * 0.5;
             pc.scaleX = pc.scaleY = r * 0.12;
             pc.x = b.x - b.vx * 0.012; pc.y = b.y - b.vy * 0.012;   // hot exhaust at the tail
+        } else if (b._shape === 'plasma') {
+            const k = 1 + Math.sin(b.age * 30) * 0.12;
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.17 * k;
+            pc.scaleX = pc.scaleY = r * 0.1;
+        } else if (b._shape === 'pixel') {
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.36;
+            pc.scaleX = pc.scaleY = r * 0.14;
+        } else if (b._shape === 'shard') {
+            p.rotation = pc.rotation = b.age * 14;
+            p.scaleX = r * 0.32; p.scaleY = r * 0.1;
+            pc.scaleX = pc.scaleY = r * 0.06;
         } else if (b._shape === 'beam') {
             p.scaleX = r * 0.075; p.scaleY = 2.4;
             pc.scaleX = r * 0.05; pc.scaleY = 11;
@@ -4923,16 +5261,22 @@ const Enemies = {
         const accent = enemy.accent || explColor;
 
         // Layered explosion: use spawnExplosion for the main burst
+        const variant = Hangar.equipped.explosion;
         Particles.spawnExplosion(enemy.x, enemy.y, {
             style: isBig ? 'large' : 'medium',
             color: explColor,
             color2: '#ffffff',
+            variant,
         });
         // Extra accent-coloured sparks for visual variety
         Particles.spawn(enemy.x, enemy.y, isBig ? 12 : 6, { color: accent, speed: 180, life: 0.7, size: 3 });
         // The ship's neon outline breaks apart
         const outline = MidBoss.isType(enemy.type) ? MidBoss.outline(enemy) : this.outline(enemy);
-        if (outline) Particles.shatter(enemy.x, enemy.y, outline.pts, outline.scale, enemy.rotation || 0, enemy.color, isBig ? 1.3 : 1);
+        if (outline) {
+            const heavy = variant === 'shatter';   // the Shatter style throws more, faster pieces
+            Particles.shatter(enemy.x, enemy.y, outline.pts, outline.scale, enemy.rotation || 0, enemy.color,
+                (isBig ? 1.3 : 1) * (heavy ? 1.7 : 1), heavy ? 3 : 2);
+        }
         if (isBig) ScreenShake.trigger(6, 0.25);
 
         // Bullet cancel
@@ -8785,6 +9129,66 @@ const Player = {
     _neonBank: 0,
     _neonLastX: null,
 
+    // Draw an engine trail along pts (ship first). Styles match the Hangar
+    // trails: thrust ribbon, flickering flame, particle scatter, lightning
+    // arc and void (dark core, glowing edges). Also used by the Hangar preview.
+    drawTrail(ctx, pts, style, color, r, t) {
+        const n = pts.length;
+        const calm = Renderer.calm();
+        const ribbon = (fill, widthK, alpha, jitter) => {
+            ctx.fillStyle = fill;
+            for (let i = 0; i < n - 1; i++) {
+                const p0 = pts[i], p1 = pts[i + 1];
+                const j0 = jitter ? 1 + Math.sin(t * 40 + i * 1.7) * jitter : 1;
+                const j1 = jitter ? 1 + Math.sin(t * 40 + (i + 1) * 1.7) * jitter : 1;
+                const w0 = r * widthK * (1 - i / n) * j0, w1 = r * widthK * (1 - (i + 1) / n) * j1;
+                ctx.globalAlpha = (1 - i / n) * alpha;
+                ctx.beginPath();
+                ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
+                ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
+                ctx.fill();
+            }
+            ctx.globalAlpha = 1;
+        };
+        switch (style) {
+            case 'flame':
+                ribbon(color, 0.6, 0.45, calm ? 0 : 0.25);
+                ribbon('#ffcc33', 0.3, 0.6, calm ? 0 : 0.3);
+                ribbon('#ffffff', 0.1, 0.6, 0);
+                break;
+            case 'scatter':
+                for (let i = 1; i < n; i++) {
+                    const k = 1 - i / n;
+                    for (let j = 0; j < 2; j++) {
+                        const h = Math.sin(i * 12.9 + j * 78.2 + Math.floor(t * 12)) * 43758.5;
+                        const off = (h - Math.floor(h) - 0.5) * r * 1.2 * (1 - k);
+                        Neon.light(ctx, pts[i].x + off, pts[i].y, 1.2 + k * 1.2, color, k);
+                    }
+                }
+                break;
+            case 'lightning': {
+                ctx.beginPath();
+                ctx.moveTo(pts[0].x, pts[0].y);
+                for (let i = 1; i < n; i++) {
+                    const h = Math.sin(i * 91.3 + (calm ? 0 : Math.floor(t * 20)) * 7.1) * 43758.5;
+                    ctx.lineTo(pts[i].x + (h - Math.floor(h) - 0.5) * r * 1.1, pts[i].y);
+                }
+                ctx.globalAlpha = 0.9;
+                Neon.stroke(ctx, color, 1.1, false);
+                ctx.globalAlpha = 1;
+                ribbon(color, 0.25, 0.25, 0);
+                break;
+            }
+            case 'void':
+                ribbon('#aa33ff', 0.62, 0.5, 0);
+                ribbon('#05000c', 0.48, 0.95, 0);
+                break;
+            default: // thrust
+                ribbon(color, 0.5, 0.35, 0);
+                ribbon('#ffffff', 0.14, 0.5, 0);
+        }
+    },
+
     _HEX: Neon.polygon(6, Math.PI / 6),
     _DRONE: [0, -1, 0.7, 0, 0, 1, -0.7, 0],
     _bakeDrone(c) {
@@ -8879,27 +9283,13 @@ const Player = {
 
         const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
 
-        // Engine trail: a tapering ribbon from the engines that streams down
-        // behind the ship (the world scrolls past) and bends as it moves
+        // Engine trail streams down behind the ship (the world scrolls past)
+        // and bends as it moves; its look comes from the equipped trail
         const trail = this.trailPositions;
-        const trailColor = this.dashing ? '#ffffff' : Hangar.trailColor;
         if (trail.length > 1) {
-            const n = trail.length;
-            const pt = (i) => ({ x: trail[i].x, y: trail[i].y + this.radius * 0.7 + i * 7 });
-            for (let pass = 0; pass < 2; pass++) {
-                ctx.fillStyle = pass === 0 ? trailColor : '#ffffff';
-                for (let i = 0; i < n - 1; i++) {
-                    const p0 = pt(i), p1 = pt(i + 1);
-                    const w0 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - i / n);
-                    const w1 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - (i + 1) / n);
-                    ctx.globalAlpha = (1 - i / n) * (pass === 0 ? 0.35 : 0.5);
-                    ctx.beginPath();
-                    ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
-                    ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
-                    ctx.fill();
-                }
-            }
-            ctx.globalAlpha = 1;
+            const pts = trail.map((p, i) => ({ x: p.x, y: p.y + this.radius * 0.7 + i * 7 }));
+            this.drawTrail(ctx, pts, this.dashing ? 'thrust' : Hangar.equipped.trail,
+                this.dashing ? '#ffffff' : Hangar.trailColor, this.radius, this.engineFlicker / 20);
         }
 
         // Drones: small spinning neon diamonds with a hot core
@@ -9968,354 +10358,192 @@ const Background = {
 // === hud.js ===
 // ============================================================
 //  HUD RENDERER
+//  Two side panels either side of the play area, built from UI kit cards:
+//    left:  pilot (lives, bombs, shield), armament (weapon, drones), Surge, dash
+//    right: score, chain, run stats, mission (level, time, escort), controls
 // ============================================================
 const HUD = {
+    _bgCache: null,
+
+    // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
+    _bakeBackground() {
+        const c = document.createElement('canvas');
+        c.width = SCREEN_W; c.height = SCREEN_H;
+        const g = c.getContext('2d');
+        const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
+        grad.addColorStop(0, '#07020f');
+        grad.addColorStop(1, '#10031f');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, HUD_LEFT_W, SCREEN_H);
+        g.fillRect(HUD_RIGHT_X, 0, HUD_RIGHT_W, SCREEN_H);
+        g.fillStyle = 'rgba(255, 43, 214, 0.035)';
+        for (let y = 0; y < SCREEN_H; y += 4) {
+            g.fillRect(0, y, HUD_LEFT_W, 1);
+            g.fillRect(HUD_RIGHT_X, y, HUD_RIGHT_W, 1);
+        }
+        // Glowing frame around the play area
+        for (const [x, dir] of [[PLAY_X, -1], [PLAY_X + PLAY_W, 1]]) {
+            const glow = g.createLinearGradient(x, 0, x + dir * 40, 0);
+            glow.addColorStop(0, 'rgba(255, 43, 214, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 43, 214, 0)');
+            g.fillStyle = glow;
+            g.fillRect(dir < 0 ? x - 40 : x, 0, 40, SCREEN_H);
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(x - 1, 0, 2, SCREEN_H);
+        }
+        return c;
+    },
+
     draw(ctx) {
-        // HUD backgrounds
-        ctx.fillStyle = '#0a0612';
-        ctx.fillRect(0, 0, HUD_LEFT_W, SCREEN_H);
-        ctx.fillRect(HUD_RIGHT_X, 0, HUD_RIGHT_W, SCREEN_H);
+        if (!this._bgCache) this._bgCache = this._bakeBackground();
+        // Only the side panels: the middle of the overlay stays clear for the play area
+        ctx.drawImage(this._bgCache, 0, 0, HUD_LEFT_W + 2, SCREEN_H, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
+        ctx.drawImage(this._bgCache, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        this._drawLeft(ctx);
+        this._drawRight(ctx);
+        this._drawDanger(ctx);
+    },
 
-        // Border lines
-        ctx.strokeStyle = '#ff00ff';
-        ctx.lineWidth = 2;
-        ctx.shadowColor = '#ff00ff';
-        ctx.shadowBlur = 0;
-        ctx.beginPath();
-        ctx.moveTo(PLAY_X - 1, 0);
-        ctx.lineTo(PLAY_X - 1, SCREEN_H);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(PLAY_X + PLAY_W + 1, 0);
-        ctx.lineTo(PLAY_X + PLAY_W + 1, SCREEN_H);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+    _drawLeft(ctx) {
+        const x = 60, w = HUD_LEFT_W - 120, cx = x + w / 2;
+        const t = UI.time();
+        Neon.text(ctx, 'NEON STORM', cx, 70, UI.CYAN, 34, { core: 0.4, halo: 0.45 });
 
-        // Subtle grid on HUD panels
-        ctx.strokeStyle = 'rgba(255, 0, 255, 0.05)';
-        ctx.lineWidth = 1;
-        for (let y = 0; y < SCREEN_H; y += 30) {
-            ctx.beginPath();
-            ctx.moveTo(0, y); ctx.lineTo(HUD_LEFT_W, y); ctx.stroke();
-            ctx.beginPath();
-            ctx.moveTo(HUD_RIGHT_X, y); ctx.lineTo(SCREEN_W, y); ctx.stroke();
-        }
-
-        const leftCenter = HUD_LEFT_W / 2;
-        const rightCenter = HUD_RIGHT_X + HUD_RIGHT_W / 2;
-        let leftY = 60;
-        let rightY = 60;
-
-        // === LEFT HUD ===
-
-        // Title
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 0;
-        ctx.fillText('NEON STORM \u03b2', leftCenter, leftY);
-        ctx.shadowBlur = 0;
-        leftY += 50;
-
-        // Lives
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('LIVES', leftCenter, leftY);
-        leftY += 20;
-        for (let i = 0; i < Player.lives; i++) {
-            const lx = leftCenter - (Player.lives - 1) * 12 + i * 24;
-            ctx.fillStyle = '#00ffff';
-            ctx.shadowColor = '#00ffff';
-            ctx.shadowBlur = 0;
-            ctx.beginPath();
-            ctx.moveTo(lx, leftY - 6);
-            ctx.lineTo(lx + 6, leftY + 3);
-            ctx.lineTo(lx, leftY + 8);
-            ctx.lineTo(lx - 6, leftY + 3);
-            ctx.closePath();
-            ctx.fill();
-        }
-        ctx.shadowBlur = 0;
-        leftY += 30;
-
-        // Shield HP
-        if (Player.maxShieldHp > 0) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('SHIELD', leftCenter, leftY);
-            leftY += 14;
-            const shieldBarW = 120;
-            const shieldBarH = 10;
-            const shieldBarX = leftCenter - shieldBarW / 2;
-            ctx.fillStyle = '#1a1a3e';
-            ctx.fillRect(shieldBarX, leftY, shieldBarW, shieldBarH);
-            const shieldPct = Player.maxShieldHp > 0 ? Player.shieldHp / Player.maxShieldHp : 0;
-            ctx.fillStyle = Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
-            ctx.shadowColor = '#4488ff';
-            ctx.shadowBlur = 0;
-            ctx.fillRect(shieldBarX, leftY, shieldBarW * shieldPct, shieldBarH);
-            ctx.shadowBlur = 0;
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Player.shieldHp + '/' + Player.maxShieldHp, leftCenter, leftY + shieldBarH + 12);
-            leftY += 35;
-        }
-
-        // Bombs
+        // Pilot: lives, bombs, shield
+        let y = 110;
+        const pilotH = 150 + (Player.maxShieldHp > 0 ? 44 : 0);
+        UI.panel(ctx, x, y, w, pilotH, UI.CYAN, { title: 'PILOT' });
+        UI.label(ctx, 'LIVES', x + 20, y + 62, UI.DIM, 14, 'left');
+        const lives = Math.min(Player.lives, 8);
+        for (let i = 0; i < lives; i++) UI.ship(ctx, x + 140 + i * 38, y + 54, 13);
+        if (Player.lives > 8) UI.label(ctx, '+' + (Player.lives - 8), x + 140 + 8 * 38, y + 60, UI.CYAN, 16, 'left');
         if (GameConfig.bombs.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('BOMBS', leftCenter, leftY);
-            leftY += 20;
+            UI.label(ctx, 'BOMBS', x + 20, y + 112, UI.DIM, 14, 'left');
             for (let i = 0; i < Player.bombs; i++) {
-                const bx = leftCenter - (Player.bombs - 1) * 10 + i * 20;
-                ctx.fillStyle = '#ff8800';
-                ctx.shadowColor = '#ff8800';
-                ctx.shadowBlur = 0;
-                ctx.beginPath();
-                ctx.arc(bx, leftY, 6, 0, Math.PI * 2);
-                ctx.fill();
+                const bx = x + 150 + i * 34, by = y + 106;
+                ctx.save(); ctx.translate(bx, by);
+                Neon.path(ctx, Neon.polygon(6, Math.PI / 6), 10, true);
+                ctx.fillStyle = '#ff8800'; ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1;
+                Neon.stroke(ctx, '#ff8800', 0.9, false);
+                ctx.restore();
+                Neon.light(ctx, bx, by, 2.5, '#ffcc66', 1);
             }
-            ctx.shadowBlur = 0;
-            leftY += 30;
         }
-
-        // Weapon
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('WEAPON', leftCenter, leftY);
-        leftY += 18;
-        const weaponColors = { none: '#666666', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
-        const weaponNames = { none: 'BASE', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
-        ctx.fillStyle = weaponColors[Player.primaryWeapon];
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(weaponNames[Player.primaryWeapon], leftCenter, leftY);
-        if (Player.primaryLevel > 0) {
-            leftY += 16;
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '13px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('LV ' + '█'.repeat(Player.primaryLevel) + '░'.repeat(5 - Player.primaryLevel), leftCenter, leftY);
+        if (Player.maxShieldHp > 0) {
+            UI.label(ctx, 'SHIELD', x + 20, y + 160, UI.DIM, 14, 'left');
+            Neon.bar(ctx, x + 140, y + 148, w - 220, 14, Player.shieldHp / Player.maxShieldHp,
+                Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff', Player.maxShieldHp);
+            UI.label(ctx, Player.shieldHp + '/' + Player.maxShieldHp, x + w - 20, y + 160, UI.TEXT, 15, 'right');
         }
-        leftY += 30;
+        y += pilotH + 24;
 
-        // Drones
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('DRONES', leftCenter, leftY);
-        leftY += 18;
-        ctx.fillStyle = Player.droneLevel > 0 ? '#cc44ff' : '#333333';
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Player.droneLevel > 0 ? 'LV ' + '█'.repeat(Player.droneLevel) + '░'.repeat(5 - Player.droneLevel) : 'NONE', leftCenter, leftY);
-        leftY += 35;
+        // Armament: weapon with its power-up badge, level pips, drones
+        const weaponColors = { none: '#8899aa', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
+        const weaponNames = { none: 'BASE SHOT', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
+        const wc = weaponColors[Player.primaryWeapon] || '#8899aa';
+        UI.panel(ctx, x, y, w, 190, wc, { title: 'ARMAMENT' });
+        if (Player.primaryWeapon !== 'none') {
+            ctx.save(); ctx.translate(x + 60, y + 88); ctx.scale(2.2, 2.2);
+            ctx.save(); ctx.rotate(t * 0.3);
+            Neon.sprite(ctx, 'pu_badge|' + wc, 15, PowerUps._bakeBadge, wc, 10);
+            ctx.restore();
+            Neon.sprite(ctx, 'pu_icon|' + Player.primaryWeapon, 14, PowerUps._bakeIcon, Player.primaryWeapon, wc);
+            ctx.restore();
+        }
+        Neon.text(ctx, weaponNames[Player.primaryWeapon] || 'BASE SHOT', x + 120, y + 82, wc, 30, { align: 'left', core: 0.35 });
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x + 132 + i * 30, y + 108, 8, wc, i < Player.primaryLevel);
+        UI.label(ctx, 'DRONES', x + 20, y + 162, UI.DIM, 14, 'left');
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x + 132 + i * 30, y + 156, 8, '#cc44ff', i < Player.droneLevel);
+        y += 214;
 
         // Surge meter
         if (GameConfig.graze.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('SURGE', leftCenter, leftY);
-            leftY += 12;
-            const barW = 140;
-            const barH = 12;
-            const barX = leftCenter - barW / 2;
-            ctx.fillStyle = '#1a0a2e';
-            ctx.fillRect(barX, leftY, barW, barH);
             const pct = Scoring.surgeCharge / Scoring.surgeMax;
-            const surgeColor = Scoring.surgeActive ? '#ffffff' : (pct >= 1 ? '#ffff00' : '#00ffff');
-            ctx.fillStyle = surgeColor;
-            ctx.shadowColor = surgeColor;
-            ctx.shadowBlur = 0;
-            ctx.fillRect(barX, leftY, barW * pct, barH);
-            ctx.shadowBlur = 0;
-            if (Scoring.surgeActive) {
-                leftY += barH + 8;
-                ctx.fillStyle = '#ffffff';
-                ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-                const surgeTimeText = 'ACTIVE ' + Scoring.surgeDuration.toFixed(1) + 's';
-                ctx.fillText(surgeTimeText, leftCenter, leftY);
-            } else if (pct >= 1) {
-                leftY += barH + 8;
-                ctx.fillStyle = '#ffff00';
-                ctx.font = 'bold 13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('READY!', leftCenter, leftY);
-            }
-            leftY += 25;
+            const ready = pct >= 1 && !Scoring.surgeActive;
+            const sc = Scoring.surgeActive ? '#ffffff' : (ready ? '#ffee33' : UI.CYAN);
+            UI.panel(ctx, x, y, w, 120, sc, { title: 'NEON SURGE' });
+            Neon.bar(ctx, x + 20, y + 50, w - 40, 20, Scoring.surgeActive ? Scoring.surgeDuration / Scoring.surgeMaxDuration : pct, sc, 10);
+            let msg = Math.floor(pct * 100) + '%', mc = UI.TEXT;
+            if (Scoring.surgeActive) { msg = 'ACTIVE  ' + Scoring.surgeDuration.toFixed(1) + 's'; mc = '#ffffff'; }
+            else if (ready) { msg = 'READY — ' + Input.getKeyBindDisplay('surge'); mc = '#ffee33'; }
+            ctx.globalAlpha = ready && !Renderer.calm() ? 0.7 + Math.sin(t * 6) * 0.3 : 1;
+            Neon.text(ctx, msg, cx, y + 100, mc, 20, { halo: ready || Scoring.surgeActive ? 0.4 : 0 });
+            ctx.globalAlpha = 1;
+            y += 144;
         }
 
-        // Dash cooldown
+        // Dash
         if (GameConfig.dash.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('DASH', leftCenter, leftY);
-            leftY += 12;
-            const dashReady = Player.dashCooldown <= 0;
-            ctx.fillStyle = dashReady ? '#00ff88' : '#333333';
-            ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(dashReady ? 'READY' : Player.dashCooldown.toFixed(1) + 's', leftCenter, leftY);
+            const ready = Player.dashCooldown <= 0;
+            UI.panel(ctx, x, y, w, 70, ready ? '#00ff88' : UI.DIM, { title: 'DASH' });
+            const cd = GameConfig.dash.cooldown || 1;
+            Neon.bar(ctx, x + 20, y + 44, w - 170, 10, ready ? 1 : 1 - Player.dashCooldown / cd, ready ? '#00ff88' : '#4a5a70', 0);
+            Neon.text(ctx, ready ? 'READY' : Player.dashCooldown.toFixed(1) + 's', x + w - 20, y + 54, ready ? '#00ff88' : UI.DIM, 18,
+                { align: 'right', halo: ready ? 0.3 : 0 });
         }
+    },
 
-        // === RIGHT HUD ===
+    _drawRight(ctx) {
+        const x = HUD_RIGHT_X + 60, w = HUD_RIGHT_W - 120, cx = x + w / 2;
 
-        // Score
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('SCORE', rightCenter, rightY);
-        rightY += 22;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 22px Share Tech Mono, Consolas, monospace';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 0;
-        ctx.fillText(Scoring.score.toLocaleString(), rightCenter, rightY);
-        ctx.shadowBlur = 0;
-        rightY += 40;
+        // Score (with the best on this board for reference)
+        let y = 40;
+        UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
+        Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
+        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
+        y += 154;
 
-        // Chain combo
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('CHAIN', rightCenter, rightY);
-        rightY += 20;
+        // Chain: count, multiplier, and the time left to extend it
+        const mult = Scoring.multiplier;
+        const chainColor = mult >= 5 ? '#ffee33' : mult >= 3 ? '#ff8800' : UI.CYAN;
+        UI.panel(ctx, x, y, w, 130, chainColor, { title: 'CHAIN' });
         if (Scoring.chain > 0) {
-            ctx.fillStyle = Scoring.multiplier >= 5 ? '#ffff00' : Scoring.multiplier >= 3 ? '#ff8800' : '#ffffff';
-            ctx.font = 'bold 18px Share Tech Mono, Consolas, monospace';
-            ctx.shadowColor = ctx.fillStyle;
-            ctx.shadowBlur = 0;
-            ctx.fillText(Scoring.chain + ' HITS', rightCenter, rightY);
-            rightY += 18;
-            ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Scoring.multiplier + 'x', rightCenter, rightY);
-            ctx.shadowBlur = 0;
-            // Chain timer bar
-            rightY += 10;
-            const timerBarW = 120;
+            Neon.text(ctx, Scoring.chain + '', x + 30, y + 90, chainColor, 48, { align: 'left', core: 0.3 });
+            UI.label(ctx, 'HITS', x + 34 + String(Scoring.chain).length * 29, y + 88, UI.DIM, 15, 'left');
+            Neon.text(ctx, mult + 'x', x + w - 30, y + 90, chainColor, 44, { align: 'right', core: 0.4 });
             const timerPct = Scoring.chainTimer / (Scoring.chainTimerMax / GameConfig.chainTimerSpeed);
-            ctx.fillStyle = '#1a0a2e';
-            ctx.fillRect(rightCenter - timerBarW / 2, rightY, timerBarW, 4);
-            ctx.fillStyle = timerPct > 0.3 ? '#00ff88' : '#ff4444';
-            ctx.fillRect(rightCenter - timerBarW / 2, rightY, timerBarW * timerPct, 4);
+            Neon.bar(ctx, x + 20, y + 108, w - 40, 6, timerPct, timerPct > 0.3 ? '#00ff88' : '#ff3355', 0);
         } else {
-            ctx.fillStyle = '#333333';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('---', rightCenter, rightY);
+            UI.label(ctx, 'KILL QUICKLY TO BUILD A CHAIN', cx, y + 80, '#4a5468', 16);
         }
-        rightY += 35;
+        y += 154;
 
-        // Multiplier info
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('MULTIPLIER', rightCenter, rightY);
-        rightY += 20;
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(GameConfig.scoreMultiplier + 'x BASE', rightCenter, rightY);
-        rightY += 35;
-
-        // Graze count with threshold progress
+        // Run stats
+        UI.panel(ctx, x, y, w, 150, UI.MAGENTA, { title: 'RUN' });
+        const stat = (label, value, color, row, col) => {
+            const sx = x + 24 + col * (w / 2);
+            UI.label(ctx, label, sx, y + 58 + row * 50, UI.DIM, 13, 'left');
+            Neon.text(ctx, value, sx, y + 82 + row * 50, color, 21, { align: 'left', halo: 0 });
+        };
+        stat('BASE MULTIPLIER', GameConfig.scoreMultiplier + 'x', '#ffffff', 0, 0);
+        stat('MAX CHAIN', Scoring.maxChain.toString(), '#ffaa00', 0, 1);
         if (GameConfig.graze.enabled) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('GRAZE', rightCenter, rightY);
-            rightY += 20;
-            ctx.fillStyle = '#cc88ff';
-            ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(Scoring.grazeCount.toString(), rightCenter, rightY);
-            // Show next threshold
-            if (Scoring.nextGrazeThreshold < Scoring.grazeThresholds.length) {
-                const next = Scoring.grazeThresholds[Scoring.nextGrazeThreshold];
-                ctx.fillStyle = '#666688';
-                ctx.font = '10px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NEXT: ' + next, rightCenter, rightY + 14);
-                rightY += 12;
-            }
-            rightY += 28;
+            const next = Scoring.nextGrazeThreshold < Scoring.grazeThresholds.length ? ' / ' + Scoring.grazeThresholds[Scoring.nextGrazeThreshold] : '';
+            stat('GRAZE', Scoring.grazeCount + next, '#cc88ff', 1, 0);
         }
+        if (Scoring.isPerfect) stat('NO HITS', '★ PERFECT', '#00ff88', 1, 1);
+        y += 174;
 
-        // Max chain
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('MAX CHAIN', rightCenter, rightY);
-        rightY += 20;
-        ctx.fillStyle = '#ffaa00';
-        ctx.font = 'bold 16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(Scoring.maxChain.toString(), rightCenter, rightY);
-        rightY += 28;
-
-        // Perfect run indicator
-        if (Scoring.isPerfect) {
-            ctx.fillStyle = '#00ff88';
-            ctx.font = 'bold 12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('★ PERFECT ★', rightCenter, rightY);
-            rightY += 22;
-        }
-        rightY += 14;
-
-        // Difficulty
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('DIFFICULTY', rightCenter, rightY);
-        rightY += 18;
-        const diffColors = { casual: '#00ff88', normal: '#ffff00', hardcore: '#ff4444', custom: '#cc44ff' };
-        ctx.fillStyle = diffColors[GameConfig.difficulty] || '#ffffff';
-        ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(GameConfig.difficulty.toUpperCase(), rightCenter, rightY);
-        rightY += 35;
-
-        // Level timer
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('TIME', rightCenter, rightY);
-        rightY += 18;
+        // Mission
+        const isEndless = Game.currentLevelIndex === -1;
+        const lvlData = ALL_LEVELS[Game.currentLevelIndex];
+        const escort = Escort.active && Escort.alive;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
+        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
         const mins = Math.floor(WaveSystem.levelTimer / 60);
         const secs = Math.floor(WaveSystem.levelTimer % 60);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText(`${mins}:${secs.toString().padStart(2, '0')}`, rightCenter, rightY);
-        rightY += 30;
-
-        // Level / Mode name
-        ctx.fillStyle = '#888888';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        const isEndless = Game.currentLevelIndex === -1;
-        if (isEndless) {
-            ctx.fillText('ENDLESS', rightCenter, rightY);
-            rightY += 18;
-            ctx.fillStyle = '#ffaa00';
-            ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('WAVE ' + EndlessMode.wave, rightCenter, rightY);
-        } else {
-            ctx.fillText('LEVEL', rightCenter, rightY);
-            rightY += 18;
-            const lvlData = ALL_LEVELS[Game.currentLevelIndex];
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText((Game.currentLevelIndex + 1) + ': ' + (lvlData ? lvlData.name : '').toUpperCase(), rightCenter, rightY);
-        }
-        rightY += 25;
-
-        // Escort status (if active)
-        if (Escort.active && Escort.alive) {
-            ctx.fillStyle = '#888888';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('ESCORT', rightCenter, rightY);
-            rightY += 14;
-            const eBarW = 120;
-            const eBarH = 8;
-            const eBarX = rightCenter - eBarW / 2;
-            ctx.fillStyle = '#002200';
-            ctx.fillRect(eBarX, rightY, eBarW, eBarH);
+        const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
+        UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
+        Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });
+        if (escort) {
             const ePct = Escort.hp / Escort.maxHp;
-            ctx.fillStyle = ePct > 0.3 ? '#44aa44' : '#ff4444';
-            ctx.fillRect(eBarX, rightY, eBarW * ePct, eBarH);
-            ctx.fillStyle = '#88ff88';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('AURORA', rightCenter, rightY + eBarH + 12);
+            UI.label(ctx, 'AURORA', x + 24, y + 144, '#44ff88', 14, 'left');
+            Neon.bar(ctx, x + 110, y + 134, w - 140, 12, ePct, ePct > 0.3 ? '#44ff88' : '#ff3355', 10);
         }
 
-        // Controls reference at bottom — shows actual bindings
-        const controlsY = SCREEN_H - 180;
-        ctx.fillStyle = '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
+        // Controls reference (actual bindings)
         const controls = [
             ['MOVE', Input.getKeyBindDisplay('up').split(' / ')[0] + '/' + Input.getKeyBindDisplay('down').split(' / ')[0]],
             ['FIRE', Input.getKeyBindDisplay('fire')],
@@ -10323,33 +10551,30 @@ const HUD = {
             ['DASH', Input.getKeyBindDisplay('dash')],
             ['BOMB', Input.getKeyBindDisplay('bomb')],
             ['SURGE', Input.getKeyBindDisplay('surge')],
-            ['PAUSE', Input.getKeyBindDisplay('pause')]
+            ['PAUSE', Input.getKeyBindDisplay('pause')],
         ];
+        const cy = SCREEN_H - 40 - controls.length * 24;
         controls.forEach((c, i) => {
-            ctx.fillStyle = '#778899';
-            ctx.fillText(c[0], rightCenter - 35, controlsY + i * 18);
-            ctx.fillStyle = '#888888';
-            ctx.fillText(c[1], rightCenter + 35, controlsY + i * 18);
+            UI.label(ctx, c[0], x + 24, cy + i * 24, UI.DIM, 14, 'left');
+            UI.label(ctx, c[1], x + w - 24, cy + i * 24, '#8a9ab8', 14, 'right');
         });
+    },
 
-        // Last-life danger indicator — pulsing red edge strips (cheap, no radial gradient)
-        if (Player.alive && Player.lives <= 1 && Player.maxShieldHp === 0) {
-            const pulse = 0.08 + Math.sin(Date.now() * 0.005) * 0.05;
-            const edgeW = 30;
-            ctx.fillStyle = `rgba(255, 0, 0, ${pulse})`;
-            // Left edge
-            const lg = ctx.createLinearGradient(PLAY_X, 0, PLAY_X + edgeW, 0);
-            lg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
-            lg.addColorStop(1, 'rgba(255, 0, 0, 0)');
-            ctx.fillStyle = lg;
-            ctx.fillRect(PLAY_X, PLAY_Y, edgeW, PLAY_H);
-            // Right edge
-            const rg = ctx.createLinearGradient(PLAY_X + PLAY_W, 0, PLAY_X + PLAY_W - edgeW, 0);
-            rg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
-            rg.addColorStop(1, 'rgba(255, 0, 0, 0)');
-            ctx.fillStyle = rg;
-            ctx.fillRect(PLAY_X + PLAY_W - edgeW, PLAY_Y, edgeW, PLAY_H);
-        }
+    // Last life: pulsing red strips on the play-area edges
+    _drawDanger(ctx) {
+        if (!(Player.alive && Player.lives <= 1 && Player.maxShieldHp === 0)) return;
+        const pulse = Renderer.calm() ? 0.08 : 0.08 + Math.sin(Date.now() * 0.005) * 0.05;
+        const edgeW = 30;
+        const lg = ctx.createLinearGradient(PLAY_X, 0, PLAY_X + edgeW, 0);
+        lg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
+        lg.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = lg;
+        ctx.fillRect(PLAY_X, PLAY_Y, edgeW, PLAY_H);
+        const rg = ctx.createLinearGradient(PLAY_X + PLAY_W, 0, PLAY_X + PLAY_W - edgeW, 0);
+        rg.addColorStop(0, `rgba(255, 0, 0, ${pulse})`);
+        rg.addColorStop(1, 'rgba(255, 0, 0, 0)');
+        ctx.fillStyle = rg;
+        ctx.fillRect(PLAY_X + PLAY_W - edgeW, PLAY_Y, edgeW, PLAY_H);
     }
 };
 
@@ -10357,541 +10582,371 @@ const HUD = {
 // === menus.js ===
 // ============================================================
 //  MENU SYSTEM
+//  Screens are drawn with the UI kit (ui-kit.js). `items` is set while
+//  drawing and read by Game.update() for navigation, so keep the lists
+//  and their order in step with the handlers there.
 // ============================================================
 const Menu = {
     selectedIndex: 0,
     items: [],
-    titlePulse: 0,
-    gridOffset: 0,
 
     drawTitle(ctx) {
-        this.titlePulse += 0.02;
-        this.gridOffset += 1.2;
+        UI.background(ctx);
+        const t = UI.time();
 
-        // Full screen background gradient
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#050318');
-        grad.addColorStop(0.45, '#0a0620');
-        grad.addColorStop(0.65, '#1a0a3e');
-        grad.addColorStop(0.8, '#3d1a5e');
-        grad.addColorStop(0.9, '#6e1a5e');
-        grad.addColorStop(1, '#ff006e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        // Logo
+        const cx = SCREEN_W / 2;
+        const bob = Renderer.calm() ? 0 : Math.sin(t * 1.3) * 4;
+        Neon.text(ctx, 'NEON STORM', cx - 26, 200 + bob, UI.CYAN, 110, { core: 0.5, halo: 0.55 });
+        Neon.text(ctx, 'β', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
+        Neon.text(ctx, 'BULLET HELL SHOOTER', cx, 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
 
-        // Star field
-        for (let i = 0; i < 80; i++) {
-            const sx = ((i * 137.5 + this.gridOffset * 0.3) % SCREEN_W);
-            const sy = ((i * 97.3 + i * i * 3.1) % (SCREEN_H * 0.65));
-            const brightness = 0.2 + (Math.sin(this.titlePulse * 2 + i) * 0.5 + 0.5) * 0.5;
-            ctx.fillStyle = `rgba(255, 255, 255, ${brightness})`;
-            const size = (i % 3 === 0) ? 2 : 1;
-            ctx.fillRect(sx, sy, size, size);
-        }
+        // The player's ship hovering over the grid, engines lit
+        const sy = 870 + (Renderer.calm() ? 0 : Math.sin(t * 2) * 6);
+        const f = Math.sin(t * 30) * 3;
+        Neon.flame(ctx, cx - 20, sy + 30, 9, 26 + f, Hangar.trailColor, 0.9);
+        Neon.flame(ctx, cx + 20, sy + 30, 9, 26 - f, Hangar.trailColor, 0.9);
+        UI.ship(ctx, cx, sy, 44);
 
-        // Horizon sun glow
-        const sunY = SCREEN_H * 0.78;
-        const sunGrad = ctx.createRadialGradient(SCREEN_W / 2, sunY, 20, SCREEN_W / 2, sunY, 250);
-        sunGrad.addColorStop(0, 'rgba(255, 120, 0, 0.5)');
-        sunGrad.addColorStop(0.4, 'rgba(255, 0, 100, 0.2)');
-        sunGrad.addColorStop(1, 'rgba(255, 0, 100, 0)');
-        ctx.fillStyle = sunGrad;
-        ctx.fillRect(0, sunY - 250, SCREEN_W, 500);
-
-        // Sun disc (half circle at horizon)
-        ctx.fillStyle = '#ff6600';
-        ctx.shadowColor = '#ff6600';
-        ctx.shadowBlur = 30;
-        ctx.beginPath();
-        ctx.arc(SCREEN_W / 2, sunY + 15, 60, Math.PI, 0);
-        ctx.fill();
-        // Sun stripes
-        ctx.fillStyle = '#3d1a5e';
-        ctx.shadowBlur = 0;
-        for (let s = 0; s < 5; s++) {
-            const sy2 = sunY - 40 + s * 12;
-            if (sy2 < sunY + 15) {
-                ctx.fillRect(SCREEN_W / 2 - 70, sy2, 140, 3);
-            }
-        }
-
-        // City silhouette on horizon
-        ctx.fillStyle = '#0d0520';
-        const cityY = sunY + 10;
-        const cityBuildings = [
-            [200, 30, 50], [240, 20, 80], [270, 35, 40], [320, 15, 100], [345, 40, 60],
-            [400, 25, 110], [435, 50, 45], [500, 20, 90], [530, 35, 55], [580, 15, 120],
-            [605, 45, 50], [660, 25, 85], [700, 30, 65], [740, 20, 95], [770, 40, 40],
-            [1100, 30, 70], [1140, 20, 95], [1170, 35, 50], [1210, 15, 110], [1250, 45, 60],
-            [1310, 25, 80], [1350, 40, 45], [1400, 20, 100], [1440, 35, 55], [1500, 15, 90],
-            [1530, 50, 40], [1590, 25, 75], [1630, 30, 95], [1670, 20, 55], [1710, 40, 70]
-        ];
-        for (const [bx, bw, bh] of cityBuildings) {
-            ctx.fillRect(bx, cityY - bh, bw, bh + 100);
-        }
-
-        // Perspective grid — lower portion
-        const horizon = sunY + 15;
-        const gridH = SCREEN_H - horizon;
-        ctx.save();
-
-        // Horizontal grid lines (perspective, scrolling)
-        ctx.strokeStyle = 'rgba(255, 0, 255, 0.3)';
-        ctx.lineWidth = 1;
-        for (let i = 0; i < 20; i++) {
-            const t = (i * 50 + (this.gridOffset * 2) % 50) / (20 * 50);
-            const y = horizon + t * t * gridH * 1.2;
-            if (y > SCREEN_H || y < horizon) continue;
-            ctx.globalAlpha = Math.min(1, t * 4) * 0.35;
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(SCREEN_W, y);
-            ctx.stroke();
-        }
-
-        // Vertical grid lines (converging to vanishing point)
-        ctx.globalAlpha = 0.2;
-        ctx.strokeStyle = 'rgba(0, 255, 255, 0.2)';
-        const vanishX = SCREEN_W / 2;
-        for (let i = -16; i <= 16; i++) {
-            const bottomX = vanishX + i * 80;
-            ctx.beginPath();
-            ctx.moveTo(vanishX + i * 2, horizon);
-            ctx.lineTo(bottomX, SCREEN_H);
-            ctx.stroke();
-        }
-        ctx.restore();
-
-        // Floating particles — drifting upward
-        ctx.globalAlpha = 0.3;
-        for (let i = 0; i < 20; i++) {
-            const px = ((i * 193.7 + this.gridOffset * 0.5) % SCREEN_W);
-            const py = SCREEN_H - ((i * 87.3 + this.gridOffset * (0.3 + i * 0.02)) % (SCREEN_H * 0.5));
-            const hue = (this.titlePulse * 20 + i * 18) % 360;
-            ctx.fillStyle = `hsla(${hue}, 100%, 70%, 0.2)`;
-            ctx.beginPath();
-            ctx.arc(px, py, 1.5 + Math.sin(this.titlePulse + i) * 0.8, 0, Math.PI * 2);
-            ctx.fill();
-        }
-        ctx.globalAlpha = 1;
-
-        // Title
-        const glow = 10 + Math.sin(this.titlePulse) * 5;
-        ctx.fillStyle = '#00ffff';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = glow;
-        ctx.font = 'bold 72px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('NEON STORM \u03b2', SCREEN_W / 2, 280);
-
-        // Subtitle
-        ctx.shadowBlur = 5;
-        ctx.fillStyle = '#ff00ff';
-        ctx.shadowColor = '#ff00ff';
-        ctx.font = '18px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('BULLET HELL SHOOTER', SCREEN_W / 2, 320);
-        ctx.shadowBlur = 0;
-
-        // Menu items
+        // Menu
         this.items = ['NEW GAME', 'ENDLESS MODE', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
-        const startY = 440;
+        UI.panel(ctx, cx - 250, 300, 500, 415, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
-            const selected = i === this.selectedIndex;
-            const y = startY + i * 50;
-
-            if (selected) {
-                ctx.fillStyle = '#00ffff';
-                ctx.shadowColor = '#00ffff';
-                ctx.shadowBlur = 15;
-                ctx.font = 'bold 24px Share Tech Mono, Consolas, monospace';
-                // Selection indicator
-                ctx.fillText('▸ ' + this.items[i] + ' ◂', SCREEN_W / 2, y);
-            } else {
-                ctx.fillStyle = '#667788';
-                ctx.shadowBlur = 0;
-                ctx.font = '20px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(this.items[i], SCREEN_W / 2, y);
-            }
+            UI.item(ctx, this.items[i], cx, 358 + i * 54, i === this.selectedIndex, { w: 440 });
         }
-        ctx.shadowBlur = 0;
 
-        // Footer
-        ctx.fillStyle = '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('ARROW KEYS TO SELECT  •  ENTER TO CONFIRM', SCREEN_W / 2, SCREEN_H - 60);
-        ctx.fillText('GAMEPAD SUPPORTED', SCREEN_W / 2, SCREEN_H - 40);
-        ctx.fillStyle = '#ff00ff';
-        ctx.font = '13px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('ALPHA VERSION — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 20);
+        UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
+        UI.label(ctx, 'BETA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
     },
 
     drawDifficultySelect(ctx) {
-        // Background
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('SELECT DIFFICULTY', SCREEN_W / 2, 120);
-        ctx.shadowBlur = 0;
+        UI.background(ctx, { dim: 0.45 });
+        UI.title(ctx, 'SELECT DIFFICULTY', 130);
 
         this.items = ['CASUAL', 'NORMAL', 'HARDCORE', 'CUSTOM', 'BACK'];
         const descs = [
-            '0.5x Score  •  5 Lives  •  All assists ON',
-            '1.0x Score  •  3 Lives  •  Standard experience',
-            '2.0x Score  •  1 Life   •  No bombs or focus',
-            'Mix and match  •  No leaderboard',
-            ''
+            '0.5x SCORE  •  5 LIVES  •  ALL ASSISTS ON',
+            '1.0x SCORE  •  3 LIVES  •  STANDARD EXPERIENCE',
+            '2.0x SCORE  •  1 LIFE  •  NO BOMBS OR FOCUS',
+            'MIX AND MATCH  •  NO LEADERBOARD',
+            '',
         ];
-        const colors = ['#00ff88', '#ffff00', '#ff4444', '#cc44ff', '#888888'];
-
-        const startY = 280;
+        const colors = ['#00ff88', '#ffee33', '#ff3355', '#cc44ff', UI.DIM];
+        const cx = SCREEN_W / 2;
         for (let i = 0; i < this.items.length; i++) {
+            const y = 270 + i * 120;
             const selected = i === this.selectedIndex;
-            const y = startY + i * 90;
+            if (i < 4) UI.panel(ctx, cx - 330, y - 52, 660, 98, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: 600, color: colors[i], desc: descs[i], size: 28 });
+        }
+        UI.hint(ctx, 'ESC TO GO BACK');
+    },
 
-            if (selected) {
-                // Selection box
-                ctx.strokeStyle = colors[i];
-                ctx.shadowColor = colors[i];
-                ctx.shadowBlur = 10;
-                ctx.lineWidth = 2;
-                ctx.strokeRect(SCREEN_W / 2 - 250, y - 30, 500, 60);
-                ctx.shadowBlur = 0;
-
-                ctx.fillStyle = colors[i];
-                ctx.font = 'bold 26px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(this.items[i], SCREEN_W / 2, y);
-            } else {
-                ctx.fillStyle = '#445566';
-                ctx.font = '22px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(this.items[i], SCREEN_W / 2, y);
-            }
-
-            if (descs[i]) {
-                ctx.fillStyle = selected ? '#aaaaaa' : '#555555';
-                ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(descs[i], SCREEN_W / 2, y + 22);
+    // Results panel shared by game over and mission complete. Returns the y after the totals.
+    _results(ctx, top, heading, headingColor, scoreColor, footerH) {
+        const cx = SCREEN_W / 2;
+        const nB = EndRunBonus.bonuses.length;
+        const subH = this._resultsSub ? this._resultsSub.length * 26 : 0;
+        const h = 110 + subH + 104 + nB * 28 + (nB ? 22 : 0) + 84 + footerH;
+        UI.panel(ctx, cx - 360, top, 720, h, headingColor);
+        Neon.text(ctx, heading, cx, top + 72, headingColor, 58, { core: 0.45, halo: 0.55 });
+        let y = top + 110;
+        if (this._resultsSub) {
+            for (const line of this._resultsSub) {
+                UI.label(ctx, line[0], cx, y, line[1] || UI.TEXT, line[2] || 17);
+                y += 26;
             }
         }
-
-        ctx.fillStyle = '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('ESC TO GO BACK', SCREEN_W / 2, SCREEN_H - 50);
+        UI.label(ctx, 'SCORE', cx, y + 24, UI.DIM, 15);
+        Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 66, scoreColor, 42, { core: 0.4 });
+        const bonusEndY = EndRunBonus.draw(ctx, cx, y + 104);
+        const totalScore = Scoring.score + EndRunBonus.totalBonus;
+        Neon.text(ctx, 'TOTAL  ' + totalScore.toLocaleString(), cx, bonusEndY + 22, '#ffee33', 28, { core: 0.35 });
+        const ncEarned = Math.floor(totalScore / 3000 * GameConfig.scoreMultiplier);
+        UI.label(ctx, '+ ' + ncEarned + ' NEON CREDITS', cx, bonusEndY + 54, '#ffaa00', 17);
+        return bonusEndY + 70;
     },
 
     drawGameOver(ctx) {
-        ctx.fillStyle = 'rgba(10, 6, 18, 0.85)';
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-        ctx.textAlign = 'center';
-
+        UI.dim(ctx, 0.82);
         const isEndless = Game.currentLevelIndex === -1;
-
-        ctx.fillStyle = '#ff0040';
-        ctx.shadowColor = '#ff0040';
-        ctx.shadowBlur = 20;
-        ctx.font = 'bold 52px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('GAME OVER', SCREEN_W / 2, 180);
-        ctx.shadowBlur = 0;
-
-        // Endless mode stats
+        this._resultsSub = null;
         if (isEndless) {
-            ctx.fillStyle = '#ffaa00';
-            ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('ENDLESS MODE — WAVE ' + EndlessMode.wave, SCREEN_W / 2, 220);
-            ctx.fillStyle = '#aaaaaa';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
             const mins = Math.floor(WaveSystem.levelTimer / 60);
             const secs = Math.floor(WaveSystem.levelTimer % 60);
-            ctx.fillText('SURVIVED: ' + mins + ':' + secs.toString().padStart(2, '0'), SCREEN_W / 2, 245);
+            this._resultsSub = [
+                ['ENDLESS MODE — WAVE ' + EndlessMode.wave, '#ffaa00', 20],
+                ['SURVIVED ' + mins + ':' + secs.toString().padStart(2, '0'), UI.TEXT, 16],
+            ];
         }
+        const endY = this._results(ctx, 120, 'GAME OVER', '#ff2255', UI.CYAN, HighScores.enteringInitials ? 190 : 130);
 
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '18px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('SCORE', SCREEN_W / 2, isEndless ? 280 : 260);
-        ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-        ctx.fillStyle = '#00ffff';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText(Scoring.score.toLocaleString(), SCREEN_W / 2, isEndless ? 315 : 295);
-        ctx.shadowBlur = 0;
-
-        // End-of-run bonuses
-        const bonusEndY = EndRunBonus.draw(ctx, SCREEN_W / 2, 330);
-
-        // Total with bonuses
-        const totalScore = Scoring.score + EndRunBonus.totalBonus;
-        ctx.fillStyle = '#ffff00';
-        ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('TOTAL: ' + totalScore.toLocaleString(), SCREEN_W / 2, bonusEndY + 15);
-
-        const ncEarned = Math.floor(totalScore / 3000 * GameConfig.scoreMultiplier);
-        ctx.fillStyle = '#ffaa00';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('+ ' + ncEarned + ' NEON CREDITS', SCREEN_W / 2, bonusEndY + 40);
-
-        // High score initial entry or menu
         if (HighScores.enteringInitials) {
-            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, bonusEndY + 75);
+            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
         } else {
             this.items = ['RETRY', 'MAIN MENU'];
-            const startY = bonusEndY + 85;
             for (let i = 0; i < this.items.length; i++) {
-                const selected = i === this.selectedIndex;
-                if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.font = 'bold 22px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('▸ ' + this.items[i], SCREEN_W / 2, startY + i * 45);
-                } else {
-                    ctx.fillStyle = '#667788';
-                    ctx.font = '18px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText(this.items[i], SCREEN_W / 2, startY + i * 45);
-                }
+                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 50, i === this.selectedIndex, { w: 380, size: 22 });
             }
         }
     },
 
     drawVictory(ctx) {
-        ctx.fillStyle = 'rgba(10, 6, 18, 0.8)';
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-        ctx.textAlign = 'center';
-
-        // Level name
+        UI.dim(ctx, 0.78);
         const lvl = ALL_LEVELS[Game.currentLevelIndex];
-        ctx.fillStyle = '#888888'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('LEVEL ' + (Game.currentLevelIndex + 1) + ' — ' + (lvl ? lvl.name.toUpperCase() : ''), SCREEN_W / 2, 155);
-
-        ctx.fillStyle = '#00ffff';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 25;
-        ctx.font = 'bold 48px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('MISSION COMPLETE', SCREEN_W / 2, 195);
-        ctx.shadowBlur = 0;
-
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '18px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('SCORE', SCREEN_W / 2, 240);
-        ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-        ctx.fillStyle = '#ffff00';
-        ctx.shadowColor = '#ffff00';
-        ctx.shadowBlur = 10;
-        ctx.fillText(Scoring.score.toLocaleString(), SCREEN_W / 2, 275);
-        ctx.shadowBlur = 0;
-
-        const bonusEndY = EndRunBonus.draw(ctx, SCREEN_W / 2, 310);
-
-        const totalScore = Scoring.score + EndRunBonus.totalBonus;
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 22px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('TOTAL: ' + totalScore.toLocaleString(), SCREEN_W / 2, bonusEndY + 15);
-
-        const ncEarned = Math.floor(totalScore / 3000 * GameConfig.scoreMultiplier);
-        ctx.fillStyle = '#ffaa00';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('+ ' + ncEarned + ' NEON CREDITS', SCREEN_W / 2, bonusEndY + 40);
+        this._resultsSub = [['LEVEL ' + (Game.currentLevelIndex + 1) + ' — ' + (lvl ? lvl.name.toUpperCase() : ''), UI.TEXT, 17]];
+        const endY = this._results(ctx, 120, 'MISSION COMPLETE', UI.CYAN, '#ffee33', HighScores.enteringInitials ? 190 : 170);
 
         if (HighScores.enteringInitials) {
-            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, bonusEndY + 75);
+            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
         } else {
             const hasNextLevel = Game.currentLevelIndex < Campaign.getLevelCount() - 1 &&
                 Campaign.isLevelAvailable(Game.currentLevelIndex + 1, GameConfig.difficulty === 'custom');
             this.items = hasNextLevel ? ['NEXT LEVEL', 'RETRY', 'MAIN MENU'] :
                 (Game.currentLevelIndex >= 4 ? ['CONTINUE...', 'MAIN MENU'] : ['RETRY', 'MAIN MENU']);
-            const startY = bonusEndY + 80;
             for (let i = 0; i < this.items.length; i++) {
-                const selected = i === this.selectedIndex;
-                if (selected) {
-                    ctx.fillStyle = this.items[i] === 'NEXT LEVEL' ? '#00ff88' : '#00ffff';
-                    ctx.font = 'bold 22px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('▸ ' + this.items[i], SCREEN_W / 2, startY + i * 40);
-                } else {
-                    ctx.fillStyle = '#667788';
-                    ctx.font = '18px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText(this.items[i], SCREEN_W / 2, startY + i * 40);
-                }
+                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 48, i === this.selectedIndex, {
+                    w: 380, size: 22, color: this.items[i] === 'NEXT LEVEL' ? '#00ff88' : UI.CYAN,
+                });
             }
+        }
+    },
+
+    // --- Mission briefing: the level's live backdrop fills the play area ---
+    drawBriefing(ctx) {
+        const idx = Game.currentLevelIndex;
+        const lvl = ALL_LEVELS[idx];
+        const t = Game.briefingTimer;
+        const inK = Math.min(1, t * 2);
+        // Side panels
+        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
+        ctx.fillStyle = side;
+        ctx.fillRect(0, 0, PLAY_X, SCREEN_H);
+        ctx.fillRect(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H);
+        // Let the backdrop show through, darkened for the text
+        ctx.fillStyle = 'rgba(3, 0, 10, 0.45)';
+        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
+
+        ctx.globalAlpha = inK;
+        const cx = SCREEN_W / 2;
+        UI.label(ctx, 'LEVEL ' + (idx + 1) + ' / ' + Campaign.getLevelCount(), cx, 250, UI.MAGENTA, 18);
+        Neon.text(ctx, lvl.name.toUpperCase(), cx, 312, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
+        UI.panel(ctx, cx - 320, 360, 640, 190, UI.CYAN, { title: 'BRIEFING' });
+        const lines = (Game.briefingText || '').split('\n');
+        // Type the briefing out
+        let chars = Renderer.calm() ? 1e9 : Math.floor(t * 70);
+        lines.forEach((line, i) => {
+            const shown = line.slice(0, Math.max(0, chars));
+            chars -= line.length;
+            Neon.text(ctx, shown, cx, 425 + i * 34, UI.TEXT, 20, { weight: '', halo: 0 });
+        });
+
+        // Campaign progress (left)
+        const lx = PLAY_X / 2;
+        UI.panel(ctx, lx - 220, 260, 440, 70 + Campaign.getLevelCount() * 56, UI.MAGENTA, { title: 'CAMPAIGN' });
+        for (let i = 0; i < Campaign.getLevelCount(); i++) {
+            const L = ALL_LEVELS[i];
+            const y = 330 + i * 56;
+            const cur = i === idx, done = i < idx;
+            UI.pip(ctx, lx - 180, y - 6, 7, cur ? UI.CYAN : UI.MAGENTA, cur || done);
+            Neon.text(ctx, (i + 1) + '  ' + (L ? L.name.toUpperCase() : ''), lx - 158, y, cur ? '#ffffff' : (done ? UI.TEXT : UI.DIM), cur ? 20 : 17,
+                { align: 'left', halo: cur ? 0.35 : 0, weight: cur ? 'bold' : '' });
+        }
+
+        // Threat assessment (right): the level's boss in neon
+        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+        const def = BossTypes[lvl.bossType] || BossTypes.architect;
+        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
+        const fake = Object.create(Boss);
+        fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = lvl.bossType;
+        ctx.save();
+        ctx.translate(rx, 470);
+        ctx.scale(1.7, 1.7);
+        const draw = Boss._neon[lvl.bossType] || Boss._neon.architect;
+        draw.call(fake, ctx, Boss.radius, def.colors[0], false);
+        ctx.restore();
+        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
+        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+
+        // Start prompt with an auto-start countdown
+        ctx.globalAlpha = inK * (Renderer.calm() ? 1 : 0.7 + Math.sin(t * 5) * 0.3);
+        Neon.text(ctx, 'PRESS ENTER OR FIRE TO LAUNCH', cx, 850, '#ffffff', 22, { halo: 0.3 });
+        ctx.globalAlpha = inK;
+        Neon.bar(ctx, cx - 180, 880, 360, 4, Math.min(1, t / 8), UI.CYAN, 0);
+        ctx.globalAlpha = 1;
+    },
+
+    drawLevelSelect(ctx) {
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'SELECT LEVEL', 110);
+        UI.label(ctx, 'DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 160, UI.TEXT, 17);
+        const cx = SCREEN_W / 2;
+        const lvlCount = Campaign.getLevelCount();
+        UI.panel(ctx, cx - 400, 200, 800, lvlCount * 76 + 40, UI.CYAN);
+        for (let i = 0; i <= lvlCount; i++) {
+            const y = 250 + i * 76;
+            const selected = i === Menu.selectedIndex;
+            if (i === lvlCount) {
+                UI.item(ctx, 'BACK', cx, y + 20, selected, { w: 400, size: 20 });
+                continue;
+            }
+            const lvl = ALL_LEVELS[i];
+            const available = Campaign.isLevelAvailable(i, false);
+            const best = Campaign.getLevelBest(i, GameConfig.difficulty);
+            if (selected) {
+                ctx.fillStyle = available ? UI.CYAN : UI.DIM;
+                ctx.globalAlpha = 0.12;
+                ctx.fillRect(cx - 380, y - 32, 760, 60);
+                ctx.globalAlpha = 1;
+                ctx.fillRect(cx - 380, y - 32, 3, 60);
+            }
+            Neon.text(ctx, (i + 1) + '  ' + (lvl ? lvl.name.toUpperCase() : '') + (available ? '' : '   [LOCKED]'), cx - 350, y + 4,
+                !available ? '#3a4458' : selected ? '#ffffff' : UI.TEXT, selected ? 24 : 21, { align: 'left', halo: selected && available ? 0.3 : 0, weight: selected ? 'bold' : '' });
+            if (best && available) {
+                Neon.text(ctx, best.score.toLocaleString(), cx + 350, y - 2, selected ? '#ffee33' : '#bbaa55', 20, { align: 'right', halo: 0 });
+                const extras = [];
+                if (best.maxChain > 0) extras.push('CHAIN ' + best.maxChain);
+                if (best.perfect) extras.push('★ PERFECT');
+                UI.label(ctx, extras.join('   '), cx + 350, y + 20, UI.DIM, 13, 'right');
+            } else if (available) {
+                UI.label(ctx, 'NO RECORD', cx + 350, y + 4, UI.DIM, 15, 'right');
+            }
+        }
+        UI.hint(ctx, 'ESC BACK');
+    },
+
+    drawAchievements(ctx) {
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'ACHIEVEMENTS', 90, '#ffaa00');
+        const prog = Achievements.getProgress();
+        UI.label(ctx, prog.unlocked + ' / ' + prog.total + ' UNLOCKED', SCREEN_W / 2, 140, UI.TEXT, 17);
+        Neon.bar(ctx, SCREEN_W / 2 - 200, 154, 400, 5, prog.unlocked / Math.max(1, prog.total), '#ffaa00', 0);
+        const cols = 2, colW = 560, rowH = 70;
+        const startX = SCREEN_W / 2 - colW, startY = 185;
+        Achievements.defs.forEach((def, i) => {
+            const x = startX + (i % cols) * colW;
+            const y = startY + Math.floor(i / cols) * rowH;
+            const done = Achievements.isUnlocked(def.id);
+            UI.panel(ctx, x + 8, y, colW - 16, rowH - 10, done ? '#ffaa00' : '#3a4458', { fill: done ? 'rgba(40, 20, 0, 0.55)' : 'rgba(6, 2, 18, 0.55)' });
+            ctx.font = '24px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.globalAlpha = done ? 1 : 0.3;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(def.icon, x + 42, y + 40);
+            ctx.globalAlpha = 1;
+            Neon.text(ctx, def.name, x + 72, y + 27, done ? '#ffaa00' : UI.DIM, 17, { align: 'left', halo: done ? 0.25 : 0 });
+            Neon.text(ctx, def.desc, x + 72, y + 48, done ? UI.TEXT : '#4a5468', 14, { align: 'left', halo: 0, weight: '' });
+            Neon.text(ctx, (done ? '✓ ' : '') + def.reward + ' NC', x + colW - 26, y + 36, done ? '#00ff88' : '#4a5468', 15, { align: 'right', halo: 0 });
+        });
+        UI.hint(ctx, 'ESC / ENTER TO RETURN');
+    },
+
+    drawCampaignComplete(ctx) {
+        UI.background(ctx, { dim: 0.35 });
+        const t = Game.briefingTimer;
+        const cx = SCREEN_W / 2;
+        const isSecret = Game.currentLevelIndex === 5;
+        const color = isSecret ? '#ff2bd6' : '#ffee33';
+        UI.panel(ctx, cx - 460, 150, 920, 660, color);
+        Neon.text(ctx, isSecret ? 'SIGNAL TERMINATED' : 'CAMPAIGN COMPLETE', cx, 250, color, 60, { core: 0.5, halo: 0.6 });
+        const sub = isSecret
+            ? ['You silenced the relay. The void is quiet...', 'For now.']
+            : ['The threat has been neutralized.', 'Outstanding work, pilot.'];
+        sub.forEach((line, i) => UI.label(ctx, line, cx, 305 + i * 30, UI.TEXT, 20));
+        UI.label(ctx, 'DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), cx, 400, UI.DIM, 16);
+        Neon.text(ctx, 'TOTAL SCORE  ' + Scoring.score.toLocaleString(), cx, 450, UI.CYAN, 32, { core: 0.4 });
+        UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, cx, 490, '#ffaa00', 19);
+        if (!isSecret && !Campaign.secretUnlocked) {
+            UI.label(ctx, 'Something else is out there... beat all levels on Normal to find it.', cx, 545, '#5a6478', 16);
+        } else if (!isSecret && Campaign.secretUnlocked) {
+            Neon.text(ctx, 'SECRET LEVEL UNLOCKED: SIGNAL LOST', cx, 545, '#ff2bd6', 19, { halo: 0.4 });
+        }
+        UI.label(ctx, 'Thank you for playing Neon Storm \u03b2 \u2014 more to come!', cx, 600, UI.DIM, 16);
+        const items = ['PLAY AGAIN', 'MAIN MENU'];
+        items.forEach((label, i) => UI.item(ctx, label, cx, 680 + i * 54, i === Menu.selectedIndex, { w: 420, size: 22 }));
+        // Fireworks of shattered neon (small, calm-friendly)
+        if (!Renderer.calm()) {
+            for (let i = 0; i < 24; i++) {
+                const a = i * 2.4 + t * 0.4;
+                const r = 520 + Math.sin(t * 0.7 + i) * 40;
+                const x = cx + Math.cos(a) * r, y = 480 + Math.sin(a) * r * 0.55;
+                ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 2 + i);
+                UI.pip(ctx, x, y, 4, i % 2 ? UI.CYAN : UI.MAGENTA, true);
+            }
+            ctx.globalAlpha = 1;
         }
     },
 
     highScoreTab: 0,
 
     drawHighScores(ctx) {
-        const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        grad.addColorStop(0, '#0a0620');
-        grad.addColorStop(1, '#1a0a3e');
-        ctx.fillStyle = grad;
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        UI.background(ctx, { dim: 0.55 });
+        UI.title(ctx, 'HIGH SCORES', 110);
 
-        ctx.fillStyle = '#00ffff';
-        ctx.font = 'bold 36px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 10;
-        ctx.fillText('HIGH SCORES', SCREEN_W / 2, 80);
-        ctx.shadowBlur = 0;
-
-        // Tabs — now includes ENDLESS
         const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'SESSION'];
         const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'session'];
-        const tabW = 150;
-        const tabStartX = SCREEN_W / 2 - (tabs.length * tabW) / 2;
-        for (let i = 0; i < tabs.length; i++) {
-            const x = tabStartX + i * tabW + tabW / 2;
-            const selected = i === this.highScoreTab;
-            const colors = ['#00ff88', '#ffff00', '#ff4444', '#ff8800', '#cc44ff'];
-            ctx.fillStyle = selected ? colors[i] : '#445566';
-            ctx.font = selected ? 'bold 14px Share Tech Mono, Consolas, monospace' : '13px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(tabs[i], x, 125);
-            if (selected) {
-                ctx.fillStyle = colors[i];
-                ctx.fillRect(x - tabW / 2 + 15, 133, tabW - 30, 2);
-            }
-        }
+        const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#cc44ff'];
+        UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
 
-        // Board content
+        const color = colors[this.highScoreTab];
+        const px = SCREEN_W / 2 - 420, pw = 840, top = 240;
+        UI.panel(ctx, px, top, pw, 620, color);
+
         const tabKey = tabKeys[this.highScoreTab];
-        if (tabKey === 'session') {
-            // Session scores
-            ctx.textAlign = 'center';
-            if (HighScores.sessionScores.length === 0) {
-                ctx.fillStyle = '#888888';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NO SCORES THIS SESSION', SCREEN_W / 2, 200);
-            } else {
-                ctx.textAlign = 'left';
-                const colRank = SCREEN_W / 2 - 280;
-                const colName = SCREEN_W / 2 - 230;
-                const colScore = SCREEN_W / 2 - 150;
-                const colInfo = SCREEN_W / 2 + 50;
-                const colDate = SCREEN_W / 2 + 200;
-                ctx.fillStyle = '#666666';
-                ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('#', colRank, 170);
-                ctx.fillText('NAME', colName, 170);
-                ctx.fillText('SCORE', colScore, 170);
-                ctx.fillText('INFO', colInfo, 170);
-                ctx.fillText('MODE', colDate, 170);
-
-                HighScores.sessionScores.slice(0, 10).forEach((entry, i) => {
-                    const ey = 192 + i * 24;
-                    ctx.fillStyle = i < 3 ? '#ffaa00' : '#aaaaaa';
-                    ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText((i + 1).toString(), colRank, ey);
-                    ctx.fillText(entry.initials, colName, ey);
-                    ctx.fillText(entry.score.toLocaleString(), colScore, ey);
-                    ctx.fillStyle = '#888888';
-                    const info = entry.mode === 'endless' ? 'W' + (entry.wave || '?') : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : '');
-                    ctx.fillText(info, colInfo, ey);
-                    ctx.fillText((entry.difficulty || '').toUpperCase(), colDate, ey);
-                });
-            }
+        const session = tabKey === 'session';
+        const rows = session ? HighScores.sessionScores.slice(0, 10) : (HighScores.boards[tabKey] || []);
+        if (rows.length === 0) {
+            UI.label(ctx, session ? 'NO SCORES THIS SESSION' : 'NO SCORES YET', SCREEN_W / 2, top + 300, UI.DIM, 20);
         } else {
-            // Persistent board (campaign or endless)
-            const board = HighScores.boards[tabKey] || [];
-            ctx.textAlign = 'center';
-
-            if (board.length === 0) {
-                ctx.fillStyle = '#888888';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NO SCORES YET', SCREEN_W / 2, 200);
-            } else {
-                ctx.textAlign = 'left';
-                const isEndless = tabKey === 'endless';
-                const colRank = SCREEN_W / 2 - 310;
-                const colName = SCREEN_W / 2 - 260;
-                const colScore = SCREEN_W / 2 - 170;
-                const colChain = SCREEN_W / 2 + 10;
-                const colInfo = SCREEN_W / 2 + 120;
-                const colDate = SCREEN_W / 2 + 240;
-
-                // Header
-                ctx.fillStyle = '#666666';
-                ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('#', colRank, 170);
-                ctx.fillText('NAME', colName, 170);
-                ctx.fillText('SCORE', colScore, 170);
-                ctx.fillText('CHAIN', colChain, 170);
-                ctx.fillText(isEndless ? 'WAVE' : 'LEVEL', colInfo, 170);
-                ctx.fillText('DATE', colDate, 170);
-
-                board.forEach((entry, i) => {
-                    const ey = 192 + i * 24;
-                    ctx.fillStyle = i === 0 ? '#ffff00' : i < 3 ? '#ffaa00' : '#aaaaaa';
-                    ctx.font = i < 3 ? 'bold 13px Share Tech Mono, Consolas, monospace' : '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText((i + 1).toString(), colRank, ey);
-                    ctx.fillText(entry.initials, colName, ey);
-                    ctx.fillText(entry.score.toLocaleString(), colScore, ey);
-                    ctx.fillText((entry.maxChain || 0).toString(), colChain, ey);
-                    if (isEndless) {
-                        ctx.fillText('W' + (entry.wave || '?'), colInfo, ey);
-                    } else {
-                        const lvlText = (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : '');
-                        ctx.fillText(lvlText, colInfo, ey);
-                    }
-                    ctx.fillStyle = '#666666';
-                    ctx.fillText(entry.date || '', colDate, ey);
-                });
-            }
+            const isEndless = tabKey === 'endless';
+            const cols = session
+                ? [['#', 40], ['NAME', 100], ['SCORE', 200], ['INFO', 460], ['MODE', 620]]
+                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : 'LEVEL', 560], ['DATE', 680]];
+            for (const [h, x] of cols) UI.label(ctx, h, px + x, top + 48, UI.DIM, 14, 'left');
+            rows.forEach((entry, i) => {
+                const ey = top + 90 + i * 50;
+                if (i % 2 === 0) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.03)';
+                    ctx.fillRect(px + 20, ey - 30, pw - 40, 46);
+                }
+                const c = i === 0 ? '#ffee33' : i < 3 ? '#ffaa00' : UI.TEXT;
+                const big = i < 3 ? 22 : 19;
+                const cell = (text, x, col, size) => Neon.text(ctx, text, px + x, ey, col || c, size || big,
+                    { align: 'left', halo: i < 3 ? 0.25 : 0, weight: i < 3 ? 'bold' : '' });
+                cell((i + 1).toString(), 40);
+                cell(entry.initials, 100);
+                cell(entry.score.toLocaleString(), 200);
+                if (session) {
+                    cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?') : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
+                    cell((entry.difficulty || '').toUpperCase(), 620, UI.DIM, 17);
+                } else {
+                    cell((entry.maxChain || 0).toString(), 440);
+                    cell(isEndless ? 'W' + (entry.wave || '?') : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
+                    cell(entry.date || '', 680, UI.DIM, 16);
+                }
+            });
         }
 
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#888888';
-        ctx.font = '14px Share Tech Mono, Consolas, monospace';
-
-        // NC balance
-        ctx.fillStyle = '#ffaa00';
-        ctx.font = '16px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('NEON CREDITS: ' + NeonCredits.balance, SCREEN_W / 2, SCREEN_H - 120);
-
-        ctx.fillStyle = '#667788';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('←→ CHANGE TAB    ESC BACK', SCREEN_W / 2, SCREEN_H - 50);
+        UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, SCREEN_H - 110, '#ffaa00', 19);
+        UI.hint(ctx, '←→ CHANGE TAB    ESC BACK');
     },
 
     drawPause(ctx) {
-        ctx.fillStyle = 'rgba(10, 6, 18, 0.7)';
-        ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#00ffff';
-        ctx.shadowColor = '#00ffff';
-        ctx.shadowBlur = 15;
-        ctx.font = 'bold 40px Share Tech Mono, Consolas, monospace';
-        ctx.fillText('PAUSED', SCREEN_W / 2, 380);
-        ctx.shadowBlur = 0;
+        UI.dim(ctx, 0.62);
+        const cx = SCREEN_W / 2;
+        UI.panel(ctx, cx - 280, 330, 560, 330, UI.CYAN);
+        Neon.text(ctx, 'PAUSED', cx, 405, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
 
         if (Game.pauseConfirm) {
-            // Confirmation dialog
             const action = Game.pauseConfirm === 'restart' ? 'RESTART LEVEL' : 'QUIT TO MENU';
-            ctx.fillStyle = '#ffaa00';
-            ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('ARE YOU SURE?', SCREEN_W / 2, 460);
-            ctx.fillStyle = '#cccccc';
-            ctx.font = '16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(action, SCREEN_W / 2, 490);
-            ctx.fillStyle = '#667788';
-            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-            ctx.fillText('ENTER = YES    ESC = NO', SCREEN_W / 2, 530);
+            Neon.text(ctx, 'ARE YOU SURE?', cx, 480, '#ffaa00', 26);
+            UI.label(ctx, action, cx, 520, UI.TEXT, 19);
+            UI.label(ctx, 'ENTER = YES    ESC = NO', cx, 600, UI.DIM, 16);
         } else {
             this.items = ['RESUME', 'RESTART', 'MAIN MENU'];
-            const startY = 470;
             for (let i = 0; i < this.items.length; i++) {
-                const selected = i === this.selectedIndex;
-                if (selected) {
-                    ctx.fillStyle = '#00ffff';
-                    ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('▸ ' + this.items[i], SCREEN_W / 2, startY + i * 40);
-                } else {
-                    ctx.fillStyle = '#667788';
-                    ctx.font = '16px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText(this.items[i], SCREEN_W / 2, startY + i * 40);
-                }
+                UI.item(ctx, this.items[i], cx, 480 + i * 56, i === this.selectedIndex, { w: 460, size: 24 });
             }
         }
     }
@@ -11077,6 +11132,10 @@ const Game = {
         this.briefingText = level.briefing || '';
         this.briefingTimer = 0;
         this.currentLevelIndex = levelIndex;
+        // Clear the last level's GPU particles/bullets so the briefing backdrop is clean
+        Particles.clear();
+        Enemies.enemyBullets.clear();
+        Player.bullets.clear();
         this.state = 'briefing';
     },
 
@@ -11343,6 +11402,7 @@ const Game = {
 
             case 'briefing':
                 this.briefingTimer += dt;
+                Background.update(dt);   // keep the briefing backdrop moving
                 if (Input.isPressed('confirm') || Input.isPressed('fire') || this.briefingTimer > 8) {
                     Audio.playMenuSelect();
                     const lvlIdx = this.currentLevelIndex;
@@ -11595,58 +11655,9 @@ const Game = {
                 Menu.drawHighScores(ctx);
                 break;
 
-            case 'achievements': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#ffaa00'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#ffaa00'; ctx.shadowBlur = 10;
-                ctx.fillText('ACHIEVEMENTS', SCREEN_W / 2, 70); ctx.shadowBlur = 0;
-                const prog = Achievements.getProgress();
-                ctx.fillStyle = '#aaaaaa'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(prog.unlocked + ' / ' + prog.total + ' UNLOCKED', SCREEN_W / 2, 100);
-                // Grid of achievements
-                const cols = 2;
-                const colW = 400;
-                const startX = SCREEN_W / 2 - colW;
-                const startY = 135;
-                const rowH = 48;
-                Achievements.defs.forEach((def, i) => {
-                    const col = i % cols;
-                    const row = Math.floor(i / cols);
-                    const x = startX + col * colW;
-                    const y = startY + row * rowH;
-                    const done = Achievements.isUnlocked(def.id);
-                    // Background
-                    if (done) {
-                        ctx.fillStyle = 'rgba(255, 170, 0, 0.08)';
-                        ctx.fillRect(x + 5, y, colW - 10, rowH - 4);
-                    }
-                    // Icon
-                    ctx.font = '18px sans-serif';
-                    ctx.textAlign = 'left';
-                    ctx.fillStyle = done ? '#ffffff' : '#333344';
-                    ctx.fillText(def.icon, x + 15, y + 22);
-                    // Name
-                    ctx.font = (done ? 'bold ' : '') + '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillStyle = done ? '#ffaa00' : '#556677';
-                    ctx.fillText(def.name, x + 45, y + 17);
-                    // Description
-                    ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                    ctx.fillStyle = done ? '#999999' : '#445566';
-                    ctx.fillText(def.desc, x + 45, y + 34);
-                    // Reward
-                    ctx.textAlign = 'right';
-                    ctx.fillStyle = done ? '#00ff88' : '#445566';
-                    ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText((done ? '✓ ' : '') + def.reward + ' NC', x + colW - 15, y + 22);
-                });
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('ESC / ENTER TO RETURN', SCREEN_W / 2, SCREEN_H - 40);
+            case 'achievements':
+                Menu.drawAchievements(ctx);
                 break;
-            }
 
             case 'custom_difficulty':
                 CustomDifficulty.draw(ctx);
@@ -11660,81 +11671,21 @@ const Game = {
                 Tutorial.draw(ctx);
                 break;
 
-            case 'level_select': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
-                ctx.fillStyle = '#00ffff'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-                ctx.fillText('SELECT LEVEL', SCREEN_W / 2, 100); ctx.shadowBlur = 0;
-                ctx.fillStyle = '#aaaaaa'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 135);
-                const lvlCount = Campaign.getLevelCount();
-                const startY = 200;
-                for (let i = 0; i <= lvlCount; i++) {
-                    const y = startY + i * 55;
-                    const selected = i === Menu.selectedIndex;
-                    if (i === lvlCount) {
-                        ctx.fillStyle = selected ? '#00ffff' : '#667788';
-                        ctx.font = selected ? 'bold 18px Share Tech Mono, Consolas, monospace' : '16px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText(selected ? '▸ BACK ◂' : 'BACK', SCREEN_W / 2, y);
-                    } else {
-                        const lvl = ALL_LEVELS[i];
-                        const available = Campaign.isLevelAvailable(i, false);
-                        const best = Campaign.getLevelBest(i, GameConfig.difficulty);
-                        if (selected && available) {
-                            ctx.strokeStyle = '#00ffff'; ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 8;
-                            ctx.lineWidth = 1.5; ctx.strokeRect(SCREEN_W / 2 - 320, y - 22, 640, 44); ctx.shadowBlur = 0;
-                        }
-                        // Level name
-                        ctx.textAlign = 'left';
-                        ctx.fillStyle = !available ? '#334455' : selected ? '#ffffff' : '#99aabb';
-                        ctx.font = selected ? 'bold 17px Share Tech Mono, Consolas, monospace' : '15px Share Tech Mono, Consolas, monospace';
-                        const lockText = available ? '' : ' [LOCKED]';
-                        ctx.fillText((i + 1) + ': ' + (lvl ? lvl.name.toUpperCase() : '') + lockText, SCREEN_W / 2 - 300, y);
-                        // Best score (right-aligned)
-                        if (best && available) {
-                            ctx.textAlign = 'right';
-                            ctx.fillStyle = selected ? '#ffff00' : '#888866';
-                            ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                            ctx.fillText(best.score.toLocaleString(), SCREEN_W / 2 + 200, y - 5);
-                            ctx.fillStyle = selected ? '#888888' : '#556655';
-                            ctx.font = '11px Share Tech Mono, Consolas, monospace';
-                            const extras = [];
-                            if (best.maxChain > 0) extras.push('CHAIN:' + best.maxChain);
-                            if (best.perfect) extras.push('★PERFECT');
-                            ctx.fillText(extras.join('  '), SCREEN_W / 2 + 200, y + 10);
-                        } else if (available) {
-                            ctx.textAlign = 'right';
-                            ctx.fillStyle = '#445555';
-                            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-                            ctx.fillText('NO RECORD', SCREEN_W / 2 + 200, y);
-                        }
-                        ctx.textAlign = 'center';
-                    }
-                }
-                ctx.fillStyle = '#667788'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('ESC BACK', SCREEN_W / 2, SCREEN_H - 50);
+            case 'level_select':
+                Menu.drawLevelSelect(ctx);
                 break;
-            }
 
             case 'briefing': {
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620'); grad.addColorStop(1, '#1a0a3e');
-                ctx.fillStyle = grad; ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-                ctx.textAlign = 'center';
+                // The level's backdrop plays in the play area behind the briefing
                 const lvl = ALL_LEVELS[this.currentLevelIndex];
-                ctx.fillStyle = '#888888'; ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('LEVEL ' + (this.currentLevelIndex + 1), SCREEN_W / 2, 350);
-                ctx.fillStyle = '#00ffff'; ctx.font = 'bold 32px Share Tech Mono, Consolas, monospace';
-                ctx.shadowColor = '#00ffff'; ctx.shadowBlur = 10;
-                ctx.fillText(lvl.name.toUpperCase(), SCREEN_W / 2, 390); ctx.shadowBlur = 0;
-                const lines = (this.briefingText || '').split('\n');
-                ctx.fillStyle = '#cccccc'; ctx.font = '15px Share Tech Mono, Consolas, monospace';
-                lines.forEach((line, i) => ctx.fillText(line, SCREEN_W / 2, 440 + i * 24));
-                ctx.fillStyle = '#778899'; ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('PRESS ENTER OR FIRE TO BEGIN', SCREEN_W / 2, 580);
+                Background.bgType = (lvl && lvl.bgType) || 'synthwave';
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                Menu.drawBriefing(ctx);
                 break;
             }
 
@@ -11799,97 +11750,9 @@ const Game = {
                 break;
             }
 
-            case 'campaign_complete': {
-                // Animated celebration background
-                const grad = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-                grad.addColorStop(0, '#0a0620');
-                grad.addColorStop(0.5, '#1a0a3e');
-                grad.addColorStop(1, '#0a0620');
-                ctx.fillStyle = grad;
-                ctx.fillRect(0, 0, SCREEN_W, SCREEN_H);
-
-                // Animated particles in background
-                const cTime = Game.briefingTimer;
-                for (let i = 0; i < 30; i++) {
-                    const px = (Math.sin(cTime * 0.5 + i * 1.7) * 0.5 + 0.5) * SCREEN_W;
-                    const py = (Math.cos(cTime * 0.3 + i * 2.3) * 0.5 + 0.5) * SCREEN_H;
-                    const hue = (cTime * 30 + i * 12) % 360;
-                    ctx.fillStyle = `hsla(${hue}, 100%, 70%, 0.15)`;
-                    ctx.beginPath();
-                    ctx.arc(px, py, 2 + Math.sin(cTime + i) * 1.5, 0, Math.PI * 2);
-                    ctx.fill();
-                }
-
-                ctx.textAlign = 'center';
-                const isSecret = Game.currentLevelIndex === 5;
-
-                // Title
-                const titleHue = (cTime * 40) % 360;
-                ctx.fillStyle = isSecret ? `hsl(${titleHue}, 100%, 70%)` : '#ffff00';
-                ctx.shadowColor = isSecret ? `hsl(${titleHue}, 100%, 50%)` : '#ffff00';
-                ctx.shadowBlur = 20 + Math.sin(cTime * 3) * 8;
-                ctx.font = 'bold 48px Share Tech Mono, Consolas, monospace';
-                ctx.fillText(isSecret ? 'SIGNAL TERMINATED' : 'CAMPAIGN COMPLETE', SCREEN_W / 2, 250);
-                ctx.shadowBlur = 0;
-
-                // Subtitle
-                ctx.fillStyle = '#cccccc';
-                ctx.font = '18px Share Tech Mono, Consolas, monospace';
-                if (isSecret) {
-                    ctx.fillText('You silenced the relay. The void is quiet...', SCREEN_W / 2, 300);
-                    ctx.fillText('For now.', SCREEN_W / 2, 325);
-                } else {
-                    ctx.fillText('The threat has been neutralized.', SCREEN_W / 2, 300);
-                    ctx.fillText('Outstanding work, pilot.', SCREEN_W / 2, 325);
-                }
-
-                // Stats
-                ctx.fillStyle = '#888888';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 390);
-
-                ctx.fillStyle = '#00ffff';
-                ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('TOTAL SCORE: ' + Scoring.score.toLocaleString(), SCREEN_W / 2, 430);
-
-                ctx.fillStyle = '#ffaa00';
-                ctx.font = '16px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('NEON CREDITS: ' + NeonCredits.balance, SCREEN_W / 2, 465);
-
-                // Secret level hint
-                if (!isSecret && !Campaign.secretUnlocked) {
-                    ctx.fillStyle = '#555566';
-                    ctx.font = '13px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('Something else is out there... beat all levels on Normal to find it.', SCREEN_W / 2, 520);
-                } else if (!isSecret && Campaign.secretUnlocked) {
-                    ctx.fillStyle = '#ff00ff';
-                    ctx.font = 'bold 14px Share Tech Mono, Consolas, monospace';
-                    ctx.fillText('SECRET LEVEL UNLOCKED: SIGNAL LOST', SCREEN_W / 2, 520);
-                }
-
-                // Thank you
-                ctx.fillStyle = '#667788';
-                ctx.font = '14px Share Tech Mono, Consolas, monospace';
-                ctx.fillText('Thank you for playing Neon Storm \u03b2', SCREEN_W / 2, 580);
-                ctx.fillText('This is a beta build \u2014 more to come!', SCREEN_W / 2, 605);
-
-                // Menu options
-                const items = ['PLAY AGAIN', 'MAIN MENU'];
-                const startY = 680;
-                for (let i = 0; i < items.length; i++) {
-                    const selected = i === Menu.selectedIndex;
-                    if (selected) {
-                        ctx.fillStyle = '#00ffff';
-                        ctx.font = 'bold 20px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText('▸ ' + items[i] + ' ◂', SCREEN_W / 2, startY + i * 45);
-                    } else {
-                        ctx.fillStyle = '#667788';
-                        ctx.font = '16px Share Tech Mono, Consolas, monospace';
-                        ctx.fillText(items[i], SCREEN_W / 2, startY + i * 45);
-                    }
-                }
+            case 'campaign_complete':
+                Menu.drawCampaignComplete(ctx);
                 break;
-            }
         }
 
         // Transition overlay — always drawn on top of everything

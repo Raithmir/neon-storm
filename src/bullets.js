@@ -46,10 +46,13 @@ class BulletPool {
             b._ps = new PIXI.Particle({ texture: fx.shadow, x: b.x, y: b.y, anchorX: 0.5, anchorY: 0.5, tint: 0xffffff, alpha: 1 });
             Renderer.bulletShadowLayer.addParticle(b._ps);
         } else {
-            b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : 'streak');
-            // Laser shots are long soft glows that overlap into one continuous beam
-            body = b._shape === 'missile' ? fx.missile : (b._shape === 'beam' ? fx.glow : fx.streak);
-            core = b._shape === 'missile' || b._shape === 'beam' ? fx.core : fx.streak;
+            // Regular shots take the Hangar bullet style; missiles and laser keep their own
+            const style = { plasma: 'plasma', retro: 'pixel', shards: 'shard' }[Hangar.equipped.bullet] || 'streak';
+            b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : style);
+            const bodies = { missile: fx.missile, beam: fx.glow, plasma: fx.orb, pixel: fx.pixel, shard: fx.needle, streak: fx.streak };
+            const cores = { missile: fx.core, beam: fx.core, plasma: fx.core, pixel: fx.pixel, shard: fx.core, streak: fx.streak };
+            body = bodies[b._shape];
+            core = cores[b._shape];
             ay = b._shape === 'streak' ? 0.18 : 0.5;   // streak head sits on the bullet
         }
         b._p = new PIXI.Particle({ texture: body, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: b._hex, alpha: 0.9 });
@@ -98,6 +101,19 @@ class BulletPool {
             p.scaleX = p.scaleY = r * 0.5;
             pc.scaleX = pc.scaleY = r * 0.12;
             pc.x = b.x - b.vx * 0.012; pc.y = b.y - b.vy * 0.012;   // hot exhaust at the tail
+        } else if (b._shape === 'plasma') {
+            const k = 1 + Math.sin(b.age * 30) * 0.12;
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.17 * k;
+            pc.scaleX = pc.scaleY = r * 0.1;
+        } else if (b._shape === 'pixel') {
+            p.rotation = pc.rotation = 0;
+            p.scaleX = p.scaleY = r * 0.36;
+            pc.scaleX = pc.scaleY = r * 0.14;
+        } else if (b._shape === 'shard') {
+            p.rotation = pc.rotation = b.age * 14;
+            p.scaleX = r * 0.32; p.scaleY = r * 0.1;
+            pc.scaleX = pc.scaleY = r * 0.06;
         } else if (b._shape === 'beam') {
             p.scaleX = r * 0.075; p.scaleY = 2.4;
             pc.scaleX = r * 0.05; pc.scaleY = 11;
