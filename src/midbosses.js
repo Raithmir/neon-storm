@@ -515,33 +515,7 @@ const MidBoss = {
     },
 
     draw(ctx, e, flash) {
-        const r = e.radius;
-        if (Neon.on() && this._neon[e.type]) { this._neon[e.type].call(this, ctx, e, r, flash); return; }
-        const t = e.moveTimer;
-        // Hull: armoured hexagon
-        ctx.fillStyle = flash ? '#ffffff' : e.color;
-        ctx.beginPath();
-        for (let j = 0; j < 6; j++) {
-            const a = (Math.PI * 2 / 6) * j + Math.PI / 6;
-            ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.8);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = flash ? '#ffffff' : e.accent;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        // Rotating weapon ring
-        ctx.strokeStyle = e.accent;
-        ctx.globalAlpha = 0.6;
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 0.65, t * 2, t * 2 + Math.PI * 1.4);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        // Core
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 0.22 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
-        ctx.fill();
+        this._neon[e.type].call(this, ctx, e, e.radius, flash);
     },
 
     // Top-of-screen HP bar and timer (same place as the boss bar; they never overlap)

@@ -14,21 +14,14 @@
 //    4. Things move: spin rotors, pulse cores, flicker engines, and
 //       flash + squash on hit.
 //
-//  Set Settings.values.graphicsStyle = 'classic' to fall back to the
-//  original flat-fill art for comparison.
-//
 //  Sprite atlas: the static parts of each entity (hulls, panel lines,
 //  sockets) are drawn once into a shared atlas canvas by Neon.sprite()
 //  and then stamped with drawImage every frame. Only the animated bits
 //  (rotors, lights, flames, eyes) are drawn live. Sprite keys name the
-//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|0'; a
+//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|f'; a
 //  hand-drawn image for a key could later replace the baked one.
 // ============================================================
 const Neon = {
-    on() {
-        return typeof Settings === 'undefined' || Settings.values.graphicsStyle !== 'classic';
-    },
-
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)

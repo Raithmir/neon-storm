@@ -215,7 +215,6 @@ const Settings = {
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
-        graphicsStyle: 'neon',  // 'neon', 'classic'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -223,7 +222,6 @@ const Settings = {
         { key: 'sfxVolume', label: 'SFX VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
-        { key: 'graphicsStyle', label: 'GRAPHICS', type: 'cycle', options: ['neon', 'classic'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },

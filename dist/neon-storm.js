@@ -1754,7 +1754,6 @@ const Settings = {
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
-        graphicsStyle: 'neon',  // 'neon', 'classic'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -1762,7 +1761,6 @@ const Settings = {
         { key: 'sfxVolume', label: 'SFX VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
-        { key: 'graphicsStyle', label: 'GRAPHICS', type: 'cycle', options: ['neon', 'classic'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },
@@ -2747,21 +2745,14 @@ const Tutorial = {
 //    4. Things move: spin rotors, pulse cores, flicker engines, and
 //       flash + squash on hit.
 //
-//  Set Settings.values.graphicsStyle = 'classic' to fall back to the
-//  original flat-fill art for comparison.
-//
 //  Sprite atlas: the static parts of each entity (hulls, panel lines,
 //  sockets) are drawn once into a shared atlas canvas by Neon.sprite()
 //  and then stamped with drawImage every frame. Only the animated bits
 //  (rotors, lights, flames, eyes) are drawn live. Sprite keys name the
-//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|0'; a
+//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|f'; a
 //  hand-drawn image for a key could later replace the baked one.
 // ============================================================
 const Neon = {
-    on() {
-        return typeof Settings === 'undefined' || Settings.values.graphicsStyle !== 'classic';
-    },
-
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
@@ -4544,276 +4535,9 @@ const Enemies = {
 
             // Flash on hit, or random glitch flash in Level 6
             const glitchFlash = isGlitchLevel && Math.random() < 0.02;
-            if (e.flashTimer > 0 || glitchFlash) {
-                ctx.fillStyle = glitchFlash ? '#ff00ff' : '#ffffff';
-            } else {
-                ctx.fillStyle = e.color;
-            }
-
-            // Draw based on type
-            const r = e.radius;
             const flash = e.flashTimer > 0 || glitchFlash;
-            const accent = flash ? '#ffffff' : e.accent;
-            const neonDraw = Neon.on() && this._neon[e.type];
-            if (neonDraw) neonDraw.call(this, ctx, e, r, flash);
-            else switch (e.type) {
-                case 'scout_drone':
-                    // Small quad-rotor drone with propeller arms
-                    ctx.beginPath();
-                    ctx.moveTo(0, -r * 0.6);
-                    ctx.lineTo(r * 0.3, -r * 0.2);
-                    ctx.lineTo(r * 0.3, r * 0.3);
-                    ctx.lineTo(0, r * 0.5);
-                    ctx.lineTo(-r * 0.3, r * 0.3);
-                    ctx.lineTo(-r * 0.3, -r * 0.2);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Rotor arms
-                    ctx.strokeStyle = accent;
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    ctx.moveTo(-r * 0.7, -r * 0.3); ctx.lineTo(r * 0.7, -r * 0.3);
-                    ctx.stroke();
-                    // Rotor circles
-                    ctx.lineWidth = 1;
-                    ctx.globalAlpha = 0.4;
-                    ctx.beginPath(); ctx.arc(-r * 0.7, -r * 0.3, r * 0.3, 0, Math.PI * 2); ctx.stroke();
-                    ctx.beginPath(); ctx.arc(r * 0.7, -r * 0.3, r * 0.3, 0, Math.PI * 2); ctx.stroke();
-                    ctx.globalAlpha = 1;
-                    // Eye/sensor
-                    ctx.fillStyle = '#ff4444';
-                    ctx.beginPath(); ctx.arc(0, 0, 2, 0, Math.PI * 2); ctx.fill();
-                    break;
-
-                case 'gunship':
-                    // Attack helicopter — wide body, stub wings, cannon
-                    ctx.beginPath();
-                    ctx.moveTo(0, -r * 0.8);        // Nose
-                    ctx.lineTo(r * 0.4, -r * 0.3);
-                    ctx.lineTo(r * 0.9, 0);          // Right wing
-                    ctx.lineTo(r * 0.85, r * 0.2);
-                    ctx.lineTo(r * 0.4, r * 0.1);
-                    ctx.lineTo(r * 0.35, r * 0.6);  // Right tail
-                    ctx.lineTo(r * 0.6, r * 0.8);   // Right stabiliser
-                    ctx.lineTo(r * 0.3, r * 0.7);
-                    ctx.lineTo(-r * 0.3, r * 0.7);
-                    ctx.lineTo(-r * 0.6, r * 0.8);  // Left stabiliser
-                    ctx.lineTo(-r * 0.35, r * 0.6);
-                    ctx.lineTo(-r * 0.4, r * 0.1);
-                    ctx.lineTo(-r * 0.85, r * 0.2);
-                    ctx.lineTo(-r * 0.9, 0);         // Left wing
-                    ctx.lineTo(-r * 0.4, -r * 0.3);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
-                    // Under-nose cannon
-                    ctx.fillStyle = accent;
-                    ctx.fillRect(-2, r * 0.7, 4, r * 0.25);
-                    // Cockpit
-                    ctx.fillStyle = flash ? '#ffffff' : '#442200';
-                    ctx.beginPath(); ctx.ellipse(0, -r * 0.4, r * 0.15, r * 0.2, 0, 0, Math.PI * 2); ctx.fill();
-                    break;
-
-                case 'missile_turret':
-                    // Rotating turret platform — base + barrel
-                    // Base platform
-                    ctx.beginPath();
-                    ctx.moveTo(-r * 0.8, -r * 0.4);
-                    ctx.lineTo(r * 0.8, -r * 0.4);
-                    ctx.lineTo(r * 0.6, r * 0.4);
-                    ctx.lineTo(-r * 0.6, r * 0.4);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.stroke();
-                    // Turret dome
-                    ctx.beginPath(); ctx.arc(0, -r * 0.1, r * 0.35, Math.PI, 0); ctx.fill();
-                    // Barrel
-                    ctx.fillStyle = accent;
-                    ctx.fillRect(-2.5, r * 0.2, 5, r * 0.6);
-                    // Barrel tip
-                    ctx.fillRect(-4, r * 0.75, 8, 3);
-                    // Side mounting brackets
-                    ctx.fillRect(-r * 0.7, -r * 0.15, r * 0.2, r * 0.3);
-                    ctx.fillRect(r * 0.5, -r * 0.15, r * 0.2, r * 0.3);
-                    break;
-
-                case 'phase_shifter':
-                    // Alien crystal / energy form — rotating prism
-                    ctx.rotate(e.moveTimer * 2);
-                    // Outer prism
-                    ctx.beginPath();
-                    for (let j = 0; j < 5; j++) {
-                        const a = (Math.PI * 2 / 5) * j - Math.PI / 2;
-                        const pr = j % 2 === 0 ? r : r * 0.5;
-                        ctx.lineTo(Math.cos(a) * pr, Math.sin(a) * pr);
-                    }
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = '#ff88ff'; ctx.lineWidth = 1.5; ctx.stroke();
-                    // Inner energy core
-                    ctx.fillStyle = flash ? '#ffffff' : '#ffffff';
-                    ctx.globalAlpha = 0.5 + Math.sin(e.moveTimer * 5) * 0.3;
-                    ctx.beginPath(); ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2); ctx.fill();
-                    ctx.globalAlpha = 1;
-                    break;
-
-                case 'shielded_cruiser':
-                    // Heavy cruiser — wide wedge with armoured plates
-                    ctx.beginPath();
-                    ctx.moveTo(0, -r * 0.7);
-                    ctx.lineTo(r * 0.5, -r * 0.5);
-                    ctx.lineTo(r * 0.8, -r * 0.1);
-                    ctx.lineTo(r * 0.7, r * 0.5);
-                    ctx.lineTo(r * 0.3, r * 0.7);
-                    ctx.lineTo(-r * 0.3, r * 0.7);
-                    ctx.lineTo(-r * 0.7, r * 0.5);
-                    ctx.lineTo(-r * 0.8, -r * 0.1);
-                    ctx.lineTo(-r * 0.5, -r * 0.5);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.stroke();
-                    // Armour plate lines
-                    ctx.strokeStyle = flash ? '#fff' : '#663399';
-                    ctx.lineWidth = 1;
-                    ctx.beginPath(); ctx.moveTo(-r * 0.6, 0); ctx.lineTo(r * 0.6, 0); ctx.stroke();
-                    ctx.beginPath(); ctx.moveTo(-r * 0.4, r * 0.35); ctx.lineTo(r * 0.4, r * 0.35); ctx.stroke();
-                    // Bridge
-                    ctx.fillStyle = flash ? '#ffffff' : '#220044';
-                    ctx.beginPath(); ctx.ellipse(0, -r * 0.3, r * 0.2, r * 0.12, 0, 0, Math.PI * 2); ctx.fill();
-                    // Shield arc
-                    if (e.shieldHp > 0) {
-                        ctx.strokeStyle = `rgba(68, 136, 255, ${0.5 + Math.sin(e.moveTimer * 5) * 0.3})`;
-                        ctx.lineWidth = 3; 
-                        ctx.beginPath(); ctx.arc(0, 0, r + 6, e.shieldAngle, e.shieldAngle + Math.PI); ctx.stroke();
-                        
-                    }
-                    break;
-
-                case 'bomber':
-                    // Heavy bomber — wide fuselage, bomb bay doors
-                    ctx.beginPath();
-                    ctx.moveTo(0, -r * 0.5);
-                    ctx.lineTo(r * 0.4, -r * 0.4);
-                    ctx.lineTo(r * 0.9, -r * 0.1);   // Right wing
-                    ctx.lineTo(r * 0.8, r * 0.2);
-                    ctx.lineTo(r * 0.4, r * 0.3);
-                    ctx.lineTo(r * 0.35, r * 0.6);
-                    ctx.lineTo(-r * 0.35, r * 0.6);
-                    ctx.lineTo(-r * 0.4, r * 0.3);
-                    ctx.lineTo(-r * 0.8, r * 0.2);
-                    ctx.lineTo(-r * 0.9, -r * 0.1);  // Left wing
-                    ctx.lineTo(-r * 0.4, -r * 0.4);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
-                    // Bomb bay doors (open/close animation)
-                    ctx.fillStyle = flash ? '#ffffff' : '#661100';
-                    const bayOpen = Math.sin(e.moveTimer * 2) * 0.3;
-                    ctx.fillRect(-r * 0.25, r * 0.2, r * 0.2 - bayOpen * 5, r * 0.35);
-                    ctx.fillRect(bayOpen * 5 + r * 0.05, r * 0.2, r * 0.2 - bayOpen * 5, r * 0.35);
-                    // Engines
-                    ctx.fillStyle = '#ff4400';
-                    ctx.globalAlpha = 0.6;
-                    ctx.fillRect(-r * 0.3, r * 0.55, 5, 4 + Math.random() * 3);
-                    ctx.fillRect(r * 0.15, r * 0.55, 5, 4 + Math.random() * 3);
-                    ctx.globalAlpha = 1;
-                    break;
-
-                case 'sniper':
-                    // Long-barrelled sniper platform
-                    // Body
-                    ctx.beginPath();
-                    ctx.moveTo(-r * 0.5, -r * 0.3);
-                    ctx.lineTo(r * 0.5, -r * 0.3);
-                    ctx.lineTo(r * 0.4, r * 0.3);
-                    ctx.lineTo(-r * 0.4, r * 0.3);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1; ctx.stroke();
-                    // Long barrel
-                    ctx.fillStyle = accent;
-                    ctx.fillRect(-1.5, r * 0.2, 3, r * 0.8);
-                    // Scope lens
-                    ctx.fillStyle = flash ? '#ffffff' : '#ffff00';
-                    
-                    ctx.beginPath(); ctx.arc(0, 0, 3, 0, Math.PI * 2); ctx.fill();
-                    
-                    // Targeting laser preview
-                    if (e.fireTimer < 0.8) {
-                        const laserAlpha = 0.1 + (0.8 - e.fireTimer) * 0.4;
-                        ctx.strokeStyle = `rgba(255, 255, 0, ${laserAlpha})`;
-                        ctx.lineWidth = e.fireTimer < 0.3 ? 2 : 1;
-                        ctx.beginPath(); ctx.moveTo(0, 0);
-                        ctx.lineTo(Math.cos(e.aimAngle) * 300, Math.sin(e.aimAngle) * 300);
-                        ctx.stroke();
-                    }
-                    break;
-
-                case 'carrier':
-                    // Large mothership with hangar bay
-                    ctx.beginPath();
-                    ctx.moveTo(0, -r * 0.6);
-                    ctx.lineTo(r * 0.6, -r * 0.4);
-                    ctx.lineTo(r * 0.9, 0);
-                    ctx.lineTo(r * 0.8, r * 0.5);
-                    ctx.lineTo(r * 0.4, r * 0.7);
-                    ctx.lineTo(-r * 0.4, r * 0.7);
-                    ctx.lineTo(-r * 0.8, r * 0.5);
-                    ctx.lineTo(-r * 0.9, 0);
-                    ctx.lineTo(-r * 0.6, -r * 0.4);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.stroke();
-                    // Hangar bay opening
-                    ctx.fillStyle = flash ? '#ffffff' : '#220800';
-                    ctx.beginPath();
-                    ctx.moveTo(-r * 0.25, r * 0.3);
-                    ctx.lineTo(r * 0.25, r * 0.3);
-                    ctx.lineTo(r * 0.2, r * 0.65);
-                    ctx.lineTo(-r * 0.2, r * 0.65);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Hangar bay lights
-                    ctx.fillStyle = '#ff8800';
-                    ctx.globalAlpha = 0.4 + Math.sin(e.moveTimer * 3) * 0.3;
-                    ctx.fillRect(-r * 0.15, r * 0.55, r * 0.3, 2);
-                    ctx.globalAlpha = 1;
-                    // Bridge windows
-                    ctx.fillStyle = flash ? '#ffffff' : '#884400';
-                    ctx.fillRect(-r * 0.15, -r * 0.45, r * 0.3, r * 0.1);
-                    break;
-
-                case 'shield_wall':
-                    // Energy shield panel — thin, wide, with energy field
-                    ctx.fillRect(-r, -r * 0.3, r * 2, r * 0.6);
-                    // Energy field effect
-                    ctx.fillStyle = `rgba(68, 136, 255, ${0.3 + Math.sin(e.moveTimer * 6) * 0.15})`;
-                    ctx.fillRect(-r * 0.9, -r * 0.25, r * 1.8, r * 0.5);
-                    // Border frame
-                    ctx.strokeStyle = accent;
-                    ctx.lineWidth = 2;
-                    ctx.strokeRect(-r, -r * 0.3, r * 2, r * 0.6);
-                    // Corner nodes
-                    ctx.fillStyle = '#ffffff';
-                    ctx.globalAlpha = 0.7;
-                    ctx.beginPath(); ctx.arc(-r, -r * 0.3, 2.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.beginPath(); ctx.arc(r, -r * 0.3, 2.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.beginPath(); ctx.arc(-r, r * 0.3, 2.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.beginPath(); ctx.arc(r, r * 0.3, 2.5, 0, Math.PI * 2); ctx.fill();
-                    ctx.globalAlpha = 1;
-                    break;
-
-                default:
-                    if (e.midboss) {
-                        MidBoss.draw(ctx, e, flash);
-                        break;
-                    }
-                    // Fallback circle
-                    ctx.beginPath();
-                    ctx.arc(0, 0, e.radius, 0, Math.PI * 2);
-                    ctx.fill();
-                    break;
-            }
+            if (MidBoss.isType(e.type)) MidBoss.draw(ctx, e, flash);
+            else this._neon[e.type].call(this, ctx, e, e.radius, flash);
 
             // HP bar for tough enemies (mid-bosses use the top-of-screen bar)
             if (e.maxHp > 2 && !e.midboss) {
@@ -4969,138 +4693,7 @@ const PowerUps = {
 
             ctx.save();
             ctx.translate(p.x, p.y + bob);
-            if (Neon.on()) {
-                this._drawNeon(ctx, p, pulse, rot);
-                ctx.restore();
-                continue;
-            }
-
-            // Outer pulsing ring
-            ctx.strokeStyle = p.color;
-            
-            ctx.lineWidth = 1.5;
-            ctx.globalAlpha = 0.3 + Math.sin(p.bobTimer * 2) * 0.15;
-            ctx.beginPath();
-            ctx.arc(0, 0, p.radius + 5 + Math.sin(p.bobTimer * 1.5) * 2, 0, Math.PI * 2);
-            ctx.stroke();
-
-            // Inner filled hexagon background
-            ctx.globalAlpha = 0.5 * pulse;
-            ctx.fillStyle = p.color;
-            ctx.beginPath();
-            for (let j = 0; j < 6; j++) {
-                const a = (Math.PI * 2 / 6) * j + rot * 0.3;
-                const r = p.radius;
-                ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
-            }
-            ctx.closePath();
-            ctx.fill();
-
-            // Weapon icon — drawn in white over the colored background
-            ctx.globalAlpha = 1;
-            
-
-            switch (p.type) {
-                case 'spread':
-                    // Fan of lines spreading outward
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.lineWidth = 2;
-                    for (let j = -2; j <= 2; j++) {
-                        const a = -Math.PI / 2 + j * 0.3;
-                        ctx.beginPath();
-                        ctx.moveTo(0, 2);
-                        ctx.lineTo(Math.cos(a) * 9, Math.sin(a) * 9);
-                        ctx.stroke();
-                    }
-                    // Small dots at tips
-                    ctx.fillStyle = '#ffffff';
-                    for (let j = -2; j <= 2; j++) {
-                        const a = -Math.PI / 2 + j * 0.3;
-                        ctx.beginPath();
-                        ctx.arc(Math.cos(a) * 9, Math.sin(a) * 9, 1.2, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                    break;
-
-                case 'homing':
-                    // Missile shape — pointed nose, fins
-                    ctx.fillStyle = '#ffffff';
-                    ctx.beginPath();
-                    ctx.moveTo(0, -8);  // Nose
-                    ctx.lineTo(3, -2);
-                    ctx.lineTo(3, 5);
-                    ctx.lineTo(6, 8);   // Right fin
-                    ctx.lineTo(3, 6);
-                    ctx.lineTo(-3, 6);
-                    ctx.lineTo(-6, 8);  // Left fin
-                    ctx.lineTo(-3, 5);
-                    ctx.lineTo(-3, -2);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Exhaust
-                    ctx.fillStyle = p.color;
-                    ctx.globalAlpha = 0.6 + Math.sin(p.bobTimer * 8) * 0.3;
-                    ctx.beginPath();
-                    ctx.moveTo(-2, 6);
-                    ctx.lineTo(0, 10 + Math.sin(p.bobTimer * 8) * 2);
-                    ctx.lineTo(2, 6);
-                    ctx.fill();
-                    break;
-
-                case 'laser':
-                    // Vertical beam with glow
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(-1.5, -9, 3, 18);
-                    // Side glow bars
-                    ctx.globalAlpha = 0.5;
-                    ctx.fillStyle = p.color;
-                    ctx.fillRect(-4, -7, 2, 14);
-                    ctx.fillRect(2, -7, 2, 14);
-                    // Bright center point
-                    ctx.globalAlpha = 1;
-                    ctx.fillStyle = '#ffffff';
-                    ctx.beginPath();
-                    ctx.arc(0, -9, 2, 0, Math.PI * 2);
-                    ctx.fill();
-                    break;
-
-                case 'drone':
-                    // Orbiting dots around center
-                    ctx.fillStyle = '#ffffff';
-                    ctx.beginPath();
-                    ctx.arc(0, 0, 2.5, 0, Math.PI * 2);
-                    ctx.fill();
-                    // Orbiting satellites
-                    for (let j = 0; j < 3; j++) {
-                        const a = (Math.PI * 2 / 3) * j + rot * 2;
-                        const ox = Math.cos(a) * 6;
-                        const oy = Math.sin(a) * 6;
-                        ctx.fillStyle = '#ffffff';
-                        ctx.beginPath();
-                        ctx.arc(ox, oy, 1.8, 0, Math.PI * 2);
-                        ctx.fill();
-                    }
-                    // Orbit ring
-                    ctx.strokeStyle = '#ffffff';
-                    ctx.globalAlpha = 0.3;
-                    ctx.lineWidth = 0.8;
-                    ctx.beginPath();
-                    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-                    ctx.stroke();
-                    break;
-            }
-
-            // Rotating corner sparkles
-            ctx.globalAlpha = 0.6;
-            ctx.fillStyle = '#ffffff';
-            for (let j = 0; j < 4; j++) {
-                const a = rot + (Math.PI / 2) * j;
-                const sparkR = p.radius + 3;
-                ctx.beginPath();
-                ctx.arc(Math.cos(a) * sparkR, Math.sin(a) * sparkR, 1, 0, Math.PI * 2);
-                ctx.fill();
-            }
-
+            this._drawNeon(ctx, p, pulse, rot);
             ctx.restore();
         }
     },
@@ -5627,33 +5220,7 @@ const MidBoss = {
     },
 
     draw(ctx, e, flash) {
-        const r = e.radius;
-        if (Neon.on() && this._neon[e.type]) { this._neon[e.type].call(this, ctx, e, r, flash); return; }
-        const t = e.moveTimer;
-        // Hull: armoured hexagon
-        ctx.fillStyle = flash ? '#ffffff' : e.color;
-        ctx.beginPath();
-        for (let j = 0; j < 6; j++) {
-            const a = (Math.PI * 2 / 6) * j + Math.PI / 6;
-            ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r * 0.8);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.strokeStyle = flash ? '#ffffff' : e.accent;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        // Rotating weapon ring
-        ctx.strokeStyle = e.accent;
-        ctx.globalAlpha = 0.6;
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 0.65, t * 2, t * 2 + Math.PI * 1.4);
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        // Core
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(0, 0, r * 0.22 + Math.sin(t * 6) * 1.5, 0, Math.PI * 2);
-        ctx.fill();
+        this._neon[e.type].call(this, ctx, e, e.radius, flash);
     },
 
     // Top-of-screen HP bar and timer (same place as the boss bar; they never overlap)
@@ -7588,291 +7155,9 @@ const Boss = {
         // Dynamic light — boss core glow (brighter during flash)
         Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
 
-        // Core body
-        ctx.fillStyle = mainColor;
-
-        // Type-specific body shapes
-        const r = this.radius;
-        const neonDraw = Neon.on() && this._neon[this.bossType];
-        if (neonDraw) neonDraw.call(this, ctx, r, this.colors[this.phase - 1] || '#ff4444', flash);
-        else switch (this.bossType) {
-            case 'furnace': {
-                // Industrial war machine — heavy armoured hull, smokestacks, cannons
-                // Main hull
-                ctx.beginPath();
-                ctx.moveTo(-r * 0.8, -r * 0.7);
-                ctx.lineTo(r * 0.8, -r * 0.7);
-                ctx.lineTo(r * 0.9, -r * 0.2);
-                ctx.lineTo(r * 0.7, r * 0.6);
-                ctx.lineTo(-r * 0.7, r * 0.6);
-                ctx.lineTo(-r * 0.9, -r * 0.2);
-                ctx.closePath();
-                ctx.fill();
-                ctx.strokeStyle = flash ? '#fff' : '#ff8844';
-                ctx.lineWidth = 2; ctx.stroke();
-                // Armour plates
-                ctx.strokeStyle = flash ? '#fff' : '#884422';
-                ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.moveTo(-r * 0.7, -r * 0.2); ctx.lineTo(r * 0.7, -r * 0.2); ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(-r * 0.6, r * 0.2); ctx.lineTo(r * 0.6, r * 0.2); ctx.stroke();
-                // Smokestacks
-                ctx.fillStyle = flash ? '#ffffff' : '#663300';
-                ctx.fillRect(-r * 0.7, -r * 1.0, r * 0.2, r * 0.35);
-                ctx.fillRect(r * 0.5, -r * 1.0, r * 0.2, r * 0.35);
-                // Smoke
-                ctx.fillStyle = `rgba(100, 50, 0, ${0.3 + Math.sin(this.moveTimer * 2) * 0.15})`;
-                ctx.beginPath(); ctx.arc(-r * 0.6, -r * 1.1, 5 + Math.sin(this.moveTimer * 3) * 2, 0, Math.PI * 2); ctx.fill();
-                ctx.beginPath(); ctx.arc(r * 0.6, -r * 1.1, 5 + Math.cos(this.moveTimer * 3) * 2, 0, Math.PI * 2); ctx.fill();
-                // Side cannons
-                ctx.fillStyle = mainColor;
-                ctx.fillRect(-r * 1.1, -r * 0.1, r * 0.3, r * 0.15);
-                ctx.fillRect(r * 0.8, -r * 0.1, r * 0.3, r * 0.15);
-                // Central cannon
-                ctx.fillRect(-r * 0.08, r * 0.5, r * 0.16, r * 0.4);
-                ctx.fillRect(-r * 0.15, r * 0.85, r * 0.3, r * 0.08);
-                // Furnace glow (core)
-                ctx.fillStyle = '#ff2200';
-                ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 4) * 0.3;
-                ctx.beginPath(); ctx.arc(0, 0, r * 0.25, 0, Math.PI * 2); ctx.fill();
-                break;
-            }
-            case 'leviathan': {
-                // Organic creature — segmented body, multiple eyes, animated tentacles
-                // Main body segments
-                ctx.beginPath(); ctx.ellipse(0, 0, r * 0.85, r * 0.6, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.beginPath(); ctx.ellipse(0, -r * 0.15, r * 0.65, r * 0.45, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.strokeStyle = flash ? '#fff' : '#44ccaa'; ctx.lineWidth = 1.5; ctx.stroke();
-                // Outer membrane
-                ctx.strokeStyle = `rgba(0, 200, 150, 0.3)`;
-                ctx.lineWidth = 1;
-                ctx.beginPath(); ctx.ellipse(0, 0, r * 0.95, r * 0.7, 0, 0, Math.PI * 2); ctx.stroke();
-                // Tentacles (6, animated)
-                for (let t = 0; t < 6; t++) {
-                    const ta = (Math.PI * 2 / 6) * t + this.moveTimer * 0.4;
-                    const wave = Math.sin(this.moveTimer * 2.5 + t * 1.2);
-                    ctx.strokeStyle = `rgba(0, 255, 170, ${0.35 + Math.sin(this.moveTimer * 3 + t) * 0.15})`;
-                    ctx.lineWidth = 2.5 - t * 0.1;
-                    ctx.beginPath();
-                    const sx = Math.cos(ta) * r * 0.7, sy = Math.sin(ta) * r * 0.5;
-                    ctx.moveTo(sx, sy);
-                    ctx.quadraticCurveTo(
-                        Math.cos(ta) * r * 1.3 + wave * 15, Math.sin(ta) * r * 1.0 + wave * 10,
-                        Math.cos(ta + 0.2 + wave * 0.1) * r * 1.8, Math.sin(ta + 0.2 + wave * 0.1) * r * 1.4
-                    );
-                    ctx.stroke();
-                }
-                // Eyes (3)
-                const eyePositions = [[-r * 0.25, -r * 0.25], [r * 0.25, -r * 0.25], [0, -r * 0.05]];
-                for (const [ex, ey] of eyePositions) {
-                    ctx.fillStyle = flash ? '#ffffff' : '#001a10';
-                    ctx.beginPath(); ctx.ellipse(ex, ey, r * 0.12, r * 0.08, 0, 0, Math.PI * 2); ctx.fill();
-                    ctx.fillStyle = '#00ffaa';
-                    ctx.beginPath(); ctx.arc(ex, ey, r * 0.04, 0, Math.PI * 2); ctx.fill();
-                }
-                break;
-            }
-            case 'interceptor_duo': {
-                // Twin fighter ships — each with wings and engines
-                const sep = this.phase === 1 ? 45 : 18;
-                for (let s = -1; s <= 1; s += 2) {
-                    const ox = s * sep;
-                    ctx.fillStyle = mainColor;
-                    // Fighter body
-                    ctx.beginPath();
-                    ctx.moveTo(ox, -r * 0.7);
-                    ctx.lineTo(ox + r * 0.2, -r * 0.3);
-                    ctx.lineTo(ox + r * 0.15, r * 0.4);
-                    ctx.lineTo(ox, r * 0.5);
-                    ctx.lineTo(ox - r * 0.15, r * 0.4);
-                    ctx.lineTo(ox - r * 0.2, -r * 0.3);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Wings
-                    ctx.beginPath();
-                    ctx.moveTo(ox + r * 0.15, -r * 0.1);
-                    ctx.lineTo(ox + r * 0.55, r * 0.15);
-                    ctx.lineTo(ox + r * 0.5, r * 0.3);
-                    ctx.lineTo(ox + r * 0.15, r * 0.15);
-                    ctx.closePath();
-                    ctx.fill();
-                    ctx.beginPath();
-                    ctx.moveTo(ox - r * 0.15, -r * 0.1);
-                    ctx.lineTo(ox - r * 0.55, r * 0.15);
-                    ctx.lineTo(ox - r * 0.5, r * 0.3);
-                    ctx.lineTo(ox - r * 0.15, r * 0.15);
-                    ctx.closePath();
-                    ctx.fill();
-                    // Outline
-                    ctx.strokeStyle = flash ? '#fff' : (s < 0 ? '#ffcc44' : '#ff6644');
-                    ctx.lineWidth = 1.5;
-                    ctx.beginPath();
-                    ctx.moveTo(ox, -r * 0.7); ctx.lineTo(ox + r * 0.55, r * 0.15);
-                    ctx.lineTo(ox + r * 0.15, r * 0.4); ctx.lineTo(ox, r * 0.5);
-                    ctx.lineTo(ox - r * 0.15, r * 0.4); ctx.lineTo(ox - r * 0.55, r * 0.15);
-                    ctx.closePath(); ctx.stroke();
-                    // Cockpit
-                    ctx.fillStyle = flash ? '#ffffff' : '#442200';
-                    ctx.beginPath(); ctx.ellipse(ox, -r * 0.35, r * 0.07, r * 0.12, 0, 0, Math.PI * 2); ctx.fill();
-                    // Engine
-                    ctx.fillStyle = s < 0 ? '#ffcc44' : '#ff6644';
-                    ctx.globalAlpha = 0.6;
-                    ctx.beginPath();
-                    ctx.moveTo(ox - 4, r * 0.45); ctx.lineTo(ox, r * 0.7 + Math.sin(this.moveTimer * 8) * 3);
-                    ctx.lineTo(ox + 4, r * 0.45); ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
-                // Phase 2: energy link between ships
-                if (this.phase === 2) {
-                    ctx.strokeStyle = `rgba(255, 150, 0, ${0.4 + Math.sin(this.moveTimer * 5) * 0.2})`;
-                    ctx.lineWidth = 2;
-                    for (let beam = 0; beam < 3; beam++) {
-                        const by = -r * 0.2 + beam * r * 0.25;
-                        ctx.beginPath(); ctx.moveTo(-sep, by); ctx.lineTo(sep, by); ctx.stroke();
-                    }
-                }
-                break;
-            }
-            case 'nexus': {
-                // Energy nexus — central sphere with orbiting ring structures and data streams
-                // Outer shell
-                ctx.globalAlpha = 0.3;
-                ctx.beginPath(); ctx.arc(0, 0, r * 0.9, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = 1;
-                // Core sphere
-                ctx.beginPath(); ctx.arc(0, 0, r * 0.55, 0, Math.PI * 2); ctx.fill();
-                ctx.strokeStyle = flash ? '#fff' : '#aa44ff'; ctx.lineWidth = 2; ctx.stroke();
-                // Inner bright core
-                ctx.fillStyle = '#ffffff';
-                ctx.globalAlpha = 0.4 + Math.sin(this.moveTimer * 3) * 0.2;
-                ctx.beginPath(); ctx.arc(0, 0, r * 0.2, 0, Math.PI * 2); ctx.fill();
-                ctx.globalAlpha = 1;
-                // Orbital rings (3, rotating at different speeds)
-                for (let ring = 0; ring < 3; ring++) {
-                    ctx.strokeStyle = `rgba(200, 0, 255, ${0.4 + Math.sin(this.moveTimer * 2 + ring) * 0.15})`;
-                    ctx.lineWidth = 2;
-                    ctx.beginPath();
-                    ctx.ellipse(0, 0, r * (0.75 + ring * 0.12), r * (0.25 + ring * 0.05),
-                        this.moveTimer * (0.6 + ring * 0.4), 0, Math.PI * 2);
-                    ctx.stroke();
-                    // Node on each ring
-                    const nodeA = this.moveTimer * (0.6 + ring * 0.4);
-                    const nodeX = Math.cos(nodeA) * r * (0.75 + ring * 0.12);
-                    const nodeY = Math.sin(nodeA) * r * (0.25 + ring * 0.05);
-                    ctx.fillStyle = '#ff00ff';
-                    ctx.beginPath(); ctx.arc(nodeX, nodeY, 3, 0, Math.PI * 2); ctx.fill();
-                }
-                // Data stream particles
-                ctx.fillStyle = '#cc44ff';
-                ctx.globalAlpha = 0.5;
-                for (let p = 0; p < 8; p++) {
-                    const pa = this.moveTimer * 1.5 + p * 0.8;
-                    const pd = r * 0.4 + Math.sin(pa * 2) * r * 0.3;
-                    ctx.fillRect(Math.cos(pa) * pd - 1, Math.sin(pa) * pd - 1, 2, 2);
-                }
-                ctx.globalAlpha = 1;
-                break;
-            }
-            case 'echo': {
-                // Dark mirror of player ship — inverted, with glitch distortion
-                // Main fuselage (inverted — nose pointing down)
-                ctx.beginPath();
-                ctx.moveTo(0, r * 1.0);            // Nose (pointing down)
-                ctx.lineTo(r * 0.25, r * 0.4);
-                ctx.lineTo(r * 0.3, -r * 0.2);
-                ctx.lineTo(r * 0.25, -r * 0.7);
-                ctx.lineTo(-r * 0.25, -r * 0.7);
-                ctx.lineTo(-r * 0.3, -r * 0.2);
-                ctx.lineTo(-r * 0.25, r * 0.4);
-                ctx.closePath();
-                ctx.fill();
-                // Wings (inverted)
-                ctx.beginPath();
-                ctx.moveTo(r * 0.3, r * 0.1); ctx.lineTo(r * 0.9, -r * 0.3);
-                ctx.lineTo(r * 0.85, -r * 0.5); ctx.lineTo(r * 0.3, -r * 0.2);
-                ctx.closePath(); ctx.fill();
-                ctx.beginPath();
-                ctx.moveTo(-r * 0.3, r * 0.1); ctx.lineTo(-r * 0.9, -r * 0.3);
-                ctx.lineTo(-r * 0.85, -r * 0.5); ctx.lineTo(-r * 0.3, -r * 0.2);
-                ctx.closePath(); ctx.fill();
-                // Outline
-                ctx.strokeStyle = flash ? '#fff' : '#88eeff'; ctx.lineWidth = 1.5;
-                ctx.beginPath();
-                ctx.moveTo(0, r * 1.0); ctx.lineTo(r * 0.25, r * 0.4);
-                ctx.lineTo(r * 0.9, -r * 0.3); ctx.lineTo(r * 0.85, -r * 0.5);
-                ctx.lineTo(r * 0.25, -r * 0.7); ctx.lineTo(-r * 0.25, -r * 0.7);
-                ctx.lineTo(-r * 0.85, -r * 0.5); ctx.lineTo(-r * 0.9, -r * 0.3);
-                ctx.lineTo(-r * 0.25, r * 0.4);
-                ctx.closePath(); ctx.stroke();
-                // Dark cockpit
-                ctx.fillStyle = flash ? '#ffffff' : '#002233';
-                ctx.beginPath(); ctx.ellipse(0, r * 0.3, r * 0.1, r * 0.2, 0, 0, Math.PI * 2); ctx.fill();
-                // Engines (pointing up since inverted)
-                ctx.fillStyle = '#00ffff';
-                ctx.globalAlpha = 0.6;
-                ctx.beginPath();
-                ctx.moveTo(-r * 0.35, -r * 0.65); ctx.lineTo(-r * 0.25, -r * 0.95 - Math.sin(this.moveTimer * 8) * 3);
-                ctx.lineTo(-r * 0.15, -r * 0.65); ctx.fill();
-                ctx.beginPath();
-                ctx.moveTo(r * 0.15, -r * 0.65); ctx.lineTo(r * 0.25, -r * 0.95 - Math.sin(this.moveTimer * 8) * 3);
-                ctx.lineTo(r * 0.35, -r * 0.65); ctx.fill();
-                ctx.globalAlpha = 1;
-                // Glitch ghost
-                if (Math.random() < 0.06) {
-                    ctx.globalAlpha = 0.25;
-                    ctx.fillStyle = '#ff00ff';
-                    ctx.translate((Math.random() - 0.5) * 10, (Math.random() - 0.5) * 10);
-                    ctx.beginPath();
-                    ctx.moveTo(0, r * 1.0); ctx.lineTo(r * 0.25, r * 0.4);
-                    ctx.lineTo(r * 0.3, -r * 0.2); ctx.lineTo(r * 0.25, -r * 0.7);
-                    ctx.lineTo(-r * 0.25, -r * 0.7); ctx.lineTo(-r * 0.3, -r * 0.2);
-                    ctx.lineTo(-r * 0.25, r * 0.4);
-                    ctx.closePath(); ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
-                break;
-            }
-            default: {
-                // Architect — angular mech with shoulder pods, central eye, leg struts
-                // Main body
-                ctx.beginPath();
-                ctx.moveTo(0, -r * 0.8);
-                ctx.lineTo(r * 0.4, -r * 0.6);
-                ctx.lineTo(r * 0.5, -r * 0.1);
-                ctx.lineTo(r * 0.4, r * 0.5);
-                ctx.lineTo(r * 0.15, r * 0.7);
-                ctx.lineTo(-r * 0.15, r * 0.7);
-                ctx.lineTo(-r * 0.4, r * 0.5);
-                ctx.lineTo(-r * 0.5, -r * 0.1);
-                ctx.lineTo(-r * 0.4, -r * 0.6);
-                ctx.closePath();
-                ctx.fill();
-                ctx.strokeStyle = flash ? '#fff' : '#ff8888'; ctx.lineWidth = 1.5; ctx.stroke();
-                // Shoulder pods
-                ctx.beginPath();
-                ctx.moveTo(r * 0.5, -r * 0.4); ctx.lineTo(r * 0.95, -r * 0.5);
-                ctx.lineTo(r * 1.0, -r * 0.15); ctx.lineTo(r * 0.85, r * 0.05);
-                ctx.lineTo(r * 0.5, 0);
-                ctx.closePath(); ctx.fill();
-                ctx.beginPath();
-                ctx.moveTo(-r * 0.5, -r * 0.4); ctx.lineTo(-r * 0.95, -r * 0.5);
-                ctx.lineTo(-r * 1.0, -r * 0.15); ctx.lineTo(-r * 0.85, r * 0.05);
-                ctx.lineTo(-r * 0.5, 0);
-                ctx.closePath(); ctx.fill();
-                // Central eye
-                ctx.fillStyle = flash ? '#ffffff' : '#220000';
-                ctx.beginPath(); ctx.ellipse(0, -r * 0.25, r * 0.15, r * 0.1, 0, 0, Math.PI * 2); ctx.fill();
-                ctx.beginPath(); ctx.arc(0, -r * 0.25, r * 0.05, 0, Math.PI * 2); ctx.fill();
-                // Leg struts
-                ctx.strokeStyle = mainColor; ctx.lineWidth = 2;
-                ctx.beginPath(); ctx.moveTo(r * 0.15, r * 0.7); ctx.lineTo(r * 0.35, r * 1.0); ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(-r * 0.15, r * 0.7); ctx.lineTo(-r * 0.35, r * 1.0); ctx.stroke();
-                // Weapon hardpoints on shoulders
-                ctx.fillStyle = mainColor;
-                ctx.fillRect(r * 0.85, -r * 0.45, r * 0.1, r * 0.25);
-                ctx.fillRect(-r * 0.95, -r * 0.45, r * 0.1, r * 0.25);
-                break;
-            }
-        }
+        // Type-specific body (unknown types draw as the Architect, matching init())
+        const draw = this._neon[this.bossType] || this._neon.architect;
+        draw.call(this, ctx, this.radius, this.colors[this.phase - 1] || '#ff4444', flash);
 
         // Armor segments (any boss with armor)
         if (this.armor.length > 0 && this.phase === 1) {
@@ -7881,42 +7166,22 @@ const Boss = {
                 // Same orbit as the hit zones and the armor's own guns (armorPositions)
                 const ax = Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                 const ay = Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
-                if (Neon.on()) {
-                    // Hexagonal plate that spins against the orbit
-                    ctx.save();
-                    ctx.translate(ax, ay);
-                    ctx.rotate(-this.moveTimer * 2 + seg.angle);
-                    Neon.sprite(ctx, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
-                    ctx.restore();
-                    continue;
-                }
-                ctx.fillStyle = '#ff6644';
-                ctx.beginPath();
-                ctx.arc(ax, ay, BOSS_ARMOR_RADIUS - 2, 0, Math.PI * 2);
-                ctx.fill();
-                ctx.strokeStyle = '#ffaa88';
-                ctx.lineWidth = 1.5;
-                ctx.stroke();
+                // Hexagonal plate that spins against the orbit
+                ctx.save();
+                ctx.translate(ax, ay);
+                ctx.rotate(-this.moveTimer * 2 + seg.angle);
+                Neon.sprite(ctx, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
+                ctx.restore();
             }
         }
 
         // Core glow (phases 2-3)
-        if (this.phase >= 2 && Neon.on()) {
+        if (this.phase >= 2) {
             const pulse = Math.sin(this.moveTimer * 5);
             ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 3) * 0.2;
             Neon.ring(ctx, 0, 0, 13 + pulse * 4, '#ff00ff', 0.8, false);
             ctx.globalAlpha = 1;
             Neon.light(ctx, 0, 0, 4 + pulse, '#ff00ff', 1);
-        } else if (this.phase >= 2) {
-            const pulseR = 15 + Math.sin(this.moveTimer * 5) * 5;
-            ctx.fillStyle = `rgba(255, 0, 255, ${0.3 + Math.sin(this.moveTimer * 3) * 0.2})`;
-            ctx.beginPath();
-            ctx.arc(0, 0, pulseR, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#ffffff';
-            ctx.beginPath();
-            ctx.arc(0, 0, 6, 0, Math.PI * 2);
-            ctx.fill();
         }
 
         ctx.restore();
@@ -8833,97 +8098,7 @@ const Player = {
             ctx.globalAlpha = 1;
         }
 
-        if (Neon.on()) {
-            this._drawShipNeon(ctx);
-        } else {
-            // Ship body — apply equipped skin
-            const skinColor = Hangar.equipped.skin === 'chromatic'
-                ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
-                : Hangar.skinColor;
-            const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
-            ctx.globalAlpha = shipAlpha;
-            const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
-            ctx.fillStyle = sc;
-            const r = this.radius;
-
-            // Main fuselage
-            ctx.beginPath();
-            ctx.moveTo(0, -r * 1.1);         // Nose
-            ctx.lineTo(r * 0.25, -r * 0.5);  // Right nose taper
-            ctx.lineTo(r * 0.3, r * 0.1);    // Right body
-            ctx.lineTo(r * 0.25, r * 0.7);   // Right rear
-            ctx.lineTo(-r * 0.25, r * 0.7);  // Left rear
-            ctx.lineTo(-r * 0.3, r * 0.1);   // Left body
-            ctx.lineTo(-r * 0.25, -r * 0.5); // Left nose taper
-            ctx.closePath();
-            ctx.fill();
-
-            // Wings
-            ctx.beginPath();
-            ctx.moveTo(r * 0.3, -r * 0.1);   // Right wing root
-            ctx.lineTo(r * 0.9, r * 0.4);    // Right wing tip
-            ctx.lineTo(r * 0.85, r * 0.6);   // Right wing trailing edge
-            ctx.lineTo(r * 0.3, r * 0.3);    // Right wing back to body
-            ctx.closePath();
-            ctx.fill();
-            ctx.beginPath();
-            ctx.moveTo(-r * 0.3, -r * 0.1);  // Left wing root
-            ctx.lineTo(-r * 0.9, r * 0.4);   // Left wing tip
-            ctx.lineTo(-r * 0.85, r * 0.6);  // Left wing trailing edge
-            ctx.lineTo(-r * 0.3, r * 0.3);   // Left wing back to body
-            ctx.closePath();
-            ctx.fill();
-
-            // Cockpit canopy
-            ctx.fillStyle = Scoring.surgeActive ? '#ffffff' : '#aaddff';
-            ctx.globalAlpha = shipAlpha * 0.7;
-            ctx.beginPath();
-            ctx.ellipse(0, -r * 0.35, r * 0.12, r * 0.25, 0, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.globalAlpha = shipAlpha;
-
-            // Wing tip accents
-            ctx.fillStyle = sc;
-            ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
-            ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
-
-            // Outline
-            ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
-            ctx.lineWidth = 1;
-            // Fuselage outline
-            ctx.beginPath();
-            ctx.moveTo(0, -r * 1.1);
-            ctx.lineTo(r * 0.25, -r * 0.5);
-            ctx.lineTo(r * 0.3, r * 0.1);
-            ctx.lineTo(r * 0.9, r * 0.4);
-            ctx.lineTo(r * 0.85, r * 0.6);
-            ctx.lineTo(r * 0.25, r * 0.7);
-            ctx.lineTo(-r * 0.25, r * 0.7);
-            ctx.lineTo(-r * 0.85, r * 0.6);
-            ctx.lineTo(-r * 0.9, r * 0.4);
-            ctx.lineTo(-r * 0.3, r * 0.1);
-            ctx.lineTo(-r * 0.25, -r * 0.5);
-            ctx.closePath();
-            ctx.stroke();
-            ctx.globalAlpha = 1;
-
-            // Engine glow — twin engines at wing roots
-            const trailColor = Hangar.trailColor;
-            const flicker = Math.sin(this.engineFlicker) * 2;
-            ctx.fillStyle = trailColor;
-            // Left engine
-            ctx.beginPath();
-            ctx.moveTo(-r * 0.35, r * 0.65);
-            ctx.lineTo(-r * 0.25, r * 0.95 + flicker);
-            ctx.lineTo(-r * 0.15, r * 0.65);
-            ctx.fill();
-            // Right engine
-            ctx.beginPath();
-            ctx.moveTo(r * 0.15, r * 0.65);
-            ctx.lineTo(r * 0.25, r * 0.95 + flicker);
-            ctx.lineTo(r * 0.35, r * 0.65);
-            ctx.fill();
-        }
+        this._drawShipNeon(ctx);
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {

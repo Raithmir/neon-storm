@@ -81,7 +81,7 @@ Other states: settings, high_scores, hangar, tutorial
 
 Levels, enemies, bosses, and difficulty are data objects — not hardcoded logic. Difficulty-dependent behavior reads from `GameConfig` (populated from `DIFFICULTY_PRESETS` or custom settings at `Game.startLevel()`). Level scaling multiplies HP, fire rate, and bullet speed via `GameConfig._levelHpScale` / `GameConfig._levelSpeedScale`.
 
-**Adding a new enemy:** define in `Enemies.types`, add firing case in `Enemies._firePattern()`, add draw case in `Enemies.draw()`, optionally add movement in `Enemies._updateMovement()`.
+**Adding a new enemy:** define in `Enemies.types`, add firing case in `Enemies._firePattern()`, add its art in `Enemies._bake` / `Enemies._neon` (see Art Style), optionally add movement in `Enemies._updateMovement()`.
 
 **Adding a new level:** create a level data object with `id`, `name`, `briefing`, `bgType`, `bossType`, `levelScale`, `waves[]`, add to `ALL_LEVELS`, update `Campaign.getLevelCount()`.
 
@@ -91,11 +91,11 @@ Levels, enemies, bosses, and difficulty are data objects — not hardcoded logic
 
 ### Art Style
 
-Entities are drawn as neon line art using the `Neon` helpers in `neon.js`; the style rules are in that file's header. Every entity (player, all enemies, mid-bosses, bosses, power-ups) has a neon version, and the original flat-fill drawing stays as a fallback selected by the GRAPHICS setting (`Settings.values.graphicsStyle`: `'neon'` or `'classic'`).
+Entities are drawn as neon line art using the `Neon` helpers in `neon.js`; the style rules are in that file's header.
 
-Each module keeps its neon art next to its classic art: `Enemies._neon` / `_bake`, `MidBoss._neon` / `_bake`, `Boss._neon` / `_bake`, `Player._drawShipNeon`, `PowerUps._drawNeon`. The `_bake` functions draw the static body and run once per sprite key via `Neon.sprite()`, which caches the result in a shared texture atlas; the `_neon` functions stamp that sprite and draw the animated parts (lights, rotors, flames) live. Sprite keys include the colour and flash state, so a new colour just bakes a new sprite. Set `Neon.BAKE = false` in the console to draw everything live when checking art changes.
+Each module keeps its art next to its logic: `Enemies._neon` / `_bake`, `MidBoss._neon` / `_bake`, `Boss._neon` / `_bake`, `Player._drawShipNeon`, `PowerUps._drawNeon`. The `_bake` functions draw the static body and run once per sprite key via `Neon.sprite()`, which caches the result in a shared texture atlas; the `_neon` functions stamp that sprite and draw the animated parts (lights, rotors, flames) live. Sprite keys include the colour and flash state, so a new colour just bakes a new sprite. Set `Neon.BAKE = false` in the console to draw everything live when checking art changes.
 
-**Adding art for a new enemy/boss:** add a `_bake` entry for the static body and a `_neon` entry that calls `Neon.sprite(ctx, key, halfSize, bakeFn, ...)` then draws the live parts; `halfSize` must cover the art plus its glow.
+**Adding art for a new enemy/boss:** add a `_bake` entry for the static body and a `_neon` entry that calls `Neon.sprite(ctx, key, halfSize, bakeFn, ...)` then draws the live parts; `halfSize` must cover the art plus its glow. Every enemy type needs a `_neon` entry (mid-bosses: `MidBoss._neon`).
 
 ### Persistence
 
