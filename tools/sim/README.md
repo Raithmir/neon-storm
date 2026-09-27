@@ -47,6 +47,7 @@ encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNot
 | `casualPresetAutofire` | 4.2 |
 | `dronesLv2DealDamage`, `dronesTargetBoss`, `laserPierces` | 2.1 |
 | `weaponUpgradesNeverWeaker` | 2.1 |
+| `endlessScalingCapped` | 4.2 |
 | `escortStaysOutOfBossRange` | 6 |
 | `surgeNotTriggeredByFocusedFire`, `surgeEffects` | 5.1 |
 | `noGrazeWhileInvulnerable`, `grazeMilestonesOncePerLevel` | 5.2 |

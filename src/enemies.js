@@ -727,20 +727,13 @@ const PowerUps = {
     types: ['spread', 'homing', 'laser', 'drone'],
 
     colors: { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' },
-    WEAPON_CYCLE: ['spread', 'homing', 'laser'],
-    CYCLE_SECONDS: 1.5,
 
-    // Weapon pickups cycle colour (Raiden-style) so the player picks the weapon by timing
-    // the grab; drone pickups are a separate slot and never cycle.
     spawn(x, y, forceType) {
         const type = forceType || this.types[Math.floor(Math.random() * this.types.length)];
-        const cycles = !forceType && type !== 'drone';
         this.list.push({
             x, y,
             type,
             color: this.colors[type],
-            cycles,
-            cycleTimer: this.CYCLE_SECONDS,
             vy: 50,
             life: 999,
             radius: 10,
@@ -751,15 +744,6 @@ const PowerUps = {
     update(dt) {
         for (let i = this.list.length - 1; i >= 0; i--) {
             const p = this.list[i];
-            if (p.cycles) {
-                p.cycleTimer -= dt;
-                if (p.cycleTimer <= 0) {
-                    p.cycleTimer = this.CYCLE_SECONDS;
-                    const next = (this.WEAPON_CYCLE.indexOf(p.type) + 1) % this.WEAPON_CYCLE.length;
-                    p.type = this.WEAPON_CYCLE[next];
-                    p.color = this.colors[p.type];
-                }
-            }
             p.y += p.vy * dt;
             p.life -= dt;
             p.bobTimer += dt * 4;

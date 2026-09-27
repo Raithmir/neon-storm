@@ -5031,9 +5031,9 @@ const Tutorial = {
     pageIndex: 0,
     pages: [
         { title: 'MOVEMENT', lines: ['Use ARROW KEYS or WASD to move your ship.', 'Your ship can move in all 8 directions.', '', 'Hold SHIFT or X for FOCUS MODE — slower', 'movement and a tighter shot pattern.', 'Your hitbox is the tiny dot at the center!', '', 'Gamepad: Left Stick to move.', 'Left Trigger to focus.'] },
-        { title: 'SHOOTING', lines: ['Press SPACE or Z to fire.', 'Toggle AUTO-FIRE in Settings menu.', '', 'Collect weapon power-ups to upgrade:', '  S = SPREAD SHOT (orange)', '  H = HOMING MISSILES (green)', '  L = LASER BEAM (blue)', '  D = DRONES (purple, passive slot)', '', 'Weapon pickups cycle colour: grab the one', 'you want. Every weapon pickup adds a level', '(max Lv5); a new colour switches weapon.', 'Hold FOCUS to tighten your spread.'] },
+        { title: 'SHOOTING', lines: ['Press SPACE or Z to fire.', 'Toggle AUTO-FIRE in Settings menu.', '', 'Collect weapon power-ups to upgrade:', '  S = SPREAD SHOT (orange)', '  H = HOMING MISSILES (green)', '  L = LASER BEAM (blue)', '  D = DRONES (purple, passive slot)', '', 'Same pickup = level up (max Lv5).', 'Different pickup = switch weapon to Lv1.', '', 'Hold FOCUS to tighten your spread.'] },
         { title: 'ABILITIES', lines: ['DASH (C or V) — Quick invincible burst', 'in your movement direction. Has a cooldown.', '', 'BOMB (B or N) — Clears all enemy bullets', 'and damages all enemies. Limited stock.', '', 'Gamepad: Right Bumper = Dash', '         Left Bumper = Bomb'] },
-        { title: 'SCORING', lines: ['CHAIN COMBO — Kill enemies quickly to', 'build a score multiplier:', '  10 hits=2x  25=3x  50=5x  100+=8x', '', 'GRAZE — Fly close to enemy bullets to', 'fill the SURGE meter.', '', 'NEON SURGE — When meter is full, press', 'SURGE (F / M) to activate: 2x fire rate,', '3x score, and your shots cancel bullets!', '', 'Destroying tough enemies converts their', 'bullets into bonus score pickups.'] },
+        { title: 'SCORING', lines: ['CHAIN COMBO — Kill enemies quickly to', 'build a score multiplier:', '  10 hits=2x  20=3x  35=5x  60+=8x', '', 'GRAZE — Fly close to enemy bullets to', 'fill the SURGE meter.', '', 'NEON SURGE — When meter is full, press', 'SURGE (F / M) to activate: 2x fire rate,', '3x score, and your shots cancel bullets!', '', 'Destroying tough enemies converts their', 'bullets into bonus score pickups.'] },
         { title: 'TIPS', lines: ['Dying drops your weapon 1 level and', 'breaks your chain combo.', '', 'Use FOCUS MODE during dense boss patterns.', 'Your tiny hitbox is your best friend!', '', 'DASH can save you from impossible spots.', '', 'Pre-boss section has extra power-up drops.', 'Stock up before the big fight!', '', 'Earn NEON CREDITS from your score to', 'unlock cosmetics in the HANGAR.', '', 'GOOD LUCK, PILOT!'] }
     ],
 
@@ -5616,7 +5616,7 @@ const Scoring = {
     score: 0,
     chain: 0,
     chainTimer: 0,
-    chainTimerMax: 2.5,
+    chainTimerMax: 3.0,
     maxChain: 0,
     multiplier: 1,
     surgeCharge: 0,
@@ -5686,8 +5686,8 @@ const Scoring = {
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
 
-        // Each kill contributes surge charge; grazes are faster (5 each)
-        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 3);
+        // Each kill contributes a little surge charge; grazing (5 each) is the main source
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 1.5);
 
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
@@ -5784,9 +5784,11 @@ const Scoring = {
     },
 
     _updateMultiplier() {
-        if (this.chain >= 100) this.multiplier = 8;
-        else if (this.chain >= 50) this.multiplier = 5;
-        else if (this.chain >= 25) this.multiplier = 3;
+        // Tiers sized so 5x is reachable with good play and 8x is an expert goal
+        // (the old 50/100 thresholds were never reached in simulated campaigns)
+        if (this.chain >= 60) this.multiplier = 8;
+        else if (this.chain >= 35) this.multiplier = 5;
+        else if (this.chain >= 20) this.multiplier = 3;
         else if (this.chain >= 10) this.multiplier = 2;
         else this.multiplier = 1;
     },
@@ -6602,20 +6604,13 @@ const PowerUps = {
     types: ['spread', 'homing', 'laser', 'drone'],
 
     colors: { spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff', drone: '#cc44ff' },
-    WEAPON_CYCLE: ['spread', 'homing', 'laser'],
-    CYCLE_SECONDS: 1.5,
 
-    // Weapon pickups cycle colour (Raiden-style) so the player picks the weapon by timing
-    // the grab; drone pickups are a separate slot and never cycle.
     spawn(x, y, forceType) {
         const type = forceType || this.types[Math.floor(Math.random() * this.types.length)];
-        const cycles = !forceType && type !== 'drone';
         this.list.push({
             x, y,
             type,
             color: this.colors[type],
-            cycles,
-            cycleTimer: this.CYCLE_SECONDS,
             vy: 50,
             life: 999,
             radius: 10,
@@ -6626,15 +6621,6 @@ const PowerUps = {
     update(dt) {
         for (let i = this.list.length - 1; i >= 0; i--) {
             const p = this.list[i];
-            if (p.cycles) {
-                p.cycleTimer -= dt;
-                if (p.cycleTimer <= 0) {
-                    p.cycleTimer = this.CYCLE_SECONDS;
-                    const next = (this.WEAPON_CYCLE.indexOf(p.type) + 1) % this.WEAPON_CYCLE.length;
-                    p.type = this.WEAPON_CYCLE[next];
-                    p.color = this.colors[p.type];
-                }
-            }
             p.y += p.vy * dt;
             p.life -= dt;
             p.bobTimer += dt * 4;
@@ -9372,11 +9358,15 @@ const Player = {
             if (this.droneLevel >= 5) Achievements.onDroneMax();
             Scoring.spawnPopup(weaponNames.drone + ' LV' + this.droneLevel, weaponColors.drone, 16);
         } else {
-            // Raiden-style: every weapon pickup adds a level; a new colour switches weapon and keeps the level
-            this.primaryWeapon = powerUp.type;
-            this.primaryLevel = Math.min(5, this.primaryLevel + 1);
-            if (this.primaryLevel >= 5) Achievements.onWeaponMax();
-            Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV' + this.primaryLevel, weaponColors[powerUp.type], 16);
+            if (this.primaryWeapon === powerUp.type) {
+                this.primaryLevel = Math.min(5, this.primaryLevel + 1);
+                if (this.primaryLevel >= 5) Achievements.onWeaponMax();
+                Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV' + this.primaryLevel, weaponColors[powerUp.type], 16);
+            } else {
+                this.primaryWeapon = powerUp.type;
+                this.primaryLevel = 1;
+                Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV1', weaponColors[powerUp.type], 16);
+            }
         }
     },
 
@@ -12000,7 +11990,10 @@ const Game = {
                 if (EndlessMode.active) {
                     EndlessMode.update(dt);
                     this.applyLevelScaling(EndlessMode.rank, GameConfig._baseDensity);
+                    // Caps keep late Endless readable and killable; spawn rate, enemy mix and
+                    // fire frequency keep escalating after these are reached
                     GameConfig.bulletDensity = Math.min(GameConfig.bulletDensity, GameConfig._baseDensity * 2.2);
+                    GameConfig._levelHpScale = Math.min(GameConfig._levelHpScale, 3);
                 }
 
                 // Asteroid collision with player bullets

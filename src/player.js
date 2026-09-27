@@ -695,11 +695,15 @@ const Player = {
             if (this.droneLevel >= 5) Achievements.onDroneMax();
             Scoring.spawnPopup(weaponNames.drone + ' LV' + this.droneLevel, weaponColors.drone, 16);
         } else {
-            // Raiden-style: every weapon pickup adds a level; a new colour switches weapon and keeps the level
-            this.primaryWeapon = powerUp.type;
-            this.primaryLevel = Math.min(5, this.primaryLevel + 1);
-            if (this.primaryLevel >= 5) Achievements.onWeaponMax();
-            Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV' + this.primaryLevel, weaponColors[powerUp.type], 16);
+            if (this.primaryWeapon === powerUp.type) {
+                this.primaryLevel = Math.min(5, this.primaryLevel + 1);
+                if (this.primaryLevel >= 5) Achievements.onWeaponMax();
+                Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV' + this.primaryLevel, weaponColors[powerUp.type], 16);
+            } else {
+                this.primaryWeapon = powerUp.type;
+                this.primaryLevel = 1;
+                Scoring.spawnPopup(weaponNames[powerUp.type] + ' LV1', weaponColors[powerUp.type], 16);
+            }
         }
     },
 

@@ -482,7 +482,10 @@ const Game = {
                 if (EndlessMode.active) {
                     EndlessMode.update(dt);
                     this.applyLevelScaling(EndlessMode.rank, GameConfig._baseDensity);
+                    // Caps keep late Endless readable and killable; spawn rate, enemy mix and
+                    // fire frequency keep escalating after these are reached
                     GameConfig.bulletDensity = Math.min(GameConfig.bulletDensity, GameConfig._baseDensity * 2.2);
+                    GameConfig._levelHpScale = Math.min(GameConfig._levelHpScale, 3);
                 }
 
                 // Asteroid collision with player bullets

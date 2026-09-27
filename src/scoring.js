@@ -5,7 +5,7 @@ const Scoring = {
     score: 0,
     chain: 0,
     chainTimer: 0,
-    chainTimerMax: 2.5,
+    chainTimerMax: 3.0,
     maxChain: 0,
     multiplier: 1,
     surgeCharge: 0,
@@ -75,8 +75,8 @@ const Scoring = {
         if (this.surgeActive) pts *= 3;
         this.score += Math.floor(pts);
 
-        // Each kill contributes surge charge; grazes are faster (5 each)
-        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 3);
+        // Each kill contributes a little surge charge; grazing (5 each) is the main source
+        this.surgeCharge = Math.min(this.surgeMax, this.surgeCharge + 1.5);
 
         // Point-blank popup (only for 2x+)
         if (pointBlankMult >= 2) {
@@ -173,9 +173,11 @@ const Scoring = {
     },
 
     _updateMultiplier() {
-        if (this.chain >= 100) this.multiplier = 8;
-        else if (this.chain >= 50) this.multiplier = 5;
-        else if (this.chain >= 25) this.multiplier = 3;
+        // Tiers sized so 5x is reachable with good play and 8x is an expert goal
+        // (the old 50/100 thresholds were never reached in simulated campaigns)
+        if (this.chain >= 60) this.multiplier = 8;
+        else if (this.chain >= 35) this.multiplier = 5;
+        else if (this.chain >= 20) this.multiplier = 3;
         else if (this.chain >= 10) this.multiplier = 2;
         else this.multiplier = 1;
     },
