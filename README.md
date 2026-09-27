@@ -2,6 +2,8 @@
 
 A vertical scrolling bullet hell shooter built with HTML5 Canvas, PixiJS, and vanilla JavaScript.
 
+**Play it in your browser:** https://raithmir.github.io/neon-storm/ (published from `main` on every push)
+
 ## What's New in γ
 
 Neon Storm γ is a full visual overhaul: everything is redrawn in a **neon vector** style (glowing line art, as in Geometry Wars or Tempest 4000), and the whole game renders sharp at your screen's real resolution.

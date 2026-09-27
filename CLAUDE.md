@@ -19,7 +19,12 @@ There are no unit tests, no lint, and no transpilation — vanilla JS only.
 ```bash
 # Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
 npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
+npm run sim:render     # render smoke test: every screen + every level drawn, fails on any error
 ```
+
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks` and `sim:render`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
+
+Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 
 See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-through tools.
 

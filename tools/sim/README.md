@@ -24,6 +24,7 @@ Environment variables:
 | Command | What it does | Time |
 |---|---|---|
 | `npm run sim:checks` | Regression checks for the review's bugs (below). Exit code 1 if any fail | ~5 min |
+| `npm run sim:render` | Render smoke test: draws every screen and plays every level with rendering on (plus Flash Reduction and the Canvas 2D fallback). Exit code 1 on any page or console error | ~2 min |
 | `node tools/sim/checks.js dashKeepsBombInvulnerability,laserPierces` | Run selected checks only | |
 | `npm run sim:weapons` | Measured DPS for every weapon and level vs boss- and scout-sized targets | ~3 min |
 | `npm run sim:boss-ttk` | Boss time-to-kill for 6 loadouts (optionally `node tools/sim/boss-ttk.js 0,5` for chosen levels) | ~10 min |

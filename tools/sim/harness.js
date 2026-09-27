@@ -25,7 +25,8 @@ try {
 const GAME_HTML = path.resolve(process.env.GAME_HTML || path.join(__dirname, '..', '..', 'dist', 'neon-storm-gamma.html'));
 const OUT_DIR = path.join(__dirname, 'out');
 
-async function launch() {
+// opts.draw: keep rendering on (for render tests); the default stubs it out for speed
+async function launch(opts = {}) {
     if (!fs.existsSync(GAME_HTML)) {
         throw new Error('Game build not found: ' + GAME_HTML + ' (run `node build.js` first)');
     }
@@ -35,7 +36,9 @@ async function launch() {
         args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
     });
     const page = await browser.newPage();
-    page.on('pageerror', e => console.log('PAGE ERROR:', e.message));
+    const errors = [];
+    page.on('pageerror', e => { errors.push(e.message); console.log('PAGE ERROR:', e.message); });
+    page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
     await page.clock.install({ time: 0 });
     await page.goto('file://' + GAME_HTML);
 
@@ -44,14 +47,17 @@ async function launch() {
         await page.clock.runFor(250);
     }
     // Gameplay logic only: skip drawing and stop PixiJS's own render ticker
-    await page.evaluate(() => {
-        Game.draw = () => {};
-        if (typeof Renderer !== 'undefined' && Renderer.app && Renderer.app.ticker) Renderer.app.ticker.stop();
-    });
+    if (!opts.draw) {
+        await page.evaluate(() => {
+            Game.draw = () => {};
+            if (typeof Renderer !== 'undefined' && Renderer.app && Renderer.app.ticker) Renderer.app.ticker.stop();
+        });
+    }
 
     const g = {
         browser,
         page,
+        errors,
         ev: (fn, arg) => page.evaluate(fn, arg),
         run: (ms) => page.clock.runFor(ms),
         key: (code, down) => page.evaluate(([c, d]) => { Input.keys[c] = d; }, [code, down]),
