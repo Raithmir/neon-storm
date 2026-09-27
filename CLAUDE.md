@@ -26,6 +26,8 @@ CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it
 
 Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 
+The official PixiJS v8 agent skills are vendored in `.claude/skills/pixijs*` (pinned; see `.claude/skills/PIXIJS-SKILLS.md`). Their examples use `import`s — here it's the global `PIXI.*` build.
+
 See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-through tools.
 
 ## Architecture
