@@ -696,7 +696,7 @@ const Renderer = {
             this._initChromaFilter();
             this._initCRTFilter();
 
-            // --- pixi-filters effects (guarded — no-ops if PIXIFilters not loaded) ---
+            // --- pixi-filters effects (guarded — no-ops if pixi-filters isn't loaded) ---
             this._initShockwaveFilter();
             this._initGodrayFilter();
             this._initGlitchFilter();
@@ -979,11 +979,18 @@ const Renderer = {
 
     // --- pixi-filters effects ---
 
+    // pixi-filters v6 (bundled by build.js) registers itself as PIXI.filters
+    _filtersLib() {
+        return (typeof PIXI !== 'undefined' && PIXI.filters && PIXI.filters.ShockwaveFilter) ? PIXI.filters : null;
+    },
+
     _initShockwaveFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._shockwaveFilter = new PIXIFilters.ShockwaveFilter({
-                center: [0.5, 0.5],
+            // Centre and sizes are in play-area pixels
+            this._shockwaveFilter = new F.ShockwaveFilter({
+                center: { x: PLAY_W / 2, y: PLAY_H / 2 },
                 time: 0,
                 amplitude: 35,
                 wavelength: 90,
@@ -998,16 +1005,17 @@ const Renderer = {
     },
 
     _initGodrayFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._godrayFilter = new PIXIFilters.GodrayFilter({
+            // Point light (not parallel rays) just above the top-centre of the play area
+            this._godrayFilter = new F.GodrayFilter({
                 angle: 30,
                 gain: 0.55,
                 lacunarity: 2.5,
                 time: 0,
                 parallel: false,
-                x: 0.5,
-                y: 0.0,
+                center: { x: PLAY_W / 2, y: -40 },
                 alpha: 0,
             });
             this._godrayFilter.enabled = false;
@@ -1017,9 +1025,10 @@ const Renderer = {
     },
 
     _initGlitchFilter() {
-        if (typeof PIXIFilters === 'undefined') return;
+        const F = this._filtersLib();
+        if (!F) return;
         try {
-            this._glitchFilter = new PIXIFilters.GlitchFilter({
+            this._glitchFilter = new F.GlitchFilter({
                 slices: 6,
                 offset: 55,
                 fillMode: 0,
@@ -1491,7 +1500,7 @@ const Renderer = {
     triggerShockwave(normX, normY) {
         this.bgPulse = this.calm() ? 0.15 : 1;
         if (!this._shockwaveFilter) return;
-        this._shockwaveFilter.center = [normX, normY];
+        this._shockwaveFilter.center = { x: normX * PLAY_W, y: normY * PLAY_H };
         this._shockwaveFilter.time = 0;
         this._shockwaveActive = true;
         this._shockwaveTimer = 1.1;

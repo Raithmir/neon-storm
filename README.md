@@ -39,7 +39,8 @@ neon-storm/
 ├── build.js                 — Build script (downloads PixiJS, concatenates src → dist)
 ├── package.json             — Project metadata & scripts
 ├── vendor/                  — Cached dependencies (auto-populated by build)
-│   └── pixi.min.js          — PixiJS v8 (downloaded on first build)
+│   ├── pixi.min.js          — PixiJS v8 (downloaded on first build)
+│   └── pixi-filters.min.js  — pixi-filters v6: shockwave, god-ray and glitch effects
 ├── dist/                    — Built output (generated)
 │   ├── neon-storm-gamma.html — Playable game (single file, works offline)
 │   └── neon-storm.js        — Combined JS (for debugging)
