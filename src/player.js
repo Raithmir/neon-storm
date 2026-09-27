@@ -709,6 +709,81 @@ const Player = {
         }
     },
 
+    // Neon style ship outlines, in units of this.radius
+    _NEON_HULL: Neon.mirror([0, -1.15, 0.2, -0.6, 0.3, -0.05, 0.95, 0.45, 0.9, 0.62, 0.45, 0.48, 0.32, 0.72, 0.12, 0.62, 0, 0.66]),
+    _NEON_CANOPY: Neon.mirror([0, -0.66, 0.1, -0.42, 0.08, -0.2, 0, -0.14]),
+    _neonBank: 0,
+    _neonLastX: null,
+
+    // Neon style ship body (origin already translated to the ship).
+    // Banks into horizontal movement by narrowing the hull.
+    _drawShipNeon(ctx) {
+        const r = this.radius;
+        const surge = Scoring.surgeActive;
+        const skinColor = Hangar.equipped.skin === 'chromatic'
+            ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
+            : Hangar.skinColor;
+        const sc = surge ? '#ffffff' : skinColor;
+        const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
+
+        const dx = this._neonLastX === null ? 0 : this.x - this._neonLastX;
+        this._neonLastX = this.x;
+        const target = Math.max(-1, Math.min(1, dx / 5));
+        this._neonBank += (target - this._neonBank) * 0.2;
+        const bank = this._neonBank;
+
+        ctx.save();
+        ctx.globalAlpha = shipAlpha;
+        ctx.scale(1 - Math.abs(bank) * 0.18, 1);
+
+        // Engine flames (behind the hull): coloured plume with a white core
+        const trailColor = Hangar.trailColor;
+        const len = 0.45 + Math.sin(this.engineFlicker) * 0.08 + Math.sin(this.engineFlicker * 2.7) * 0.05;
+        for (let s = -1; s <= 1; s += 2) {
+            const ex = s * r * 0.22, ey = r * 0.62;
+            ctx.fillStyle = trailColor;
+            ctx.globalAlpha = shipAlpha * 0.55;
+            ctx.beginPath();
+            ctx.moveTo(ex - r * 0.12, ey);
+            ctx.lineTo(ex, ey + r * (len + 0.25));
+            ctx.lineTo(ex + r * 0.12, ey);
+            ctx.fill();
+            ctx.fillStyle = '#ffffff';
+            ctx.globalAlpha = shipAlpha * 0.9;
+            ctx.beginPath();
+            ctx.moveTo(ex - r * 0.05, ey);
+            ctx.lineTo(ex, ey + r * len);
+            ctx.lineTo(ex + r * 0.05, ey);
+            ctx.fill();
+        }
+        ctx.globalAlpha = shipAlpha;
+
+        // Hull, then panel lines on top
+        Neon.shape(ctx, this._NEON_HULL, r, sc, 1.2, false, 0.2);
+        Neon.detail(ctx, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
+        Neon.detail(ctx, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
+        Neon.detail(ctx, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        // The wing on the side we're banking towards catches more light
+        if (Math.abs(bank) > 0.05) {
+            const side = bank > 0 ? 1 : -1;
+            ctx.globalAlpha = shipAlpha * Math.min(1, Math.abs(bank)) * 0.25;
+            ctx.fillStyle = sc;
+            Neon.path(ctx, [side * 0.3, -0.05, side * 0.95, 0.45, side * 0.9, 0.62, side * 0.45, 0.48], r, true);
+            ctx.fill();
+            ctx.globalAlpha = shipAlpha;
+        }
+
+        // Canopy
+        Neon.shape(ctx, this._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
+
+        // Wing-tip running lights, blinking out of step
+        const blink = Math.sin(this.engineFlicker * 0.5);
+        Neon.light(ctx, r * 0.9, r * 0.52, 1.4, sc, blink > 0 ? 1 : 0.35);
+        Neon.light(ctx, -r * 0.9, r * 0.52, 1.4, sc, blink > 0 ? 0.35 : 1);
+
+        ctx.restore();
+    },
+
     draw(ctx) {
         // Draw death fragments when dead
         if (!this.alive && this.deathAnimTimer > 0) {
@@ -803,93 +878,97 @@ const Player = {
             ctx.globalAlpha = 1;
         }
 
-        // Ship body — apply equipped skin
-        const skinColor = Hangar.equipped.skin === 'chromatic'
-            ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
-            : Hangar.skinColor;
-        const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
-        ctx.globalAlpha = shipAlpha;
-        const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
-        ctx.fillStyle = sc;
-        const r = this.radius;
+        if (Neon.on()) {
+            this._drawShipNeon(ctx);
+        } else {
+            // Ship body — apply equipped skin
+            const skinColor = Hangar.equipped.skin === 'chromatic'
+                ? `hsl(${(this.engineFlicker * 10) % 360}, 100%, 70%)`
+                : Hangar.skinColor;
+            const shipAlpha = Hangar.equipped.skin === 'ghost' ? 0.6 : 1.0;
+            ctx.globalAlpha = shipAlpha;
+            const sc = Scoring.surgeActive ? '#ffffff' : skinColor;
+            ctx.fillStyle = sc;
+            const r = this.radius;
 
-        // Main fuselage
-        ctx.beginPath();
-        ctx.moveTo(0, -r * 1.1);         // Nose
-        ctx.lineTo(r * 0.25, -r * 0.5);  // Right nose taper
-        ctx.lineTo(r * 0.3, r * 0.1);    // Right body
-        ctx.lineTo(r * 0.25, r * 0.7);   // Right rear
-        ctx.lineTo(-r * 0.25, r * 0.7);  // Left rear
-        ctx.lineTo(-r * 0.3, r * 0.1);   // Left body
-        ctx.lineTo(-r * 0.25, -r * 0.5); // Left nose taper
-        ctx.closePath();
-        ctx.fill();
+            // Main fuselage
+            ctx.beginPath();
+            ctx.moveTo(0, -r * 1.1);         // Nose
+            ctx.lineTo(r * 0.25, -r * 0.5);  // Right nose taper
+            ctx.lineTo(r * 0.3, r * 0.1);    // Right body
+            ctx.lineTo(r * 0.25, r * 0.7);   // Right rear
+            ctx.lineTo(-r * 0.25, r * 0.7);  // Left rear
+            ctx.lineTo(-r * 0.3, r * 0.1);   // Left body
+            ctx.lineTo(-r * 0.25, -r * 0.5); // Left nose taper
+            ctx.closePath();
+            ctx.fill();
 
-        // Wings
-        ctx.beginPath();
-        ctx.moveTo(r * 0.3, -r * 0.1);   // Right wing root
-        ctx.lineTo(r * 0.9, r * 0.4);    // Right wing tip
-        ctx.lineTo(r * 0.85, r * 0.6);   // Right wing trailing edge
-        ctx.lineTo(r * 0.3, r * 0.3);    // Right wing back to body
-        ctx.closePath();
-        ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(-r * 0.3, -r * 0.1);  // Left wing root
-        ctx.lineTo(-r * 0.9, r * 0.4);   // Left wing tip
-        ctx.lineTo(-r * 0.85, r * 0.6);  // Left wing trailing edge
-        ctx.lineTo(-r * 0.3, r * 0.3);   // Left wing back to body
-        ctx.closePath();
-        ctx.fill();
+            // Wings
+            ctx.beginPath();
+            ctx.moveTo(r * 0.3, -r * 0.1);   // Right wing root
+            ctx.lineTo(r * 0.9, r * 0.4);    // Right wing tip
+            ctx.lineTo(r * 0.85, r * 0.6);   // Right wing trailing edge
+            ctx.lineTo(r * 0.3, r * 0.3);    // Right wing back to body
+            ctx.closePath();
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(-r * 0.3, -r * 0.1);  // Left wing root
+            ctx.lineTo(-r * 0.9, r * 0.4);   // Left wing tip
+            ctx.lineTo(-r * 0.85, r * 0.6);  // Left wing trailing edge
+            ctx.lineTo(-r * 0.3, r * 0.3);   // Left wing back to body
+            ctx.closePath();
+            ctx.fill();
 
-        // Cockpit canopy
-        ctx.fillStyle = Scoring.surgeActive ? '#ffffff' : '#aaddff';
-        ctx.globalAlpha = shipAlpha * 0.7;
-        ctx.beginPath();
-        ctx.ellipse(0, -r * 0.35, r * 0.12, r * 0.25, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.globalAlpha = shipAlpha;
+            // Cockpit canopy
+            ctx.fillStyle = Scoring.surgeActive ? '#ffffff' : '#aaddff';
+            ctx.globalAlpha = shipAlpha * 0.7;
+            ctx.beginPath();
+            ctx.ellipse(0, -r * 0.35, r * 0.12, r * 0.25, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = shipAlpha;
 
-        // Wing tip accents
-        ctx.fillStyle = sc;
-        ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
-        ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
+            // Wing tip accents
+            ctx.fillStyle = sc;
+            ctx.fillRect(r * 0.7, r * 0.35, r * 0.15, 2);
+            ctx.fillRect(-r * 0.85, r * 0.35, r * 0.15, 2);
 
-        // Outline
-        ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
-        ctx.lineWidth = 1;
-        // Fuselage outline
-        ctx.beginPath();
-        ctx.moveTo(0, -r * 1.1);
-        ctx.lineTo(r * 0.25, -r * 0.5);
-        ctx.lineTo(r * 0.3, r * 0.1);
-        ctx.lineTo(r * 0.9, r * 0.4);
-        ctx.lineTo(r * 0.85, r * 0.6);
-        ctx.lineTo(r * 0.25, r * 0.7);
-        ctx.lineTo(-r * 0.25, r * 0.7);
-        ctx.lineTo(-r * 0.85, r * 0.6);
-        ctx.lineTo(-r * 0.9, r * 0.4);
-        ctx.lineTo(-r * 0.3, r * 0.1);
-        ctx.lineTo(-r * 0.25, -r * 0.5);
-        ctx.closePath();
-        ctx.stroke();
-        ctx.globalAlpha = 1;
+            // Outline
+            ctx.strokeStyle = Scoring.surgeActive ? '#ffffff' : '#88eeff';
+            ctx.lineWidth = 1;
+            // Fuselage outline
+            ctx.beginPath();
+            ctx.moveTo(0, -r * 1.1);
+            ctx.lineTo(r * 0.25, -r * 0.5);
+            ctx.lineTo(r * 0.3, r * 0.1);
+            ctx.lineTo(r * 0.9, r * 0.4);
+            ctx.lineTo(r * 0.85, r * 0.6);
+            ctx.lineTo(r * 0.25, r * 0.7);
+            ctx.lineTo(-r * 0.25, r * 0.7);
+            ctx.lineTo(-r * 0.85, r * 0.6);
+            ctx.lineTo(-r * 0.9, r * 0.4);
+            ctx.lineTo(-r * 0.3, r * 0.1);
+            ctx.lineTo(-r * 0.25, -r * 0.5);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.globalAlpha = 1;
 
-        // Engine glow — twin engines at wing roots
-        const trailColor = Hangar.trailColor;
-        const flicker = Math.sin(this.engineFlicker) * 2;
-        ctx.fillStyle = trailColor;
-        // Left engine
-        ctx.beginPath();
-        ctx.moveTo(-r * 0.35, r * 0.65);
-        ctx.lineTo(-r * 0.25, r * 0.95 + flicker);
-        ctx.lineTo(-r * 0.15, r * 0.65);
-        ctx.fill();
-        // Right engine
-        ctx.beginPath();
-        ctx.moveTo(r * 0.15, r * 0.65);
-        ctx.lineTo(r * 0.25, r * 0.95 + flicker);
-        ctx.lineTo(r * 0.35, r * 0.65);
-        ctx.fill();
+            // Engine glow — twin engines at wing roots
+            const trailColor = Hangar.trailColor;
+            const flicker = Math.sin(this.engineFlicker) * 2;
+            ctx.fillStyle = trailColor;
+            // Left engine
+            ctx.beginPath();
+            ctx.moveTo(-r * 0.35, r * 0.65);
+            ctx.lineTo(-r * 0.25, r * 0.95 + flicker);
+            ctx.lineTo(-r * 0.15, r * 0.65);
+            ctx.fill();
+            // Right engine
+            ctx.beginPath();
+            ctx.moveTo(r * 0.15, r * 0.65);
+            ctx.lineTo(r * 0.25, r * 0.95 + flicker);
+            ctx.lineTo(r * 0.35, r * 0.65);
+            ctx.fill();
+        }
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {

@@ -22,6 +22,7 @@ const SOURCE_FILES = [
     'audio.js',
     'storage.js',
     'ui-systems.js',
+    'neon.js',
     'particles.js',
     'bullets.js',
     'scoring.js',

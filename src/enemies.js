@@ -400,6 +400,43 @@ const Enemies = {
         if (idx >= 0) this.list.splice(idx, 1);
     },
 
+    // Neon style: twin-rotor scout. Origin is the enemy centre.
+    _SCOUT_BODY: Neon.mirror([0, -0.7, 0.32, -0.25, 0.28, 0.3, 0, 0.55]),
+    _drawScoutDroneNeon(ctx, e, r, flash) {
+        const t = Neon.time();
+        Renderer.addGlow(e.x, e.y, Renderer.colorToHex(e.color), r * 2.6, flash ? 0.6 : 0.22);
+        Neon.squash(ctx, flash, 0.15);
+
+        // Arms out to the rotors
+        Neon.detail(ctx, [-0.3, -0.2, -0.8, -0.35], r, e.accent, 0.8, 1.2);
+        Neon.detail(ctx, [0.3, -0.2, 0.8, -0.35], r, e.accent, 0.8, 1.2);
+
+        // Rotors: faint disc, glowing rim and a spinning blade
+        for (let s = -1; s <= 1; s += 2) {
+            const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.34;
+            ctx.fillStyle = e.accent;
+            ctx.globalAlpha = 0.08;
+            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+            Neon.ring(ctx, rx, ry, rr, e.accent, 0.6, flash);
+            const a = t * 28 * s + e.x * 0.1;
+            const bx = Math.cos(a) * rr * 0.85, by = Math.sin(a) * rr * 0.85;
+            ctx.strokeStyle = '#ffffff';
+            ctx.globalAlpha = 0.7;
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(rx - bx, ry - by); ctx.lineTo(rx + bx, ry + by); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        // Hull
+        Neon.shape(ctx, this._SCOUT_BODY, r, e.color, 1.1, flash, 0.3);
+        Neon.detail(ctx, [-0.18, 0.2, 0, 0.32, 0.18, 0.2], r, e.accent, 0.6, 0.8);
+
+        // Sensor eye
+        const pulse = 0.7 + Math.sin(t * 9 + e.y * 0.05) * 0.3;
+        Neon.light(ctx, 0, -r * 0.05, 1.8, '#ff3344', flash ? 1 : pulse);
+    },
+
     draw(ctx) {
         const isGlitchLevel = Background.bgType === 'void';
         // Warp-in markers (phase shifter and teleporting mid-boss telegraph)
@@ -440,6 +477,7 @@ const Enemies = {
             const accent = flash ? '#ffffff' : e.accent;
             switch (e.type) {
                 case 'scout_drone':
+                    if (Neon.on()) { this._drawScoutDroneNeon(ctx, e, r, flash); break; }
                     // Small quad-rotor drone with propeller arms
                     ctx.beginPath();
                     ctx.moveTo(0, -r * 0.6);

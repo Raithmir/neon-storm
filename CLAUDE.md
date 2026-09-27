@@ -27,7 +27,7 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 21 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 22 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -72,6 +72,7 @@ Other states: settings, high_scores, hangar, tutorial
 | `Scoring` | scoring.js | Score, chain combo, surge meter |
 | `Game` | game.js | Main state machine |
 | `Settings` | storage.js | Persisted player preferences |
+| `Neon` | neon.js | Line-art helpers for the neon vector style |
 | `Hangar` | ui-systems.js | Cosmetics/unlock shop |
 | `Campaign` | level-systems.js | Level progression |
 | `WaveSystem` | waves.js | Wave sequencer |
@@ -87,6 +88,10 @@ Levels, enemies, bosses, and difficulty are data objects — not hardcoded logic
 **Adding a new mid-boss:** define it in `MidBossTypes` (`midbosses.js`) with `movement` and `patterns` (implement new pattern names in `MidBoss.fire()`), then add `{ time: T, midboss: 'id' }` to a level's `waves`. The wave clock (`WaveSystem.waveTime`) pauses while it is alive; it escapes after `MIDBOSS_TIME_LIMIT`.
 
 **Adding a new boss:** define in `BossTypes` with `phases`, `phaseHps`, `hasArmor`, `colors`. Boss-specific attack behavior goes in `Boss._phase1/2/3Attack()` conditioned on `this.bossType`.
+
+### Art Style
+
+Entities are drawn as neon line art using the `Neon` helpers in `neon.js`; the style rules are in that file's header. Restyled entities keep their original flat-fill drawing as a fallback, selected by the GRAPHICS setting (`Settings.values.graphicsStyle`: `'neon'` or `'classic'`). So far the player, `scout_drone` and the Architect boss have neon versions.
 
 ### Persistence
 

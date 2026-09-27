@@ -856,6 +856,69 @@ const Boss = {
         ScreenShake.trigger(10, 0.8);
     },
 
+    // Neon style outlines, in units of the boss radius
+    _NEON_HEX: [1, 0, 0.5, 0.866, -0.5, 0.866, -1, 0, -0.5, -0.866, 0.5, -0.866],
+    _NEON_ARCH_HULL: Neon.mirror([0, -0.8, 0.4, -0.6, 0.5, -0.1, 0.4, 0.5, 0.15, 0.7, 0, 0.7]),
+    _NEON_ARCH_POD: [0.5, -0.4, 0.95, -0.5, 1.0, -0.15, 0.85, 0.05, 0.5, 0],
+    _NEON_ARCH_BARREL: [0.86, 0.02, 0.95, 0.02, 0.94, 0.3, 0.87, 0.3],
+
+    // Neon style Architect (origin already at the boss centre)
+    _drawArchitectNeon(ctx, r, color, flash) {
+        const t = this.moveTimer;
+        if (flash) ctx.scale(1.03, 0.98);
+
+        // Legs: jointed struts with a glowing foot
+        for (let s = -1; s <= 1; s += 2) {
+            ctx.beginPath();
+            ctx.moveTo(s * r * 0.15, r * 0.68);
+            ctx.lineTo(s * r * 0.32, r * 0.84);
+            ctx.lineTo(s * r * 0.34, r * 1.02);
+            Neon.stroke(ctx, color, 1.4, flash);
+            Neon.light(ctx, s * r * 0.34, r * 1.02, 2, color, 0.8);
+        }
+
+        // Shoulder pods bob slightly out of step with each other
+        for (let s = -1; s <= 1; s += 2) {
+            ctx.save();
+            ctx.translate(0, Math.sin(t * 2 + (s > 0 ? 0 : Math.PI)) * 2);
+            ctx.scale(s, 1);
+            Neon.shape(ctx, this._NEON_ARCH_BARREL, r, color, 1, flash, 0.3);
+            Neon.shape(ctx, this._NEON_ARCH_POD, r, color, 1.5, flash, 0.18);
+            Neon.detail(ctx, [0.58, -0.3, 0.9, -0.36], r, color, 0.5, 1);
+            Neon.detail(ctx, [0.58, -0.14, 0.92, -0.2], r, color, 0.5, 1);
+            // Muzzle light charges and fades on a loop
+            const charge = 0.4 + 0.6 * Math.max(0, Math.sin(t * 3 + (s > 0 ? 0 : 1.5)));
+            Neon.light(ctx, r * 0.905, r * 0.32, 2.5, color, flash ? 1 : charge);
+            ctx.restore();
+        }
+
+        // Hull, inner frame and panel lines
+        Neon.shape(ctx, this._NEON_ARCH_HULL, r, color, 2, flash, 0.26);
+        ctx.save();
+        ctx.translate(0, r * 0.02);
+        Neon.path(ctx, this._NEON_ARCH_HULL, r * 0.62, true);
+        ctx.strokeStyle = color; ctx.globalAlpha = 0.45; ctx.lineWidth = 1; ctx.stroke();
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        Neon.detail(ctx, [-0.38, 0.12, -0.12, 0.2, 0.12, 0.2, 0.38, 0.12], r, color, 0.5, 1);
+        Neon.detail(ctx, [-0.3, 0.38, -0.1, 0.46, 0.1, 0.46, 0.3, 0.38], r, color, 0.5, 1);
+        Neon.detail(ctx, [0, -0.72, 0, -0.45], r, color, 0.5, 1);
+
+        // Eye: dark socket, sweeping scan line and a pupil that tracks the player
+        const ey = -r * 0.25;
+        ctx.beginPath();
+        ctx.ellipse(0, ey, r * 0.2, r * 0.11, 0, 0, Math.PI * 2);
+        ctx.fillStyle = flash ? '#ffffff' : '#120006';
+        ctx.globalAlpha = flash ? 0.7 : 0.9;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        Neon.stroke(ctx, color, 1.2, flash);
+        const scan = Math.sin(t * 1.7) * r * 0.16;
+        Neon.detail(ctx, [scan / r, -0.33, scan / r, -0.17], r, color, 0.35, 1);
+        const look = Math.max(-1, Math.min(1, (Player.x - this.x) / 220));
+        Neon.light(ctx, look * r * 0.1, ey, r * 0.05, color, 1);
+    },
+
     draw(ctx) {
         if (!this.active) return;
 
@@ -1123,6 +1186,7 @@ const Boss = {
                 break;
             }
             default: {
+                if (Neon.on()) { this._drawArchitectNeon(ctx, r, mainColor, flash); break; }
                 // Architect — angular mech with shoulder pods, central eye, leg struts
                 // Main body
                 ctx.beginPath();
@@ -1172,6 +1236,18 @@ const Boss = {
                 // Same orbit as the hit zones and the armor's own guns (armorPositions)
                 const ax = Math.cos(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
                 const ay = Math.sin(seg.angle + this.moveTimer) * BOSS_ARMOR_ORBIT;
+                if (Neon.on()) {
+                    // Hexagonal plate that spins against the orbit
+                    ctx.save();
+                    ctx.translate(ax, ay);
+                    ctx.rotate(-this.moveTimer * 2 + seg.angle);
+                    Neon.shape(ctx, this._NEON_HEX, BOSS_ARMOR_RADIUS - 3, '#ff6644', 1.1, flash, 0.25);
+                    Neon.path(ctx, this._NEON_HEX, (BOSS_ARMOR_RADIUS - 3) * 0.5, true);
+                    ctx.strokeStyle = '#ffaa88'; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.stroke();
+                    ctx.globalAlpha = 1;
+                    ctx.restore();
+                    continue;
+                }
                 ctx.fillStyle = '#ff6644';
                 ctx.beginPath();
                 ctx.arc(ax, ay, BOSS_ARMOR_RADIUS - 2, 0, Math.PI * 2);
