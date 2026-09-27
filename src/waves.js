@@ -1,4 +1,35 @@
 // ============================================================
+//  SCHEDULER (game-time delayed actions)
+// ============================================================
+// Delayed spawns and state changes run on game time, not wall-clock time, so
+// they pause with the game and are discarded when a level restarts.
+const Scheduler = {
+    time: 0,
+    queue: [],
+
+    after(seconds, fn) {
+        this.queue.push({ at: this.time + Math.max(0, seconds), fn });
+    },
+
+    update(dt) {
+        this.time += dt;
+        // Run due items in order; items scheduled while running wait for the next update
+        const due = this.queue.filter(item => item.at <= this.time).sort((a, b) => a.at - b.at);
+        if (due.length === 0) return;
+        this.queue = this.queue.filter(item => item.at > this.time);
+        for (const item of due) item.fn();
+    },
+
+    get pending() { return this.queue.length; },
+
+    clear() {
+        this.time = 0;
+        this.queue = [];
+    }
+};
+
+
+// ============================================================
 //  WAVE SYSTEM (Data-driven level sequencer)
 // ============================================================
 const WaveSystem = {
@@ -12,17 +43,20 @@ const WaveSystem = {
         this.waves = levelData.waves;
         this.currentWaveIndex = 0;
         this.levelTimer = 0;
+        this.waveTime = 0;
         this.levelComplete = false;
         this.bossActive = false;
     },
 
     update(dt) {
         this.levelTimer += dt;
+        // Wave schedule clock: paused while a mid-boss is on screen, so the stage waits for it
+        if (!MidBoss.current()) this.waveTime += dt;
 
-        // Spawn waves based on timing
-        while (this.currentWaveIndex < this.waves.length) {
+        // Spawn waves based on timing; nothing else spawns while a mid-boss is on screen
+        while (this.currentWaveIndex < this.waves.length && !MidBoss.current()) {
             const wave = this.waves[this.currentWaveIndex];
-            if (this.levelTimer >= wave.time) {
+            if (this.waveTime >= wave.time) {
                 this._spawnWave(wave);
                 this.currentWaveIndex++;
             } else {
@@ -32,6 +66,10 @@ const WaveSystem = {
     },
 
     _spawnWave(wave) {
+        if (wave.midboss) {
+            MidBoss.spawn(wave.midboss);
+            return;
+        }
         for (const group of wave.enemies) {
             for (let i = 0; i < group.count; i++) {
                 let x, y;
@@ -59,18 +97,21 @@ const WaveSystem = {
                         y = -20;
                 }
 
-                // Delayed spawn
-                setTimeout(() => {
-                    if (Game.state === 'playing') {
-                        Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
-                    }
-                }, (group.delay || 0) + i * (group.stagger || 200));
+                // Delayed spawn (game time — pauses with the game)
+                Scheduler.after(((group.delay || 0) + i * (group.stagger || 200)) / 1000, () => {
+                    Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
+                });
             }
         }
     },
 
+    // All waves dispatched and every delayed spawn has happened
+    allWavesSpawned() {
+        return this.currentWaveIndex >= this.waves.length && Scheduler.pending === 0;
+    },
+
     isComplete() {
-        return this.currentWaveIndex >= this.waves.length && Enemies.list.length === 0 && !this.bossActive;
+        return this.allWavesSpawned() && Enemies.list.length === 0 && !this.bossActive;
     }
 };
 
@@ -114,6 +155,7 @@ const LEVEL_1 = {
         ]},
 
         // ESCALATION (50-90s)
+        { time: 52, midboss: 'sentinel' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover' }] },
         { time: 56, enemies: [
             { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'zigzag' },
@@ -138,7 +180,15 @@ const LEVEL_1 = {
             { type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 300 },
             { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1000 },
             { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'straight_down', delay: 500 }
-        ]}
+        ]},
+
+        // FINALE (after the mid-boss): denser mixes, then a generous pre-boss wave
+        { time: 100, enemies: [{ type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 600 }] },
+        { time: 107, enemies: [{ type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover' }, { type: 'scout_drone', count: 6, formation: 'line', movePath: 'sweep_right', stagger: 150, delay: 800 }] },
+        { time: 114, enemies: [{ type: 'scout_drone', count: 10, formation: 'line', movePath: 'straight_down', stagger: 90 }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }] },
+        { time: 123, enemies: [{ type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe' }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'sweep_left', delay: 700 }] },
+        { time: 132, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 1, formation: 'random', movePath: 'hover', delay: 500 }, { type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'straight_down', delay: 1200 }] },
+        { time: 141, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
     ]
 };
 
@@ -163,11 +213,20 @@ const LEVEL_2 = {
         { time: 32, enemies: [{ type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover' }, { type: 'bomber', count: 1, formation: 'random', movePath: 'straight_down', delay: 500 }] },
         { time: 38, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }] },
         { time: 44, enemies: [{ type: 'sniper', count: 3, formation: 'line', movePath: 'hover' }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 48, midboss: 'forge_walker' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down' }, { type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
         { time: 60, enemies: [{ type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 500 }] },
         { time: 68, enemies: [{ type: 'bomber', count: 3, formation: 'line', movePath: 'straight_down', stagger: 600 }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'sweep_right', delay: 1000 }] },
         { time: 78, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 88, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 300 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
+
+        // FINALE: artillery push
+        { time: 96, enemies: [{ type: 'bomber', count: 2, formation: 'line', movePath: 'straight_down', stagger: 600 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 104, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'zigzag', stagger: 90 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 112, enemies: [{ type: 'sniper', count: 3, formation: 'line', movePath: 'hover' }, { type: 'scout_drone', count: 8, formation: 'line', movePath: 'sweep_right', stagger: 120, delay: 600 }] },
+        { time: 121, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 500 }, { type: 'gunship', count: 3, formation: 'random', movePath: 'strafe', delay: 1000 }] },
+        { time: 130, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'straight_down', delay: 600 }] },
+        { time: 139, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
     ]
 };
 
@@ -187,10 +246,19 @@ const LEVEL_3 = {
         { time: 30, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }] },
         { time: 36, enemies: [{ type: 'carrier', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }] },
         { time: 44, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'scout_drone', count: 6, formation: 'v_shape', movePath: 'zigzag', delay: 500 }] },
+        { time: 48, midboss: 'debris_hauler' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'gunship', count: 4, formation: 'random', movePath: 'strafe' }, { type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover', delay: 800 }] },
         { time: 60, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
         { time: 70, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 600 }] },
         { time: 80, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+
+        // FINALE: deep debris — carriers and shifters in the rocks
+        { time: 90, enemies: [{ type: 'scout_drone', count: 8, formation: 'v_shape', movePath: 'zigzag', stagger: 100 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 99, enemies: [{ type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe' }, { type: 'phase_shifter', count: 1, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 108, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', stagger: 500 }, { type: 'gunship', count: 2, formation: 'random', movePath: 'strafe', delay: 1000 }] },
+        { time: 117, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }] },
+        { time: 127, enemies: [{ type: 'scout_drone', count: 10, formation: 'v_shape', movePath: 'straight_down', stagger: 80 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }] },
+        { time: 137, enemies: [{ type: 'gunship', count: 4, formation: 'line', movePath: 'strafe', stagger: 250 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1000 }] },
     ]
 };
 
@@ -210,10 +278,19 @@ const LEVEL_4 = {
         { time: 28, enemies: [{ type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
         { time: 35, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
         { time: 42, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'shield_wall', count: 4, formation: 'line', movePath: 'straight_down', delay: 500, stagger: 100 }] },
+        { time: 46, midboss: 'strike_leader' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 50, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
         { time: 58, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
         { time: 68, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 78, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1000 }] },
+
+        // FINALE: the convoy's final approach
+        { time: 88, enemies: [{ type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 800 }] },
+        { time: 96, enemies: [{ type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 105, enemies: [{ type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover' }, { type: 'shield_wall', count: 6, formation: 'line', movePath: 'straight_down', stagger: 80, delay: 1000 }] },
+        { time: 114, enemies: [{ type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover' }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
+        { time: 124, enemies: [{ type: 'shielded_cruiser', count: 1, formation: 'random', movePath: 'hover' }, { type: 'gunship', count: 3, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 134, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }, { type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 70, delay: 1500 }] },
     ]
 };
 
@@ -231,10 +308,19 @@ const LEVEL_5 = {
         { time: 24, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover', stagger: 2000 }] },
         { time: 32, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 500 }, { type: 'gunship', count: 4, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
         { time: 40, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 2000 }] },
+        { time: 46, midboss: 'core_warden' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 48, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 60 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
         { time: 56, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 800 }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 66, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 3, formation: 'line', movePath: 'hover', delay: 1000 }] },
         { time: 76, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 400 }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1500 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 2000 }] },
+
+        // FINALE: the core's last defences
+        { time: 86, enemies: [{ type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 400 }, { type: 'scout_drone', count: 10, formation: 'line', movePath: 'zigzag', stagger: 80, delay: 600 }] },
+        { time: 95, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'sniper', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 104, enemies: [{ type: 'carrier', count: 1, formation: 'random', movePath: 'hover' }, { type: 'missile_turret', count: 2, formation: 'line', movePath: 'hover', delay: 1000 }] },
+        { time: 113, enemies: [{ type: 'shield_wall', count: 8, formation: 'line', movePath: 'straight_down', stagger: 60 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 1200 }] },
+        { time: 123, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 133, enemies: [{ type: 'bomber', count: 3, formation: 'random', movePath: 'straight_down', stagger: 400 }, { type: 'carrier', count: 1, formation: 'random', movePath: 'hover', delay: 1500 }, { type: 'gunship', count: 2, formation: 'sides', movePath: 'strafe', delay: 800 }] },
     ]
 };
 
@@ -252,9 +338,18 @@ const LEVEL_6 = {
         { time: 28, enemies: [{ type: 'shield_wall', count: 10, formation: 'line', movePath: 'straight_down', stagger: 50 }] },
         { time: 34, enemies: [{ type: 'phase_shifter', count: 4, formation: 'random', movePath: 'hover', stagger: 300 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 1000 }] },
         { time: 42, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 46, midboss: 'glitch_echo' }, // MID-BOSS — wave clock pauses until it is destroyed or escapes
         { time: 52, enemies: [{ type: 'missile_turret', count: 3, formation: 'random', movePath: 'hover' }, { type: 'sniper', count: 4, formation: 'random', movePath: 'hover', delay: 500 }] },
         { time: 60, enemies: [{ type: 'bomber', count: 4, formation: 'random', movePath: 'straight_down', stagger: 300 }, { type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
         { time: 70, enemies: [{ type: 'carrier', count: 3, formation: 'random', movePath: 'hover', stagger: 1000 }, { type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover', delay: 2000 }] },
+
+        // FINALE: the relay collapses
+        { time: 80, enemies: [{ type: 'scout_drone', count: 12, formation: 'v_shape', movePath: 'zigzag', stagger: 60 }, { type: 'phase_shifter', count: 2, formation: 'random', movePath: 'hover', delay: 800 }] },
+        { time: 89, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'line', movePath: 'hover', stagger: 1500 }, { type: 'bomber', count: 2, formation: 'random', movePath: 'straight_down', delay: 800 }] },
+        { time: 99, enemies: [{ type: 'carrier', count: 2, formation: 'random', movePath: 'hover' }, { type: 'phase_shifter', count: 3, formation: 'random', movePath: 'hover', stagger: 300, delay: 1000 }] },
+        { time: 109, enemies: [{ type: 'bomber', count: 4, formation: 'random', movePath: 'straight_down', stagger: 300 }, { type: 'missile_turret', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }] },
+        { time: 119, enemies: [{ type: 'phase_shifter', count: 4, formation: 'random', movePath: 'hover', stagger: 300 }, { type: 'gunship', count: 4, formation: 'sides', movePath: 'strafe', delay: 1000 }] },
+        { time: 129, enemies: [{ type: 'shielded_cruiser', count: 2, formation: 'random', movePath: 'hover' }, { type: 'carrier', count: 2, formation: 'random', movePath: 'hover', delay: 1000 }, { type: 'sniper', count: 3, formation: 'random', movePath: 'hover', delay: 1500 }] },
     ]
 };
 
@@ -269,6 +364,9 @@ const EndlessMode = {
     spawnTimer: 0,
     spawnInterval: 4.0,
     rank: 1.0, // Difficulty scaling — increases over time
+    // Concurrent enemy ceiling: keeps late Endless readable and under the 800-bullet pool.
+    // Rank still escalates spawn rate, enemy mix and (capped) stats up to this limit.
+    MAX_ENEMIES: 30,
 
     // Enemy pools by difficulty tier
     easyPool: ['scout_drone', 'scout_drone', 'gunship'],
@@ -293,8 +391,8 @@ const EndlessMode = {
         // Rank increases over time
         this.rank = 1.0 + WaveSystem.levelTimer * 0.008; // ~1.5x at 1 min, ~2.0x at 2 min, etc.
 
-        // Spawn waves on timer
-        this.spawnTimer -= dt;
+        // Spawn waves on timer (held while the screen is at the enemy cap)
+        if (Enemies.list.length < this.MAX_ENEMIES) this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
             this._spawnWave();
             this.wave++;
@@ -346,7 +444,7 @@ const EndlessMode = {
 
         // Power-up drop every 3 waves
         if (wave % 3 === 2) {
-            setTimeout(() => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); }, 2000);
+            Scheduler.after(2, () => { PowerUps.spawn(PLAY_W * 0.3 + Math.random() * PLAY_W * 0.4, -10); });
         }
 
         // Spawn via WaveSystem-style spawning
@@ -361,11 +459,11 @@ const EndlessMode = {
                     default: x = 40 + Math.random() * (PLAY_W - 80); y = -20 - Math.random() * 60; break;
                 }
                 const delay = (group.delay || 0) + i * (group.stagger || 200);
-                setTimeout(() => {
-                    if (EndlessMode.active) {
+                Scheduler.after(delay / 1000, () => {
+                    if (Enemies.list.length < EndlessMode.MAX_ENEMIES) {
                         Enemies.spawn(group.type, x, y, group.movePath || 'straight_down');
                     }
-                }, delay);
+                });
             }
         }
     }

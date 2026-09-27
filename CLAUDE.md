@@ -14,13 +14,20 @@ node build.js
 # Output: dist/neon-storm-beta.html (offline-capable), dist/neon-storm.js (debug)
 ```
 
-There are no tests, no lint, and no transpilation — vanilla JS only.
+There are no unit tests, no lint, and no transpilation — vanilla JS only.
+
+```bash
+# Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
+npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
+```
+
+See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-through tools.
 
 ## Architecture
 
 ### Module System
 
-All 20 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 21 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -76,6 +83,8 @@ Levels, enemies, bosses, and difficulty are data objects — not hardcoded logic
 **Adding a new enemy:** define in `Enemies.types`, add firing case in `Enemies._firePattern()`, add draw case in `Enemies.draw()`, optionally add movement in `Enemies._updateMovement()`.
 
 **Adding a new level:** create a level data object with `id`, `name`, `briefing`, `bgType`, `bossType`, `levelScale`, `waves[]`, add to `ALL_LEVELS`, update `Campaign.getLevelCount()`.
+
+**Adding a new mid-boss:** define it in `MidBossTypes` (`midbosses.js`) with `movement` and `patterns` (implement new pattern names in `MidBoss.fire()`), then add `{ time: T, midboss: 'id' }` to a level's `waves`. The wave clock (`WaveSystem.waveTime`) pauses while it is alive; it escapes after `MIDBOSS_TIME_LIMIT`.
 
 **Adding a new boss:** define in `BossTypes` with `phases`, `phaseHps`, `hasArmor`, `colors`. Boss-specific attack behavior goes in `Boss._phase1/2/3Attack()` conditioned on `this.bossType`.
 

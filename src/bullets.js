@@ -19,6 +19,9 @@ class BulletPool {
             type: opts.type || 'normal',
             life: opts.life || 5,
             grazed: false,
+            pierce: !!opts.pierce,          // passes through enemies (hits each once)
+            harmless: opts.harmless || 0,   // seconds of telegraph before it can hit
+            turnRate: opts.turnRate || 5.0, // homing turn rate (rad/s)
             _p: null,   // Pixi outer glow Particle
             _pc: null,  // Pixi white-core Particle
         };
@@ -52,6 +55,7 @@ class BulletPool {
             const b = this.pool[i];
             b.prevX = b.x;
             b.prevY = b.y;
+            if (b.harmless > 0) b.harmless = Math.max(0, b.harmless - dt);
 
             if (b.type === 'homing' && homingTargets && homingTargets.length > 0) {
                 let nearest = null, nearDist = Infinity;
@@ -66,8 +70,7 @@ class BulletPool {
                     let diff = desired - current;
                     while (diff > Math.PI) diff -= Math.PI * 2;
                     while (diff < -Math.PI) diff += Math.PI * 2;
-                    const turnRate = 5.0;
-                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), turnRate * dt);
+                    const newAngle = current + Math.sign(diff) * Math.min(Math.abs(diff), b.turnRate * dt);
                     const speed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
                     b.vx = Math.cos(newAngle) * speed;
                     b.vy = Math.sin(newAngle) * speed;
@@ -89,6 +92,9 @@ class BulletPool {
                 b._p.scaleX = outerScale; b._p.scaleY = b.type === 'laser' ? outerScale * 3 : outerScale;
                 b._pc.x = b.x; b._pc.y = b.y;
                 b._pc.scaleX = coreScale; b._pc.scaleY = b.type === 'laser' ? coreScale * 3 : coreScale;
+                // Telegraphed bullets stay faint until they become dangerous
+                b._p.alpha = b.harmless > 0 ? 0.25 : 0.8;
+                b._pc.alpha = b.harmless > 0 ? 0.2 : 0.95;
                 if (b.type === 'homing') {
                     b._p.rotation = Math.atan2(b.vy, b.vx) + Math.PI / 2;
                 }
@@ -124,6 +130,17 @@ class BulletPool {
     }
 
     _drawNormal(ctx, b) {
+        if (b.harmless > 0) {
+            // Telegraph: faint outline only
+            ctx.globalAlpha = 0.35;
+            ctx.strokeStyle = b.color;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            return;
+        }
         // GPU glow halo behind bullet
         Renderer.addGlow(b.x, b.y, Renderer.colorToHex(b.color), b.radius * 6, 0.5);
 

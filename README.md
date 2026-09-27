@@ -10,6 +10,15 @@ Neon Storm β introduces a **PixiJS rendering pipeline** for the gameplay play a
 - **Automatic fallback:** If PixiJS fails to load, the game runs on pure Canvas 2D (looks like the alpha, fully functional)
 - **Self-contained build:** `node build.js` downloads and bundles PixiJS inline — the output HTML works offline from `file://`
 
+β also includes a full **gameplay and balance pass** (see `docs/neon-storm-gameplay-review.md`):
+- **Pacing:** mid-bosses on every level and ~4-minute stages.
+- **Weapons:** a rebalanced weapon curve with a piercing laser, working drones and Neon Surge (with its own SURGE button).
+- **Bosses:** phase timeouts, positional armor and telegraphed attacks.
+- **Progression:** persistent lives and weapons with score extends, and a death-bomb window.
+- **Scaling:** readable difficulty scaling.
+- **Bug fixes:** pause-safe game-time scheduling, plus many other gameplay bugs.
+- **Tooling:** headless simulation and regression checks in `tools/sim/`.
+
 ## Project Structure
 
 ```
@@ -27,13 +36,14 @@ neon-storm/
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
 │   ├── audio.js             — Procedural SFX (Web Audio API)
-│   ├── storage.js           — Persistence, high scores, settings, NC, end-run bonuses
+│   ├── storage.js           — Persistence, high scores, settings, NC, achievements, end-of-level bonuses
 │   ├── ui-systems.js        — Custom difficulty, hangar/shop, tutorial
 │   ├── particles.js         — Particle effects, screen shake, transitions
 │   ├── bullets.js           — BulletPool class (player + enemy projectiles)
 │   ├── scoring.js           — Chain combo, graze, surge meter
 │   ├── enemies.js           — Enemy types, AI, patterns, power-ups
-│   ├── waves.js             — Wave sequencer, level 1-6 data
+│   ├── midbosses.js         — Mid-boss types, movement, patterns, rewards
+│   ├── waves.js             — Game-time scheduler, wave sequencer, level 1-6 data, Endless
 │   ├── level-systems.js     — Asteroids, escort, campaign progression
 │   ├── bosses.js            — Boss types, patterns, visuals
 │   ├── player.js            — Player ship, weapons, abilities
@@ -42,10 +52,12 @@ neon-storm/
 │   ├── menus.js             — All menu screens
 │   ├── game.js              — Main game state machine
 │   └── main.js              — Game loop & initialization
+├── tools/sim/               — Headless gameplay simulation + regression checks (see its README)
 └── docs/                    — Documentation
-    ├── neon-storm-dev-guide.md    — Developer Guide
-    ├── neon-storm-checklist.md    — Remaining Work Checklist
-    └── neon-storm-gdd.md          — Game Design Document
+    ├── neon-storm-dev-guide.md       — Developer Guide
+    ├── neon-storm-checklist.md       — Remaining Work Checklist
+    ├── neon-storm-gdd.md             — Game Design Document (v1.1)
+    └── neon-storm-gameplay-review.md — Gameplay/balance review and measurements
 ```
 
 ## Quick Start
@@ -64,6 +76,14 @@ Open `http://localhost:8080` — `index.html` loads PixiJS from CDN and source f
 
 ### Development
 Edit files in `src/`, refresh the browser. No build step needed when using the web server approach. For the single-file build, run `node build.js` after changes.
+
+### Checking gameplay changes
+```bash
+npm install --no-save playwright   # dev-only
+node build.js
+npm run sim:checks                 # regression checks (all should pass)
+```
+See `tools/sim/README.md` for the balance tools (weapon DPS, boss time-to-kill, bot play-throughs, campaign runs).
 
 ## Architecture
 
@@ -94,6 +114,8 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 | `Player` | player.js | Player ship state |
 | `Enemies` | enemies.js | Enemy manager |
 | `Boss` | bosses.js | Boss state machine |
+| `MidBoss` | midbosses.js | Mid-boss behaviour (types in `MidBossTypes`) |
+| `WaveSystem` / `Scheduler` | waves.js | Wave sequencer / game-time delayed actions |
 | `Scoring` | scoring.js | Score, chain, surge |
 | `Game` | game.js | Main state machine |
 | `Settings` | storage.js | Player preferences |
@@ -105,7 +127,8 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 See the `docs/` folder:
 - **Developer Guide** — Architecture deep-dive, how to add enemies/levels/bosses/weapons
 - **Remaining Work Checklist** — Everything left to do, by category
-- **Game Design Document** — Original design spec
+- **Game Design Document** — Design spec (v1.1, matches the implemented gameplay)
+- **Gameplay Review** — Balance review, genre targets, fix passes and simulation results
 
 ## Tech Stack
 

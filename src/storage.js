@@ -753,7 +753,7 @@ const EndRunBonus = {
     bonuses: [],
     totalBonus: 0,
 
-    calculate(won, lives, maxChain, graze, levelTime) {
+    calculate(won, lives, maxChain, graze, levelTime, noDeath) {
         this.bonuses = [];
         this.totalBonus = 0;
 
@@ -767,7 +767,7 @@ const EndRunBonus = {
             this.bonuses.push({ label: 'LIVES BONUS', value: Math.floor(livesBonus) });
 
             // No-death bonus
-            if (lives === GameConfig.lives) {
+            if (noDeath) {
                 const noDeathBonus = 15000 * GameConfig.scoreMultiplier;
                 this.bonuses.push({ label: 'NO DEATH BONUS', value: Math.floor(noDeathBonus) });
             }

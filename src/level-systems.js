@@ -5,13 +5,15 @@ const Asteroids = {
     list: [],
     active: false,
 
+    SPAWN_PER_SECOND: 1.2,
+
     init() { this.list = []; this.active = false; },
     activate() { this.active = true; },
 
     update(dt) {
         if (!this.active) return;
         // Spawn new asteroids periodically
-        if (Math.random() < 0.02) {
+        if (Math.random() < this.SPAWN_PER_SECOND * dt) { // frame-rate independent
             const big = Math.random() > 0.6;
             this.list.push({
                 x: 20 + Math.random() * (PLAY_W - 40),
@@ -90,15 +92,18 @@ const Escort = {
     active: false,
     x: PLAY_W / 2,
     y: PLAY_H - 160,
-    hp: 30,
-    maxHp: 30,
+    hp: 50,
+    maxHp: 50,
+    HIT_RADIUS: 28,
+    MIN_Y: PLAY_H * 0.62,
+    REGEN_PER_SECOND: 0.4,
     alive: true,
     flashTimer: 0,
     supportTimer: 8,
 
     init() {
         this.active = false; this.x = PLAY_W / 2; this.y = PLAY_H - 160;
-        this.hp = 30; this.maxHp = 30; this.alive = true; this.flashTimer = 0; this.supportTimer = 8;
+        this.hp = this.maxHp; this.alive = true; this.flashTimer = 0; this.supportTimer = 8;
     },
 
     activate() { this.active = true; this.alive = true; },
@@ -106,8 +111,10 @@ const Escort = {
     update(dt) {
         if (!this.active || !this.alive) return;
         this.flashTimer = Math.max(0, this.flashTimer - dt);
-        // Slowly move upward
-        this.y -= 5 * dt;
+        this.hp = Math.min(this.maxHp, this.hp + this.REGEN_PER_SECOND * dt); // damage control repairs
+        // Slowly move upward, but stay in the lower part of the screen — drifting into the
+        // boss's point-blank range made the escort mission unwinnable
+        this.y = Math.max(this.MIN_Y, this.y - 5 * dt);
         this.x += Math.sin(WaveSystem.levelTimer * 0.3) * 15 * dt;
         this.x = Math.max(60, Math.min(PLAY_W - 60, this.x));
 
@@ -129,7 +136,8 @@ const Escort = {
         // Check enemy bullet collision
         for (const b of Enemies.enemyBullets.pool) {
             const dx = b.x - this.x, dy = b.y - this.y;
-            if (dx * dx + dy * dy < 35 * 35) {
+            if (b.harmless > 0) continue;
+            if (dx * dx + dy * dy < this.HIT_RADIUS * this.HIT_RADIUS) {
                 b.active = false;
                 this.hp--;
                 this.flashTimer = 0.15;

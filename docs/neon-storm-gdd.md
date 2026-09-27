@@ -1,4 +1,6 @@
-# NEON STORM — Game Design Document v1.0
+# NEON STORM — Game Design Document v1.1
+
+*v1.1 (beta): sections 3–10 updated to the implemented and simulation-tuned values — see `docs/neon-storm-gameplay-review.md` §12–13 for the reasoning and measurements.*
 
 ## 1. Overview
 
@@ -47,121 +49,139 @@
 - 8-directional movement via keyboard (Arrow keys / WASD) or gamepad left stick
 - **Focus Mode:** Hold designated key to move at 40% speed for precise dodging
   - Player hitbox becomes visible as a glowing dot while active
-  - Can be toggled on/off in settings
-- Base movement speed is tuned so the player can cross the play area in ~1.5 seconds
+  - Focus also tightens the Spread Shot fan (Touhou-style focused shot)
+  - Available on every preset; can be toggled in Custom mode
+- Base movement speed is 360 px/s: the ship crosses the 720 px play area in ~2 seconds
 
 ### 3.2 Firing
 - **Fire mode is a settings toggle** — player chooses between:
-  - **Auto-fire:** Ship fires continuously, hold focus key for slow movement
+  - **Auto-fire:** Ship fires continuously, including while Focus is held (default on Casual)
   - **Manual fire:** Tap/hold fire button, separate focus button
-- Base weapon: Single forward shot (always available, cannot be lost)
+- Base weapon: Single forward shot every 0.12 s (always available, cannot be lost). It runs on its own
+  timer, so no primary weapon ever slows it down
 
 ### 3.3 Special Abilities
 
 **Bomb (limited stock):**
 - Default start: 3 bombs (varies by difficulty)
 - Clears all enemy bullets on screen
-- Deals significant damage to all visible enemies
-- Brief invincibility during bomb animation (~1.5s)
+- Damage is tiered by the enemy's *base* toughness: basic enemies (scouts, snipers, shield walls) always die;
+  mid-tier enemies lose 75% of their HP; heavy enemies lose 45%
+- Bosses take 10% of the current phase's HP, and every intact armor segment is hit
+- ~1.5 s of invincibility; breaks the chain
 - Visual: Screen flash, expanding neon shockwave ring
-- Replenished: 2 bombs on respawn after death
+- Stock: up to 2 bombs restored on respawn (never above the starting count); the stock carries between
+  levels and is topped up to the starting count at the start of each level
+- **Death-bomb window:** after a lethal hit, pressing Bomb within a short window cancels the death
+  (Casual 0.25 s, Normal 0.15 s, none on Hardcore — Touhou-style)
 
 **Dash (cooldown-based):**
 - Quick directional phase shift in movement direction
-- ~0.5 seconds of invincibility during dash
+- 0.2 seconds of invincibility during dash; any invincibility already running (bomb, respawn) is kept
 - ~2 second cooldown (varies by difficulty)
 - Visual: Afterimage trail in ship color, brief transparency
-- Can dash through bullets and enemies without taking damage
+- Can dash through bullets and enemies without taking damage; grazes during a dash still count
 
 ### 3.4 Hitbox
-- Visual ship is larger than actual hitbox (standard for the genre)
+- Visual ship is larger than actual hitbox (standard for the genre); hitbox radius 3 px
 - Hitbox is a small circle at the center of the ship sprite
 - Hitbox becomes visible during Focus Mode as a bright glowing dot
 - Optional setting: "Show hitbox always"
+- Bullet collision is swept (tested along the bullet's path each frame), so fast bullets can't pass through
 
 ---
 
 ## 4. Weapon System (Hybrid)
 
 ### 4.1 Primary Weapon Slot
-One active primary weapon at a time. Collecting the same type levels it up. Collecting a different type switches to it at Level 1.
+One active primary weapon at a time, levels 1–5. Collecting the same type levels it up. Collecting a
+different type switches to it at Level 1.
 
-**Spread Shot:**
-- Lv1: Triple shot (3 forward-angled projectiles)
-- Lv2: Five-way spread with increased fire rate
-- Lv3: Seven-way spread with larger, more damaging projectiles
+Balance targets: every weapon's damage grows ~2.3× from Lv1 to Lv5 (≈16 → ≈38 DPS on a single target,
+including the base shot), all weapons stay within ~20% of each other, and **no level ever does less damage
+than the level below it** (guarded by `tools/sim/checks.js`).
 
-**Homing Missiles:**
-- Lv1: 2 slow-tracking missiles per volley
-- Lv2: 4 missiles with improved tracking speed
-- Lv3: 6 fast missiles with aggressive homing
+**Spread Shot** (volley every 0.25 s, 1 damage per pellet):
+- Lv1: 2 pellets · Lv2: 3 · Lv3: 5 · Lv4: 7 · Lv5: 9
+- Each level adds pellets to the previous fan without moving existing ones (inner pellets first)
+- Holding Focus narrows the fan to 35% of its width — the best single-target damage when focused
 
-**Laser Beam:**
-- Lv1: Thin continuous beam (deals damage per frame of contact)
-- Lv2: Wider beam with increased DPS
-- Lv3: Dual parallel beams with pierce (hits all enemies in path)
+**Homing Missiles** (volley every 0.26 s, 1 damage per missile):
+- Lv1: 2 missiles · Lv2: 3 · Lv3: 4 · Lv4: 5 · Lv5: 6 (faster at Lv2 and Lv4)
+- Never miss, so they fire slightly slower and deal a little less raw damage
+
+**Laser Beam** (every 0.1 s, **pierces**: hits each enemy in its path once):
+- Main beam damage 1.0 / 1.3 / 1.6 / 1.9 / 2.3 per tick (Lv1–5), widening with level
+- Lv3+: two side beams (±12–14 px, kept inside a scout's hitbox)
+- Lv4+: two thin outer beams (±26–28 px)
 
 ### 4.2 Passive Slot — Shield/Drones
 Independent from primary weapon. Drone pickups always stack regardless of primary weapon.
 
-- Lv1: 2 orbiting drones that deal contact damage to enemies
-- Lv2: 3 orbiting drones + periodic shield pulse (brief damage absorption)
-- Lv3: 4 orbiting drones that auto-fire small projectiles at nearest enemy
+- Lv1–5: 2 / 3 / 4 / 5 / 6 orbiting drones
+- All levels: drones deal contact damage (1 damage every 0.15 s) to enemies and the boss they touch
+- Lv2+: periodic **shield pulse** that cancels enemy bullets near the ship (every 3 s; every 2 s from Lv4;
+  larger radius at Lv5)
+- Lv3+: each drone fires at the nearest target — enemies *or the boss* — every 0.5 s
 
 ### 4.3 Power-Up Drops
-- Power-up icons drop from destroyed enemy formations and mid-tier enemies
-- Each power-up is visually distinct and color-coded:
-  - Spread: Orange icon
-  - Homing: Green icon
-  - Laser: Blue icon
-  - Drone: Purple icon
-- Power-ups drift slowly downward and can be collected by contact
-- Power-ups despawn after ~8 seconds if not collected
-- Pre-boss section has generous power-up drops to prepare the player
+- Power-ups drop from destroyed enemies (per-type drop chance: 8% scouts up to 60% carriers)
+- Type is random: Spread (orange), Homing (green), Laser (blue), Drone (purple)
+- Power-ups drift slowly downward and can be collected by contact; picking the right colour (and avoiding
+  the wrong one) is part of the skill
+- The Level 4 escort also drops power-ups periodically
+- Weapons, drones, lives and bombs carry over between campaign levels (see §9)
 
 ---
 
 ## 5. Scoring System
 
 ### 5.1 Base Scoring
-- Each enemy type has a base point value (see Section 7 for values)
-- Points awarded on kill
+- Each enemy type has a base point value (see Section 7 for values), scaled up with the level's HP scaling
+- Points awarded on kill; point-blank kills (within 60 / 120 / 200 px) score 3× / 2× / 1.5×
 
 ### 5.2 Kill Chain Combo
-- Destroying an enemy starts/extends a combo timer (visible draining bar on HUD)
+- Destroying an enemy starts/extends a combo timer (3.0 s, visible draining bar on HUD)
+- **Every hit** also tops the timer up a little (DoDonPachi-style), so a player can bridge a quiet moment by
+  keeping fire on a tough enemy or the boss
 - Each consecutive kill before the timer expires adds to the chain counter
 - Chain multiplier tiers:
   - 1–9 hits: 1x multiplier
-  - 10–24 hits: 2x multiplier
-  - 25–49 hits: 3x multiplier
-  - 50–99 hits: 5x multiplier
-  - 100+ hits: 8x multiplier
+  - 10–19 hits: 2x multiplier
+  - 20–34 hits: 3x multiplier
+  - 35–59 hits: 5x multiplier
+  - 60+ hits: 8x multiplier
 - Timer drain speed varies by difficulty preset
 - Chain breaks (timer expires) reset counter and multiplier to 0/1x
 - Dying or using a bomb breaks the chain
 
 ### 5.3 Graze System (Neon Surge)
 - A detection zone slightly larger than the hitbox surrounds the player
-- Enemy bullets passing through this zone (but not hitting the hitbox) count as "grazes"
-- Each graze adds to the Surge meter (displayed on left HUD)
-- Graze detection zone size varies by difficulty
-- When Surge meter is full, player can activate **Neon Surge**:
-  - Duration: ~5 seconds
-  - Effects: 2x fire rate, player shots cancel enemy bullets on contact
+- Enemy bullets passing through this zone (but not hitting the hitbox) count as "grazes" — only while the
+  player is vulnerable (dashing still counts)
+- Each graze adds 5 to the Surge meter (100 = full); each kill adds 1.5. Grazing is the main source
+- Graze detection zone size and reward vary by difficulty
+- Graze milestones (25/50/100/200/500 grazes in a level) award bonus points
+- When the Surge meter is full, press **SURGE** (F / M; gamepad RT / Y) — or Bomb with no bombs left:
+  - Duration: 5 seconds
+  - Effects: 2x fire rate (base shot, weapon and drones), player shots cancel enemy bullets on contact
   - Visual: Ship and projectiles glow white-hot, screen edges pulse, intensified bloom
   - Score bonus: All kills during Surge award 3x points (stacks with chain multiplier)
+- On death the Surge meter keeps half its charge
 
 ### 5.4 Bullet Cancel Score Bonus
-- When a medium or larger enemy is destroyed, all of their active bullets convert into small score pickups
-- Score pickups gravitate toward the player
-- Each pickup worth 100 base points × current chain multiplier
-- Visual: Bullets pop into small cyan stars that drift toward player
+- When a medium or larger enemy is destroyed, its nearby bullets are cancelled into score
+- Each cancelled bullet is worth 250 base points × current chain multiplier
+- Visual: Bullets pop into small cyan stars
 
-### 5.5 End-of-Run Bonuses
-- **Boss Phase Clear Bonus:** Points awarded for each boss phase completed
+### 5.5 End-of-Level Bonuses
+All bonuses count **the level just played** (not the whole run):
+- **Boss Phase Clear Bonus:** 5,000 / 10,000 per phase cleared by damage (not by timeout), 25,000 for the kill
 - **Time Bonus:** Points for completing the level quickly (scaled)
-- **No-Death Bonus:** Significant bonus for completing without dying
-- **Max Chain Bonus:** Bonus based on longest chain achieved
+- **Lives Bonus:** 5,000 per remaining life
+- **No-Death Bonus:** 15,000 for completing the level without dying
+- **Chain Bonus:** 50 × longest chain in the level
+- **Graze Bonus:** 10 × grazes in the level
 
 ### 5.6 Difficulty Score Multiplier
 All scoring is multiplied by a global difficulty factor:
@@ -184,6 +204,7 @@ All scoring is multiplied by a global difficulty factor:
 - Auto-fire: ON (default, can toggle)
 - Lives: 5
 - Death Penalty: None (keep all upgrades)
+- Death-bomb window: 0.25 s
 - Enemy Bullet Density: 60%
 - Chain Timer: Lenient (slow drain)
 - Score Multiplier: 0.5x
@@ -195,14 +216,15 @@ All scoring is multiplied by a global difficulty factor:
 - Graze System: ON (standard detection zone)
 - Auto-fire: OFF (default, can toggle)
 - Lives: 3
-- Death Penalty: Moderate (drop 1 weapon level, drop 1 drone level)
+- Death Penalty: Moderate (drop 1 weapon level — losing the weapon at Lv1 — and 1 drone level)
+- Death-bomb window: 0.15 s
 - Enemy Bullet Density: 100%
 - Chain Timer: Standard
 - Score Multiplier: 1.0x
 
 **Hardcore:**
-- Bombs: OFF
-- Focus/Slow Mode: OFF
+- Bombs: OFF (so no death-bomb)
+- Focus/Slow Mode: ON (focus is a precision tool, not an assist)
 - Dash: ON (3s cooldown)
 - Graze System: ON (tight detection zone, higher reward multiplier)
 - Auto-fire: OFF
@@ -218,7 +240,22 @@ All scoring is multiplied by a global difficulty factor:
 - Scores not recorded to any leaderboard
 - Still earns Neon Credits at 0.75x rate
 
-### 6.2 Toggleable Options (Custom Mode)
+### 6.2 Level Scaling
+Each level has a `levelScale` (1.0 → 2.5 by Level 6). Following Cave/Touhou practice, later levels escalate
+mostly through density; bullet speed stays readable:
+
+| Level 6 vs Level 1 | Multiplier |
+|---|---|
+| Bullet density (count in patterns, fire frequency for aimed shooters) | ×1.75 |
+| Enemy HP (and score) | ×1.9 |
+| Enemy fire frequency | ×1.3 |
+| Enemy bullet speed | ×1.2 (cap) |
+
+Density applies to every enemy type and to boss patterns (bullet counts are recomputed so rings stay evenly
+spaced and walls span the screen). Endless mode uses the same curve driven by time, with density capped at
+×2.2 and HP at ×3.
+
+### 6.3 Toggleable Options (Custom Mode)
 | Option | Values | Default (Normal) |
 |--------|--------|-------------------|
 | Bombs | ON / OFF | ON |
@@ -286,7 +323,15 @@ All scoring is multiplied by a global difficulty factor:
 - Note: Shield must be broken first (visual crack effect); bullets cancel on destruction
 
 ### 7.3 Boss — "THE ARCHITECT"
-Multi-stage boss fight, ~2 minutes total duration.
+Multi-stage boss fight. Rules shared by all six bosses:
+- **Fight length:** tuned for ~35–65 s at full uptime with a Lv3–Lv5 weapon (45–120 s in real play is the
+  genre norm). Boss HP rises from 920 (Architect, incl. armor) to 1,470 (Echo); the fast-strafing
+  Interceptor Duo has less HP (700) because it is hard to stay under
+- **Phase timeout:** each phase ends after 45 s (on-screen timer) without its clear bonus, so an
+  under-powered player is never stuck
+- **Telegraphs:** stationary "laser" bullets appear faint and harmless for 0.35 s before becoming lethal
+- **Armor** (Architect, Nexus): segments are real hit zones orbiting the core; while any remain, the core
+  takes 50% damage
 
 **Phase 1: Armored Shell**
 - Large mechanical/sci-fi hybrid design
@@ -323,9 +368,40 @@ Multi-stage boss fight, ~2 minutes total duration.
 
 ---
 
+### 7.4 Mid-Bosses
+One per level, about a third of the way in (Cave / Touhou convention):
+
+| Level | Mid-boss | Movement | Patterns |
+|---|---|---|---|
+| 1 | Sentinel | sways across the top | aimed fan, ring, wide fan |
+| 2 | Forge Walker | sways | bomb drop + ring, wall with a gap near the player, heavy aimed shots |
+| 3 | Debris Hauler | sways | spiral, thrown debris + aimed shots, ring |
+| 4 | Strike Leader | darts between three positions | fast aimed fan, calls in scouts, cross streams |
+| 5 | Core Warden | telegraphed teleports | double ring, triple spiral, aimed fan |
+| 6 | Glitch Echo | mirrors the player | mirrored spread, random burst, ring + aimed shots |
+
+- 250 base HP (150 for the mobile Strike Leader), × the level's HP scaling; bombs take 10% like a boss
+- The wave clock pauses while it is alive; nothing else spawns
+- Escapes after 35 s (on-screen timer) with no reward
+- Destroyed: 8,000 bonus (× difficulty multiplier), every enemy bullet cancelled, 2 guaranteed power-ups
+
+---
+
 ## 8. Level Pacing
 
-### Wave Structure (~5 minutes total)
+### Wave Structure
+
+*Implemented structure (every level, ~4–4.5 min in simulated Normal play, matching the genre's 3–5 min):*
+
+| Segment | Wave clock | Content |
+|---|---|---|
+| Opening | 0 – ~46 s | The level's original early waves |
+| **Mid-boss** | clock paused | One themed mid-boss (§7.4); ~20–25 s at typical power, escapes after 35 s |
+| Escalation | ~46 – ~92 s | The level's original later waves |
+| Finale | ~80 – ~140 s | Six new, denser mixed waves ending in a generous pre-boss wave |
+| Boss | — | Arrives when the field is clear or 8 s after the last wave (stragglers retreat) |
+
+*Hover and strafe enemies retreat after 14–16 s if not killed. The table below is the original v1.0 plan.*
 
 | Segment | Time | Content | Music |
 |---------|------|---------|-------|
@@ -351,11 +427,19 @@ Multi-stage boss fight, ~2 minutes total duration.
 - Respawn at bottom-center with ~2 seconds of invincibility (ship blinks)
 - Death penalty applied (varies by difficulty):
   - **None:** Keep all upgrades
-  - **Moderate:** Primary weapon drops 1 level (min: base shot). Drones drop 1 level.
+  - **Moderate:** Primary weapon drops 1 level (lost at Lv1). Drones drop 1 level.
   - **Full:** Primary weapon resets to base shot. Drones removed entirely.
-- Bombs replenished to 2 on respawn
+- Up to 2 bombs restored on respawn (not above the starting count)
 - Chain combo broken on death
-- Surge meter reset to 0 on death
+- Surge meter keeps half its charge on death
+
+### Run Persistence and Extends
+- Lives, bombs (topped up to the starting count), weapon and drones carry over between campaign levels;
+  score is cumulative for the run
+- **Extends:** +1 life at 300k / 1M / 2M / 4M points (× the difficulty score multiplier), max 9 lives
+- Starting a level from Level Select or Custom begins a fresh run
+- **Retry after Game Over** on Level 2+ restarts that level with a minimum loadout (the weapon held at the
+  start of the level at Lv2, drones up to Lv1)
 
 ### Game Over
 - All lives lost → Game Over screen
@@ -379,6 +463,7 @@ Multi-stage boss fight, ~2 minutes total duration.
 | Focus (Slow) | Left Shift | X |
 | Dash | C | V |
 | Bomb | B | N |
+| Neon Surge | F | M |
 | Pause | Escape | P |
 
 ### Gamepad (Standard Mapping)
@@ -389,6 +474,7 @@ Multi-stage boss fight, ~2 minutes total duration.
 | Focus | Left Trigger (hold) |
 | Dash | Right Bumper |
 | Bomb | Left Bumper |
+| Neon Surge | Right Trigger / Y |
 | Pause | Start |
 
 ### Control Rebinding
@@ -448,7 +534,7 @@ Generated procedurally, no external audio files required:
 - Power-up collect (bright ascending chime)
 - Graze (sharp crackle/spark)
 - Surge activate (rising power-up swell)
-- Chain milestone (brief celebratory sting at 10/25/50/100)
+- Chain milestone (brief celebratory sting at 10/20/35/60)
 - Menu select (click)
 - Menu navigate (subtle tick)
 - Player death (descending crash)

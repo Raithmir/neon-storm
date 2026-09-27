@@ -354,6 +354,7 @@ const HUD = {
             ['FOCUS', Input.getKeyBindDisplay('focus')],
             ['DASH', Input.getKeyBindDisplay('dash')],
             ['BOMB', Input.getKeyBindDisplay('bomb')],
+            ['SURGE', Input.getKeyBindDisplay('surge')],
             ['PAUSE', Input.getKeyBindDisplay('pause')]
         ];
         controls.forEach((c, i) => {

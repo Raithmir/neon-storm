@@ -26,6 +26,7 @@ const SOURCE_FILES = [
     'bullets.js',
     'scoring.js',
     'enemies.js',
+    'midbosses.js',
     'waves.js',
     'level-systems.js',
     'bosses.js',
