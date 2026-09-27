@@ -1,13 +1,15 @@
 // ============================================================
-//  NEON STORM — Music check and preview renderer
+//  NEON STORM — Audio check and preview renderer (music + SFX)
 // ============================================================
-// Renders every music track offline (OfflineAudioContext, faster than real
-// time) through the game's real mix, and fails on any page error, a silent
-// track or clipping. It also walks the game states and checks Music picks
-// the right track and intensity for each.
+// Renders every music track and sound effect offline (OfflineAudioContext,
+// faster than real time) through the game's real mix, and fails on any page
+// error, a silent sound or clipping (including 40 explosions in one frame, as
+// when a bomb clears the screen). It also walks the game states and checks
+// Music picks the right track and intensity for each.
 //
-//   node tools/sim/music.js           # check only
-//   node tools/sim/music.js --wav     # also write WAV previews to tools/sim/out/music/
+//   node tools/sim/audio.js           # check only
+//   node tools/sim/audio.js --wav     # also write WAV previews to tools/sim/out/audio/
+//                                     # (one per track, plus sfx-reel.wav with every sound in turn)
 //
 // Each preview plays the track's layers in turn: intensity 0 (pads + arp),
 // 1 (+ drums + bass), 2 (+ lead) and 3 (+ fills). Results and game over play
@@ -18,7 +20,7 @@ const path = require('path');
 const { launch, writeResult } = require('./harness');
 
 const WAV = process.argv.includes('--wav');
-const OUT = path.join(__dirname, 'out', 'music');
+const OUT = path.join(__dirname, 'out', 'audio');
 
 // [track, bars at each intensity 0..3]
 const PLANS = [
@@ -152,9 +154,58 @@ function wavFile(ch, rate) {
     }
     results.states = states;
 
-    writeResult('music.json', results);
+    // --- Sound effects ---
+    const SFX = ['playShot', 'playMissile', 'laserHum', 'playDash', 'playGraze', 'playHitTick', 'playPowerUp', 'playExtend',
+        'playChainMilestone', 'playSurgeActivate', 'playShieldHit', 'playBomb', 'playPlayerDeath', 'playExplosionSmall',
+        'playExplosionLarge', 'playAsteroidBreak', 'playEscortHit', 'playMidbossAlert', 'playBossWarning', 'playBossPhase',
+        'playMenuNav', 'playMenuSelect', 'pileup'];
+    const reel = [[], []];
+    results.sfx = {};
+    for (const name of SFX) {
+        const before = g.errors.length;
+        let r;
+        try {
+            r = await g.ev(async ([name, wav]) => {
+                const RATE = 44100, secs = name === 'playBossWarning' ? 3 : name === 'laserHum' ? 1 : 1.8;
+                const ctx = new OfflineAudioContext(2, Math.ceil(secs * RATE), RATE);
+                Audio.ctx = ctx; Audio._buildMix(); Audio._last = {}; Audio._laser = null;
+                Audio.sfxVolume = 0.7;                                   // default SFX VOLUME
+                if (name === 'laserHum') { Audio.laserHum(true); Audio.frame(); }
+                else if (name === 'pileup') { for (let i = 0; i < 40; i++) Audio.playExplosionSmall(); Audio.playBomb(); }
+                else if (name === 'playChainMilestone') Audio.playChainMilestone(8);
+                else Audio[name]();
+                const buf = await ctx.startRendering();
+                const chans = [buf.getChannelData(0), buf.getChannelData(1)];
+                let peak = 0, sum = 0;
+                for (const d of chans) for (let i = 0; i < d.length; i++) { const v = Math.abs(d[i]); if (v > peak) peak = v; sum += d[i] * d[i]; }
+                Audio.ctx = null; Audio._laser = null; Audio.sfxBus = null; Audio.musicBus = null; Audio.musicDuck = null;
+                const out = { peak: +peak.toFixed(3), rms: +Math.sqrt(sum / (chans[0].length * 2)).toFixed(4) };
+                if (wav) out.pcm = chans.map(d => Array.from(d, v => Math.round(v * 32767)));
+                return out;
+            }, [name, WAV]);
+        } catch (e) {
+            r = { error: e.message.split('\n')[0] };
+        }
+        const errs = g.errors.slice(before);
+        const problems = [];
+        if (r.error) problems.push(r.error);
+        if (errs.length) problems.push(...errs.slice(0, 3));
+        if (!r.error && r.peak < 0.01) problems.push('silent (peak ' + r.peak + ')');
+        if (!r.error && r.peak >= 0.99) problems.push('clipping (peak ' + r.peak + ')');
+        if (problems.length) failed = true;
+        console.log((problems.length ? 'FAIL  ' : 'PASS  ') + ('sfx ' + name).padEnd(24) +
+            (r.error ? '' : ` peak ${r.peak}  rms ${r.rms}`) + (problems.length ? '\n      ' + problems.join('\n      ') : ''));
+        if (WAV && r.pcm) {
+            for (let c = 0; c < 2; c++) { for (const v of r.pcm[c]) reel[c].push(v); for (let i = 0; i < 22050; i++) reel[c].push(0); }
+            delete r.pcm;
+        }
+        results.sfx[name] = { ok: !problems.length, ...r, problems };
+    }
+    if (WAV) fs.writeFileSync(path.join(OUT, 'sfx-reel.wav'), wavFile(reel.map(a => Float32Array.from(a, v => v / 32767)), 44100));
+
+    writeResult('audio.json', results);
     await g.close();
     if (WAV) console.log('\nWAV previews in ' + OUT);
-    console.log(failed ? '\nMusic check FAILED' : '\nMusic check passed');
+    console.log(failed ? '\nAudio check FAILED' : '\nAudio check passed');
     process.exit(failed ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

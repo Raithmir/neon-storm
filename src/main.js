@@ -9,6 +9,7 @@ function gameLoop(timestamp) {
     Game.update(dt);
     Game.draw();
     Music.update();
+    Audio.frame();
     Input.lateUpdate();
 
     requestAnimationFrame(gameLoop);

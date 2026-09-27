@@ -9,7 +9,7 @@
     "sim:render": "node tools/sim/render-smoke.js",
     "sim:weapons": "node tools/sim/weapons.js",
     "sim:boss-ttk": "node tools/sim/boss-ttk.js",
-    "sim:music": "node tools/sim/music.js"
+    "sim:audio": "node tools/sim/audio.js"
   },
   "private": true
 }

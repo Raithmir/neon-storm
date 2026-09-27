@@ -144,7 +144,7 @@ const Scoring = {
             if (Player.lives < 9) {
                 Player.lives++;
                 this.spawnPopup('EXTEND! 1UP', '#00ff88', 28);
-                Audio.playPowerUp();
+                Audio.playExtend();
             }
         }
     },

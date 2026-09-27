@@ -16,6 +16,7 @@ const Game = {
         Input.init();
         Audio.init();
         Background.init();
+        await SaveData.migrate();
         await HighScores.load();
         await Settings.load();
         await NeonCredits.load();
@@ -40,6 +41,7 @@ const Game = {
     // continuing: true only when advancing from a victory screen within one campaign run.
     // Level select, custom start, retry and restart all begin a fresh run.
     startLevel(levelIndex, difficulty, continuing) {
+        SaveData.migrated = null;   // the title's save-update note has been seen
         if (difficulty !== 'custom') {
             GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
             GameConfig.difficulty = difficulty;
@@ -541,6 +543,7 @@ const Game = {
                         Enemies.retreatAll();
                         const levelData = ALL_LEVELS[this.currentLevelIndex];
                         Boss.init(levelData.bossType || 'architect');
+                        Audio.playBossWarning();
                         WaveSystem.bossActive = true;
                     }
                 }

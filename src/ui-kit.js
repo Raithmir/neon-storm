@@ -146,7 +146,17 @@ const UI = {
     },
 
     hint(ctx, text, y) {
-        Neon.text(ctx, text, SCREEN_W / 2, y || SCREEN_H - 40, this.DIM, 15, { weight: '', halo: 0 });
+        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || SCREEN_H - 40, this.DIM, 15, { weight: '', halo: 0 });
+    },
+
+    // Prompt text for the device in use: with a gamepad, key names become its
+    // buttons (confirm is always A, back always B). Arrows read as the D-pad.
+    keys(text) {
+        if (Input.lastDevice !== 'pad') return text;
+        return text
+            .replace('ARROW KEYS / D-PAD', 'D-PAD')
+            .replace(/\bENTER\b/g, '[A]')
+            .replace(/\bESC\b/g, '[B]');
     },
 
     label(ctx, text, x, y, color, size, align) {

@@ -65,6 +65,11 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
         ['game_over', () => { EndRunBonus.calculate(false, 0, 10, 10, 60, false); Game.state = 'game_over'; }],
         ['victory', () => { EndRunBonus.calculate(true, 2, 10, 10, 60, true); Game.state = 'victory'; }],
         ['campaign_complete', () => { Game.state = 'campaign_complete'; }],
+        ['gamepad prompts', () => {
+            Input.lastDevice = 'pad';
+            for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }
+            Input.lastDevice = 'keyboard'; Game.state = 'title';
+        }],
     ];
     for (const [name, setup] of screens) {
         const src = setup.toString();

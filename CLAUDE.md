@@ -20,10 +20,10 @@ There are no unit tests, no lint, and no transpilation — vanilla JS only.
 # Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
 npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
 npm run sim:render     # render smoke test: every screen + every level drawn, fails on any error
-npm run sim:music      # music check: every track rendered offline; --wav writes previews
+npm run sim:audio      # audio check: every music track + SFX rendered offline; --wav writes previews
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks`, `sim:render` and `sim:music`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks`, `sim:render` and `sim:audio`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
 
 Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 
@@ -122,11 +122,17 @@ Hangar cosmetics change the look, not just the colour: bullet styles pick the pl
 
 ### Music
 
-The soundtrack is procedural (`music.js`), so the build stays one offline file. `MusicTracks` describes each track as data: tempo, key/scale, chord progression, drum kit, bass and arp patterns, timbres. The lead melody is generated from the progression with a seeded RNG, so it's the same every time. `Music.update()` (called from the game loop) picks the track from game state in `Music._want()` — title for menus, one per level, `boss:<level>` in the level's key, `results`/`gameover` with a sting — and sets the intensity (0 pads+arp, 1 +drums/bass, 2 +lead, 3 +fills; changes land on bar lines). Pause muffles the music via `Audio.musicFilter`; bombs and deaths call `Audio.duckMusic()`. **Adding a track:** add an entry to `MusicTracks` and return its id from `_want()`; check it with `node tools/sim/music.js --wav` and listen to the WAV.
+The soundtrack is procedural (`music.js`), so the build stays one offline file. `MusicTracks` describes each track as data: tempo, key/scale, chord progression, drum kit, bass and arp patterns, timbres. The lead melody is generated from the progression with a seeded RNG, so it's the same every time. `Music.update()` (called from the game loop) picks the track from game state in `Music._want()` — title for menus, one per level, `boss:<level>` in the level's key, `results`/`gameover` with a sting — and sets the intensity (0 pads+arp, 1 +drums/bass, 2 +lead, 3 +fills; changes land on bar lines). Pause muffles the music via `Audio.musicFilter`; bombs and deaths call `Audio.duckMusic()`. **Adding a track:** add an entry to `MusicTracks` and return its id from `_want()`; check it with `node tools/sim/audio.js --wav` and listen to the WAV.
 
 ### Persistence
 
 `storage.js` wraps both `localStorage` and the Artifact Storage API. High scores, settings, Neon Credits, hangar cosmetics, and campaign progress all persist here.
+
+Saves are versioned: `SaveData.migrate()` (run first in `Game.init()`) upgrades older saves step by step to `SAVE_VERSION`. **If you change what saved data means or how it's stored, bump `SAVE_VERSION` and add a step to `SaveData.steps`** — keep progress, archive rather than delete.
+
+### Prompts
+
+Menu hints go through `UI.keys()` (automatic in `UI.hint`): when `Input.lastDevice` is `'pad'`, ENTER/ESC become [A]/[B]. Wrap any new on-screen key names in `UI.keys()`.
 
 ### Boot Sequence (`main.js`)
 

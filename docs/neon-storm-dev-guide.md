@@ -285,22 +285,19 @@ Shared uniforms (`uTime`, `uRes`, `uPulse`, `uBoss`, `uSurge`, `uDim`, `uCalm`) 
 
 All SFX are procedurally generated via Web Audio API — no external audio files.
 
+Sounds are built from two helpers: `_tone(t, out, {type, f, f2, dur, gain, a, lp})` (oscillator with a pitch glide and envelope) and `_noise(t, out, {filter, f, f2, q, dur, gain})` (a slice of one shared noise buffer through a swept filter). `_glass()` adds the glassy pings used by explosions, `_verb()` sends a layer to the short SFX reverb, and `_throttle(key, gap)` stops a sound restarting too often (a bomb can kill dozens of enemies in one frame).
+
 **Adding a new sound:**
 ```javascript
 playMySound() {
-    if (!this.enabled || !this.ctx) return;
+    if (!this._ok() || this._throttle('mine', 0.05)) return;
     const t = this.ctx.currentTime;
-    const osc = this.ctx.createOscillator();
-    const gain = this._createGain(0.1); // volume
-    osc.type = 'sine'; // 'sine', 'square', 'sawtooth', 'triangle'
-    osc.frequency.setValueAtTime(440, t);
-    osc.frequency.exponentialRampToValueAtTime(220, t + 0.1);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.15);
-    osc.connect(gain);
-    osc.start(t);
-    osc.stop(t + 0.15);
+    const out = this._createGain(0.2);                     // volume (× SFX VOLUME)
+    this._tone(t, out, { type: 'triangle', f: 880, f2: 440, dur: 0.12 });
+    this._noise(t, out, { filter: 'highpass', f: 5000, dur: 0.03, gain: 0.3 });
 }
 ```
+The laser is a sustained hum: player code calls `Audio.laserHum(true)` every frame it fires and `Audio.frame()` (game loop) stops it when that stops, so pausing or leaving the level silences it. `npm run sim:audio` renders every sound and fails on silence or clipping.
 
 SFX go through `Audio.sfxBus`, music through `Audio.musicBus` → `musicFilter` (pause muffle) → `musicDuck` (`Audio.duckMusic()`, used by bombs and deaths); both share a master compressor, trimmed so quiet sounds keep their level.
 
@@ -318,7 +315,7 @@ The soundtrack is generated live by `music.js` — no audio files, no licensing.
 
 `Music.update()` runs every frame from `main.js`: `_want()` maps game state to a track and intensity, a change of track crossfades (1.2 s), and notes are scheduled 0.2 s ahead on the audio clock. Intensity (applied at the next bar): 0 pads + arpeggio (briefing, boss WARNING, after a boss dies), 1 + drums and bass, 2 + lead and 16th hats (mid-boss, boss), 3 + fills and brighter pads (boss final phase, Neon Surge). Pads, bass and arp are side-chained to the kick. MUSIC VOLUME 0 stops the music.
 
-`npm run sim:music` renders every track offline through the real mix and fails on errors, silence or clipping, and checks the track chosen for each game state. `node tools/sim/music.js --wav` also writes WAV previews to `tools/sim/out/music/`.
+`npm run sim:audio` renders every track and sound effect offline through the real mix and fails on errors, silence or clipping, and checks the track chosen for each game state. `node tools/sim/audio.js --wav` also writes WAV previews to `tools/sim/out/audio/` (one per track, plus `sfx-reel.wav`).
 
 ### Persistence
 
@@ -334,6 +331,10 @@ Data is stored via the `Storage` abstraction which tries `window.storage` (Artif
 | `campaign` | Levels unlocked, secret flag, per-level bests (level score, not run score) | Campaign |
 | `achievements` | Unlocked achievements + trackers | Achievements |
 | `inputBindings` | Keyboard + gamepad bindings | Input |
+| `saveVersion` | Save format version (`SAVE_VERSION`) | SaveData |
+| `highscores_v1`, `levelBests_v1` | Pre-γ scores, archived by the v1 → v2 migration (not shown in game) | SaveData |
+
+**Save versioning:** `SaveData.migrate()` runs in `Game.init()` before anything loads. A save without `saveVersion` is v1 (α/β). Each step in `SaveData.steps[n]` upgrades v*n* to v*n*+1; a save from a newer build is left untouched. When the save format or the meaning of saved data changes, bump `SAVE_VERSION` and add a step — keep progress, archive rather than delete. The title screen notes a migration once. Regression check: `saveMigrationKeepsProgress`.
 
 ---
 
@@ -421,12 +422,6 @@ See `neon-storm-checklist.md` for the complete remaining work tracker.
 - [ ] Asteroid collision only checks player bullets, not enemy bullets
 - [ ] Shield Wall enemies don't visually link together
 - [ ] Endless has no mid-bosses
-
-### Audio
-- [ ] SFX not yet upgraded to match the γ visuals (see checklist)
-
-### UI/UX
-- [ ] Gamepad button prompts not shown when controller is detected
 
 ### Hangar Bonus Content
 - [ ] Boss Practice Mode, Enemy Gallery, Music Player, Ship Color Designer — listed in shop but not implemented
