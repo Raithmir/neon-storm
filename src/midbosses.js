@@ -528,18 +528,7 @@ const MidBoss = {
     drawBar(ctx) {
         const e = this.current();
         if (!e || e.y < 0) return;
-        const barW = 200, barH = 6, barX = (PLAY_W - barW) / 2, barY = 15;
-        ctx.fillStyle = '#221100';
-        ctx.fillRect(barX, barY, barW, barH);
-        ctx.fillStyle = e.color;
-        ctx.fillRect(barX, barY, barW * Math.max(0, e.hp / e.maxHp), barH);
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '12px Share Tech Mono, Consolas, monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText('MID-BOSS — ' + e.midboss.name, PLAY_W / 2, barY + barH + 12);
         const timeLeft = Math.max(0, MIDBOSS_TIME_LIMIT - e.onScreenTime);
-        ctx.textAlign = 'right';
-        ctx.fillStyle = timeLeft <= 10 ? '#ff4444' : '#aaaaaa';
-        ctx.fillText(Math.ceil(timeLeft).toString(), barX + barW + 34, barY + barH);
+        Neon.topBar(ctx, 'MID-BOSS — ' + e.midboss.name, e.hp / e.maxHp, e.color, timeLeft);
     },
 };

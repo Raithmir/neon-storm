@@ -1186,16 +1186,32 @@ const Boss = {
     draw(ctx) {
         if (!this.active) return;
 
-        // Warning text
+        // Warning: hazard bands slide in above and below a pulsing banner
         if (this.warningTimer > 0) {
+            const t = 3 - this.warningTimer;
+            const inK = Math.min(1, t * 3, this.warningTimer * 3);
+            const pulse = Renderer.calm() ? 0.85 : 0.6 + Math.sin(t * 8) * 0.4;
+            const cy = PLAY_H / 2;
             ctx.save();
-            ctx.fillStyle = `rgba(255, 0, 80, ${0.5 + Math.sin(this.warningTimer * 8) * 0.5})`;
-            ctx.font = 'bold 28px Share Tech Mono, Consolas, monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText('WARNING', PLAY_W / 2, PLAY_H / 2 - 20);
-            ctx.font = '16px Share Tech Mono, Consolas, monospace';
-            ctx.fillText(this.bossName + ' APPROACHES', PLAY_W / 2, PLAY_H / 2 + 15);
+            ctx.globalAlpha = inK;
+            ctx.fillStyle = 'rgba(20, 0, 8, 0.6)';
+            ctx.fillRect(0, cy - 62, PLAY_W, 104);
+            for (const by of [cy - 62, cy + 34]) {
+                ctx.save();
+                ctx.beginPath(); ctx.rect(0, by, PLAY_W, 8); ctx.clip();
+                ctx.fillStyle = '#ff0050';
+                const off = (t * 60 * (by < cy ? 1 : -1)) % 24;
+                for (let x = -24 + off; x < PLAY_W + 24; x += 24) {
+                    ctx.beginPath(); ctx.moveTo(x, by + 8); ctx.lineTo(x + 8, by); ctx.lineTo(x + 16, by); ctx.lineTo(x + 8, by + 8); ctx.fill();
+                }
+                ctx.restore();
+            }
+            ctx.globalAlpha = inK * pulse;
+            Neon.text(ctx, 'WARNING', PLAY_W / 2, cy - 8, '#ff0050', 46, { core: 0.4 });
+            ctx.globalAlpha = inK;
+            Neon.text(ctx, this.bossName + ' APPROACHES', PLAY_W / 2, cy + 22, '#ff6688', 16, { weight: '' });
             ctx.restore();
+            Renderer.addGlow(PLAY_W / 2, cy - 20, 0xff0050, 200, 0.25 * inK * pulse);
             return;
         }
 
@@ -1241,28 +1257,12 @@ const Boss = {
 
         ctx.restore();
 
-        // HP bar
+        // HP bar, with pips for the phases still to come
         if (this.entered && !this.defeated) {
-            const barW = 200;
-            const barH = 8;
-            const barX = (PLAY_W - barW) / 2;
-            const barY = 15;
-            ctx.fillStyle = '#220022';
-            ctx.fillRect(barX, barY, barW, barH);
-            const pct = Math.max(0, this.hp / this.maxHp);
-            const hpColor = this.phase === 1 ? '#ff4444' : this.phase === 2 ? '#ff00ff' : '#ff0040';
-            ctx.fillStyle = hpColor;
-            ctx.fillRect(barX, barY, barW * pct, barH);
-            // Phase label
-            ctx.fillStyle = '#ffffff';
-            ctx.font = '12px Share Tech Mono, Consolas, monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(`${this.bossName} — PHASE ${this.phase}`, PLAY_W / 2, barY + barH + 12);
-            // Phase timer (turns red in the last 10 s)
+            const hpColor = this.phase === 1 ? '#ff4455' : this.phase === 2 ? '#ff00ff' : '#ff0040';
             const timeLeft = Math.max(0, BOSS_PHASE_TIME_LIMIT - this.phaseTime);
-            ctx.textAlign = 'right';
-            ctx.fillStyle = timeLeft <= 10 ? '#ff4444' : '#aaaaaa';
-            ctx.fillText(Math.ceil(timeLeft).toString(), barX + barW + 34, barY + barH);
+            Neon.topBar(ctx, `${this.bossName} — PHASE ${this.phase}`, this.hp / this.maxHp, hpColor, timeLeft,
+                [this.totalPhases - this.phase + 1, this.totalPhases]);
         }
     }
 };

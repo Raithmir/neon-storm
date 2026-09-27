@@ -224,6 +224,86 @@ const Neon = {
         return pts;
     },
 
+    // Neon text: a soft coloured halo, the coloured letters, then a faint
+    // white-hot core. align/baseline default to centre/alphabetic.
+    // opts: { weight: 'bold' | '', align, baseline, core (0..1), halo (0..1) }
+    FONT: 'Share Tech Mono, Consolas, monospace',
+    text(ctx, str, x, y, color, size, opts) {
+        const o = opts || {};
+        const a = ctx.globalAlpha;
+        ctx.font = (o.weight === undefined ? 'bold ' : o.weight + ' ') + size + 'px ' + this.FONT;
+        ctx.textAlign = o.align || 'center';
+        ctx.textBaseline = o.baseline || 'alphabetic';
+        ctx.lineJoin = 'round';
+        const halo = o.halo !== undefined ? o.halo : 0.35;
+        if (halo > 0) {
+            ctx.strokeStyle = color;
+            ctx.globalAlpha = a * halo;
+            ctx.lineWidth = Math.max(2, size * 0.18);
+            ctx.strokeText(str, x, y);
+        }
+        ctx.globalAlpha = a;
+        ctx.fillStyle = color;
+        ctx.fillText(str, x, y);
+        const core = o.core !== undefined ? o.core : (size >= 20 ? 0.35 : 0);
+        if (core > 0) {
+            ctx.globalAlpha = a * core;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillText(str, x, y);
+        }
+        ctx.globalAlpha = a;
+        ctx.textBaseline = 'alphabetic';
+    },
+
+    // Neon gauge: dark track, coloured fill with a bright leading edge and
+    // top highlight, thin outline; optional tick marks every 1/segments.
+    bar(ctx, x, y, w, h, frac, color, segments) {
+        const f = Math.max(0, Math.min(1, frac));
+        const a = ctx.globalAlpha;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(x, y, w, h);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = a * 0.85;
+        ctx.fillRect(x, y, w * f, h);
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = a * 0.45;
+        ctx.fillRect(x, y, w * f, Math.max(1, h * 0.25));
+        if (f > 0 && f < 1) {
+            ctx.globalAlpha = a;
+            ctx.fillRect(x + w * f - 1, y, 2, h);
+        }
+        if (segments > 1) {
+            ctx.fillStyle = '#000000';
+            ctx.globalAlpha = a * 0.6;
+            for (let i = 1; i < segments; i++) ctx.fillRect(x + (w * i) / segments - 0.5, y, 1, h);
+        }
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = a * 0.6;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x - 0.5, y - 0.5, w + 1, h + 1);
+        ctx.globalAlpha = a;
+    },
+
+    // Boss / mid-boss health bar across the top of the play area.
+    // pips: [remaining, total] phase markers (optional); timeLeft in seconds.
+    topBar(ctx, label, frac, color, timeLeft, pips) {
+        const w = 360, h = 7, x = (PLAY_W - w) / 2, y = 16;
+        this.bar(ctx, x, y, w, h, frac, color, 10);
+        this.text(ctx, label, PLAY_W / 2, y + h + 15, color, 13, { core: 0.5 });
+        if (timeLeft !== undefined) {
+            this.text(ctx, Math.ceil(timeLeft).toString(), x + w + 30, y + h, timeLeft <= 10 ? '#ff3355' : '#aabbcc', 14, { align: 'right' });
+        }
+        if (pips) {
+            for (let i = 0; i < pips[1]; i++) {
+                const px = x - 12 - i * 12, py = y + h / 2;
+                ctx.beginPath();
+                ctx.moveTo(px, py - 4); ctx.lineTo(px + 4, py); ctx.lineTo(px, py + 4); ctx.lineTo(px - 4, py); ctx.closePath();
+                if (i < pips[0]) { ctx.fillStyle = color; ctx.fill(); }
+                ctx.strokeStyle = color; ctx.lineWidth = 1; ctx.stroke();
+            }
+        }
+    },
+
     // Hit reaction: a brief squash-and-stretch around the current origin
     squash(ctx, flash, amount) {
         if (!flash) return;

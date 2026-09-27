@@ -791,14 +791,10 @@ const Enemies = {
 
             // HP bar for tough enemies (mid-bosses use the top-of-screen bar)
             if (e.maxHp > 2 && !e.midboss) {
+                if (e.rotation) ctx.rotate(-e.rotation);   // keep the bar level
                 const barW = e.radius * 2;
-                const barH = 3;
-                const barY = -e.radius - 8;
-                ctx.fillStyle = '#330000';
-                ctx.fillRect(-barW / 2, barY, barW, barH);
                 const hpPct = (e.hp + Math.max(0, e.shieldHp)) / (e.maxHp + e.maxShieldHp);
-                ctx.fillStyle = e.shieldHp > 0 ? '#4488ff' : '#ff4444';
-                ctx.fillRect(-barW / 2, barY, barW * hpPct, barH);
+                Neon.bar(ctx, -barW / 2, -e.radius - 9, barW, 3, hpPct, e.shieldHp > 0 ? '#4488ff' : '#ff3355', 0);
             }
 
             ctx.restore();

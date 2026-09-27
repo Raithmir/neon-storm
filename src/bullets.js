@@ -47,9 +47,10 @@ class BulletPool {
             Renderer.bulletShadowLayer.addParticle(b._ps);
         } else {
             b._shape = b.type === 'homing' ? 'missile' : (b.type === 'laser' ? 'beam' : 'streak');
-            body = b._shape === 'missile' ? fx.missile : fx.streak;
-            core = b._shape === 'missile' ? fx.core : fx.streak;
-            ay = b._shape === 'missile' ? 0.5 : 0.18;   // streak head sits on the bullet
+            // Laser shots are long soft glows that overlap into one continuous beam
+            body = b._shape === 'missile' ? fx.missile : (b._shape === 'beam' ? fx.glow : fx.streak);
+            core = b._shape === 'missile' || b._shape === 'beam' ? fx.core : fx.streak;
+            ay = b._shape === 'streak' ? 0.18 : 0.5;   // streak head sits on the bullet
         }
         b._p = new PIXI.Particle({ texture: body, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: b._hex, alpha: 0.9 });
         b._pc = new PIXI.Particle({ texture: core, x: b.x, y: b.y, anchorX: 0.5, anchorY: ay, tint: 0xffffff, alpha: 0.95 });
@@ -97,10 +98,13 @@ class BulletPool {
             p.scaleX = p.scaleY = r * 0.5;
             pc.scaleX = pc.scaleY = r * 0.12;
             pc.x = b.x - b.vx * 0.012; pc.y = b.y - b.vy * 0.012;   // hot exhaust at the tail
+        } else if (b._shape === 'beam') {
+            p.scaleX = r * 0.075; p.scaleY = 2.4;
+            pc.scaleX = r * 0.05; pc.scaleY = 11;
+            p.alpha = 0.55; pc.alpha = 0.7;
         } else {
-            const len = b._shape === 'beam' ? 0.36 : 0.14;
-            p.scaleX = r * 0.2; p.scaleY = r * len;
-            pc.scaleX = r * 0.08; pc.scaleY = r * len * 0.8;
+            p.scaleX = r * 0.2; p.scaleY = r * 0.14;
+            pc.scaleX = r * 0.08; pc.scaleY = r * 0.112;
         }
     }
 

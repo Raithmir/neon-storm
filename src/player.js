@@ -697,6 +697,13 @@ const Player = {
     _neonBank: 0,
     _neonLastX: null,
 
+    _HEX: Neon.polygon(6, Math.PI / 6),
+    _DRONE: [0, -1, 0.7, 0, 0, 1, -0.7, 0],
+    _bakeDrone(c) {
+        Neon.shape(c, Player._DRONE, 6, '#cc44ff', 0.9, false, 0.3);
+        Neon.detail(c, [-0.7, 0, 0.7, 0], 6, '#ee99ff', 0.6, 0.8);
+    },
+
     _bakeShipNeon(c, sc, r, surge) {
         Neon.shape(c, Player._NEON_HULL, r, sc, 1.2, false, 0.2);
         Neon.detail(c, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
@@ -784,35 +791,46 @@ const Player = {
 
         const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
 
-        // Engine trail — apply equipped trail color
-        ctx.globalAlpha = 0.3;
-        for (let i = 1; i < this.trailPositions.length; i++) {
-            const t = this.trailPositions[i];
-            const alpha = (1 - i / this.trailPositions.length) * 0.3;
-            ctx.globalAlpha = alpha;
-            ctx.fillStyle = this.dashing ? '#ffffff' : Hangar.trailColor;
-            ctx.beginPath();
-            ctx.arc(t.x, t.y, this.radius * (1 - i * 0.08), 0, Math.PI * 2);
-            ctx.fill();
+        // Engine trail: a tapering ribbon from the engines that streams down
+        // behind the ship (the world scrolls past) and bends as it moves
+        const trail = this.trailPositions;
+        const trailColor = this.dashing ? '#ffffff' : Hangar.trailColor;
+        if (trail.length > 1) {
+            const n = trail.length;
+            const pt = (i) => ({ x: trail[i].x, y: trail[i].y + this.radius * 0.7 + i * 7 });
+            for (let pass = 0; pass < 2; pass++) {
+                ctx.fillStyle = pass === 0 ? trailColor : '#ffffff';
+                for (let i = 0; i < n - 1; i++) {
+                    const p0 = pt(i), p1 = pt(i + 1);
+                    const w0 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - i / n);
+                    const w1 = this.radius * (pass === 0 ? 0.5 : 0.14) * (1 - (i + 1) / n);
+                    ctx.globalAlpha = (1 - i / n) * (pass === 0 ? 0.35 : 0.5);
+                    ctx.beginPath();
+                    ctx.moveTo(p0.x - w0, p0.y); ctx.lineTo(p0.x + w0, p0.y);
+                    ctx.lineTo(p1.x + w1, p1.y); ctx.lineTo(p1.x - w1, p1.y);
+                    ctx.fill();
+                }
+            }
+            ctx.globalAlpha = 1;
         }
-        ctx.globalAlpha = 1;
 
-        // Drones
+        // Drones: small spinning neon diamonds with a hot core
         if (this.droneLevel > 0) {
-            ctx.fillStyle = '#cc44ff';
+            const spin = this.engineFlicker * 0.2;
             for (const d of this.dronePositions()) {
-                ctx.beginPath();
-                ctx.arc(d.x, d.y, 5, 0, Math.PI * 2);
-                ctx.fill();
+                ctx.save();
+                ctx.translate(d.x, d.y);
+                ctx.rotate(spin);
+                Neon.sprite(ctx, 'drone', 10, this._bakeDrone);
+                ctx.restore();
+                Neon.light(ctx, d.x, d.y, 1.6, '#cc44ff', 0.7 + Math.sin(this.engineFlicker * 0.4) * 0.3);
             }
             // Shield pulse ring (Lv2+) — shown while a pulse is cancelling bullets
             if (this.shieldPulseFlash > 0) {
                 const r = this.droneLevel >= 5 ? 55 : 45;
-                ctx.strokeStyle = `rgba(204, 68, 255, ${0.3 + this.shieldPulseFlash * 1.6})`;
-                ctx.lineWidth = this.droneLevel >= 4 ? 3 : 2;
-                ctx.beginPath();
-                ctx.arc(this.x, this.y, r * (1 - this.shieldPulseFlash), 0, Math.PI * 2);
-                ctx.stroke();
+                ctx.globalAlpha = Math.min(1, 0.3 + this.shieldPulseFlash * 2.5);
+                Neon.ring(ctx, this.x, this.y, r * (1 - this.shieldPulseFlash), '#cc44ff', this.droneLevel >= 4 ? 1.4 : 1, false);
+                ctx.globalAlpha = 1;
             }
         }
 
@@ -822,27 +840,29 @@ const Player = {
         // GPU glow behind player — engine glow + surge glow
         Renderer.addGlow(this.x, this.y, Renderer.colorToHex(Hangar.trailColor), this.radius * 4, 0.45);
         if (Scoring.surgeActive) {
-            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, 0.5);
+            Renderer.addGlow(this.x, this.y, 0xffffff, this.radius * 6, Renderer.calm() ? 0.2 : 0.5);
+            // Surge aura: counter-rotating arcs
+            const a0 = this.engineFlicker * 0.15;
+            ctx.globalAlpha = 0.7;
+            for (let k = 0; k < 3; k++) {
+                const a = a0 + (Math.PI * 2 / 3) * k;
+                ctx.beginPath(); ctx.arc(0, 0, this.radius + 11, a, a + 1.3);
+                Neon.stroke(ctx, '#ffffff', 0.8, false);
+                ctx.beginPath(); ctx.arc(0, 0, this.radius + 16, -a, -a + 0.8);
+                Neon.stroke(ctx, '#00ffff', 0.6, false);
+            }
+            ctx.globalAlpha = 1;
         }
 
-        // Surge glow
-        if (Scoring.surgeActive && !Settings.values.flashReduction) {
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-            ctx.beginPath();
-            ctx.arc(0, 0, this.radius + 10 + Math.sin(this.engineFlicker) * 3, 0, Math.PI * 2);
-            ctx.fill();
-        }
-
-        // Shield HP visual
+        // Shield: a hexagonal barrier that brightens when it takes a hit
         if (this.maxShieldHp > 0 && this.shieldHp > 0) {
-            const shieldAlpha = this.shieldFlashTimer > 0 ? 0.6 : 0.2 + Math.sin(this.engineFlicker * 0.3) * 0.1;
-            const shieldColor = this.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff';
-            ctx.strokeStyle = shieldColor;
-            ctx.lineWidth = 2;
-            ctx.globalAlpha = shieldAlpha;
-            ctx.beginPath();
-            ctx.arc(0, 0, this.radius + 5, 0, Math.PI * 2);
-            ctx.stroke();
+            const hit = this.shieldFlashTimer > 0;
+            ctx.globalAlpha = hit ? 0.9 : 0.35 + Math.sin(this.engineFlicker * 0.3) * 0.1;
+            ctx.save();
+            ctx.rotate(this.engineFlicker * 0.03);
+            Neon.path(ctx, this._HEX, this.radius + 7, true);
+            Neon.stroke(ctx, hit ? '#ffffff' : '#4488ff', 0.8, false);
+            ctx.restore();
             ctx.globalAlpha = 1;
         }
 
@@ -854,14 +874,19 @@ const Player = {
             ctx.beginPath();
             ctx.arc(0, 0, this.hitboxRadius + 1, 0, Math.PI * 2);
             ctx.fill();
+            ctx.globalAlpha = 0.9;
+            Neon.ring(ctx, 0, 0, this.hitboxRadius + 2.5, '#ff2266', 0.6, false);
+            ctx.globalAlpha = 1;
             // Graze zone indicator
             if (GameConfig.graze.enabled) {
                 const gz = this.grazeRadius * (GameConfig.graze.zoneMultiplier || 1);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
                 ctx.lineWidth = 1;
+                ctx.setLineDash([3, 5]);
                 ctx.beginPath();
                 ctx.arc(0, 0, gz, 0, Math.PI * 2);
                 ctx.stroke();
+                ctx.setLineDash([]);
             }
         }
 
@@ -870,40 +895,22 @@ const Player = {
         // Draw player bullets
         this.bullets.draw(ctx);
 
-        // Bomb effect
-        if (this.bombActive && !Settings.values.flashReduction) {
-            const bombAlpha = this.bombTimer / 1.5;
-            // GPU glow at bomb centre
-            Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * bombAlpha, bombAlpha * 0.7);
-            // Screen-filling flash
-            ctx.fillStyle = `rgba(0, 255, 255, ${bombAlpha * 0.08})`;
-            ctx.fillRect(0, 0, PLAY_W, PLAY_H);
-            // White-hot centre
-            ctx.fillStyle = `rgba(255, 255, 255, ${bombAlpha * 0.12})`;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, 80 * bombAlpha, 0, Math.PI * 2);
-            ctx.fill();
-            // Expanding shockwave ring
+        // Bomb: two expanding neon rings with a brief cyan wash (no wash with Flash Reduction)
+        if (this.bombActive) {
+            const k = this.bombTimer / 1.5;
+            const calm = Renderer.calm();
             const ringR = (1.5 - this.bombTimer) * 400;
-            ctx.strokeStyle = `rgba(0, 255, 255, ${bombAlpha * 0.5})`;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
-            ctx.stroke();
-            // Secondary inner ring
-            ctx.strokeStyle = `rgba(255, 255, 255, ${bombAlpha * 0.3})`;
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
-            ctx.stroke();
-        } else if (this.bombActive) {
-            // Reduced flash — just the ring, dimmer
-            const ringR = (1.5 - this.bombTimer) * 400;
-            ctx.strokeStyle = `rgba(0, 255, 255, 0.15)`;
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
-            ctx.stroke();
+            if (!calm) {
+                Renderer.addGlow(this.x, this.y, 0x00ffff, 400 * k, k * 0.7);
+                ctx.fillStyle = `rgba(0, 255, 255, ${k * 0.06})`;
+                ctx.fillRect(0, 0, PLAY_W, PLAY_H);
+            }
+            ctx.globalAlpha = k * (calm ? 0.4 : 1);
+            ctx.beginPath(); ctx.arc(this.x, this.y, ringR, 0, Math.PI * 2);
+            Neon.stroke(ctx, '#00ffff', 2.2, false);
+            ctx.beginPath(); ctx.arc(this.x, this.y, ringR * 0.6, 0, Math.PI * 2);
+            Neon.stroke(ctx, '#88ffff', 1, false);
+            ctx.globalAlpha = 1;
         }
     }
 };

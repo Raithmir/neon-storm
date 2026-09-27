@@ -211,10 +211,7 @@ const Scoring = {
             const alpha = Math.min(1, p.life / (p.maxLife * 0.3)); // Fade out in last 30%
             const scale = 1 + (1 - p.life / p.maxLife) * 0.3; // Grow slightly over time
             ctx.globalAlpha = alpha;
-            ctx.fillStyle = p.color;
-            ctx.font = 'bold ' + Math.round(p.size * scale) + 'px Share Tech Mono, Consolas, monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(p.text, p.x, p.y);
+            Neon.text(ctx, p.text, p.x, p.y, p.color, Math.round(p.size * scale));
         }
         ctx.globalAlpha = 1;
     },
