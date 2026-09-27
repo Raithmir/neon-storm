@@ -9,9 +9,12 @@ const HUD = {
 
     // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
     _bakeBackground() {
+        const k = Renderer.uiScale || 1;
         const c = document.createElement('canvas');
-        c.width = SCREEN_W; c.height = SCREEN_H;
+        c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
+        c._scale = k;
         const g = c.getContext('2d');
+        g.scale(k, k);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -37,10 +40,11 @@ const HUD = {
     },
 
     draw(ctx) {
-        if (!this._bgCache) this._bgCache = this._bakeBackground();
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
         // Only the side panels: the middle of the overlay stays clear for the play area
-        ctx.drawImage(this._bgCache, 0, 0, HUD_LEFT_W + 2, SCREEN_H, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
-        ctx.drawImage(this._bgCache, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        const k = this._bgCache._scale;
+        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
+        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
         this._drawLeft(ctx);
         this._drawRight(ctx);
         this._drawDanger(ctx);

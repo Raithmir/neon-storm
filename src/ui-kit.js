@@ -24,9 +24,12 @@ const UI = {
 
     _bgCache: null,
     _bakeBackground() {
+        const k = Renderer.uiScale || 1;
         const c = document.createElement('canvas');
-        c.width = SCREEN_W; c.height = SCREEN_H;
+        c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
+        c._scale = k;
         const g = c.getContext('2d');
+        g.scale(k, k);
         const horizon = SCREEN_H * 0.62;
         const sky = g.createLinearGradient(0, 0, 0, horizon);
         sky.addColorStop(0, '#03010d');
@@ -91,8 +94,8 @@ const UI = {
     // grid scrolling toward the viewer. opts.dim darkens it for busy screens.
     background(ctx, opts) {
         const o = opts || {};
-        if (!this._bgCache) this._bgCache = this._bakeBackground();
-        ctx.drawImage(this._bgCache, 0, 0);
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
+        ctx.drawImage(this._bgCache, 0, 0, SCREEN_W, SCREEN_H);
         const horizon = SCREEN_H * 0.62;
         const cx = SCREEN_W / 2;
         const t = this.time();

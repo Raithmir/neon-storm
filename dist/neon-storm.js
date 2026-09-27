@@ -33,6 +33,8 @@ function resizeCanvas() {
     if (typeof Renderer !== 'undefined' && Renderer.pixiCanvas) {
         Renderer.resize(scale, PLAY_X * scale, PLAY_Y * scale);
     }
+    // Render at the display's real pixel density (capped by graphics quality)
+    if (typeof Renderer !== 'undefined' && Renderer.ready) Renderer.applyResolution(scale);
 }
 window.addEventListener('resize', resizeCanvas);
 // Safe initial sizing (Renderer not yet available — just size the overlay canvas)
@@ -581,6 +583,8 @@ const Renderer = {
         }
 
         try {
+            // Filters render at the renderer's resolution, so high-DPI output stays sharp
+            if (PIXI.Filter && PIXI.Filter.defaultOptions) PIXI.Filter.defaultOptions.resolution = 'inherit';
             this.app = new PIXI.Application();
             await this.app.init({
                 width: PLAY_W,
@@ -699,6 +703,10 @@ const Renderer = {
 
             // --- Laser beam MeshRope ---
             this._initLaserBeam();
+
+            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter]) {
+                if (f) f.resolution = 'inherit';
+            }
 
             // Apply initial filter chain
             this._rebuildGameLayerFilters();
@@ -1133,12 +1141,82 @@ const Renderer = {
         this.app.stage.filters = filters.length > 0 ? filters : null;
     },
 
+    // --- Render resolution & graphics quality ---
+    //
+    // The overlay (menus/HUD) and the play area render at the display's real
+    // pixel density (CSS scale × devicePixelRatio), capped by the quality
+    // level. Drawing code keeps using logical coordinates (1920×1080 overlay,
+    // 720×960 play area); a canvas transform maps them to device pixels.
+    // Settings.values.graphicsQuality: 'auto' starts at high and steps down
+    // while playing if frames run slow; 'high' | 'medium' | 'low' are fixed.
+    QUALITY: {
+        high:   { cap: 2,   blurQuality: 3 },
+        medium: { cap: 1.5, blurQuality: 2 },
+        low:    { cap: 1,   blurQuality: 1 },
+    },
+    quality: 'high',
+    playScale: 1,
+    uiScale: 1,
+    _cssScale: 1,
+
+    setQuality(setting) {
+        this._autoQuality = setting === 'auto' || !this.QUALITY[setting];
+        this.quality = this._autoQuality ? 'high' : setting;
+        this._slowTime = 0;
+        this.applyResolution();
+    },
+
+    applyResolution(cssScale) {
+        if (cssScale) this._cssScale = cssScale;
+        const q = this.QUALITY[this.quality] || this.QUALITY.high;
+        const want = this._cssScale * (window.devicePixelRatio || 1);
+        const k = Math.max(1, Math.min(q.cap, Math.round(want * 4) / 4));
+
+        // Overlay canvas (menus, HUD)
+        if (Math.round(SCREEN_W * k) !== canvas.width) {
+            canvas.width = Math.round(SCREEN_W * k);
+            canvas.height = Math.round(SCREEN_H * k);
+        }
+        ctx.setTransform(k, 0, 0, k, 0, 0);
+        this.uiScale = k;
+
+        // Play area: Pixi renderer + the Canvas 2D gameplay layer it uploads
+        if (this.usePixi && this.app) {
+            if (k !== this.playScale) {
+                this.app.renderer.resize(PLAY_W, PLAY_H, k);
+                this._canvasSource.resize(PLAY_W, PLAY_H, k);
+                this.playScale = k;
+            }
+            if (this._blurFilter) this._blurFilter.quality = q.blurQuality;
+        } else {
+            this.playScale = 1;
+        }
+    },
+
+    // Auto quality: step down a level after ~3 s of slow frames during play
+    _autoTune(dtMs) {
+        if (!this._autoQuality || this.quality === 'low') return;
+        if (typeof Game === 'undefined' || Game.state !== 'playing' || document.hidden) { this._slowTime = 0; return; }
+        this._frameAvg = this._frameAvg ? this._frameAvg * 0.95 + dtMs * 0.05 : dtMs;
+        this._slowTime = this._frameAvg > 22 ? (this._slowTime || 0) + dtMs / 1000 : 0;
+        if (this._slowTime > 3) {
+            this.quality = this.quality === 'high' ? 'medium' : 'low';
+            this._slowTime = 0;
+            this._frameAvg = 0;
+            console.log('[Renderer] Auto graphics quality → ' + this.quality);
+            this.applyResolution();
+        }
+    },
+
     // --- Frame lifecycle ---
 
     getPlayCtx() { return this.offCtx; },
 
     beginFrame() {
-        this.offCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        const k = this.playScale;
+        this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
+        this.offCtx.clearRect(0, 0, this.offCanvas.width, this.offCanvas.height);
+        this.offCtx.setTransform(k, 0, 0, k, 0, 0);
         this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
     },
 
@@ -1243,7 +1321,9 @@ const Renderer = {
     endFrame() {
         if (this.usePixi) {
             const now = performance.now();
-            this._updateBackdrop(Math.min(0.1, (now - (this._lastFrameTime || now)) / 1000));
+            const frameMs = now - (this._lastFrameTime || now);
+            this._updateBackdrop(Math.min(0.1, frameMs / 1000));
+            if (frameMs > 0) this._autoTune(frameMs);
             this._lastFrameTime = now;
             this._canvasSource.update();
             this._glowCanvasSource.update();
@@ -1252,7 +1332,7 @@ const Renderer = {
             const c = this.compCtx;
             c.clearRect(0, 0, PLAY_W, PLAY_H);
             c.globalCompositeOperation = 'source-over';
-            c.drawImage(this.offCanvas, 0, 0);
+            c.drawImage(this.offCanvas, 0, 0, PLAY_W, PLAY_H);
             c.globalCompositeOperation = 'lighter';
             c.drawImage(this.glowCanvas, 0, 0);
             c.globalCompositeOperation = 'source-over';
@@ -1261,7 +1341,7 @@ const Renderer = {
 
     // Canvas 2D fallback only — blits compCanvas onto the overlay
     blitToOverlay(targetCtx, x, y) {
-        targetCtx.drawImage(this.compCanvas, x, y);
+        targetCtx.drawImage(this.compCanvas, x, y, PLAY_W, PLAY_H);
     },
 
     setShake(x, y) {
@@ -2299,6 +2379,7 @@ const Settings = {
         flashReduction: false,
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
+        graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -2306,6 +2387,7 @@ const Settings = {
         { key: 'sfxVolume', label: 'SFX VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
+        { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'flashReduction', label: 'FLASH REDUCTION', type: 'toggle' },
@@ -2326,6 +2408,10 @@ const Settings = {
     },
 
     _apply() {
+        if (Renderer.quality !== undefined && this._appliedQuality !== this.values.graphicsQuality) {
+            this._appliedQuality = this.values.graphicsQuality;
+            Renderer.setQuality(this.values.graphicsQuality);
+        }
         Audio.sfxVolume = this.values.sfxVolume / 100;
         Audio.musicVolume = this.values.musicVolume / 100;
         GameConfig.fireMode = this.values.fireMode;
@@ -3659,9 +3745,12 @@ const UI = {
 
     _bgCache: null,
     _bakeBackground() {
+        const k = Renderer.uiScale || 1;
         const c = document.createElement('canvas');
-        c.width = SCREEN_W; c.height = SCREEN_H;
+        c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
+        c._scale = k;
         const g = c.getContext('2d');
+        g.scale(k, k);
         const horizon = SCREEN_H * 0.62;
         const sky = g.createLinearGradient(0, 0, 0, horizon);
         sky.addColorStop(0, '#03010d');
@@ -3726,8 +3815,8 @@ const UI = {
     // grid scrolling toward the viewer. opts.dim darkens it for busy screens.
     background(ctx, opts) {
         const o = opts || {};
-        if (!this._bgCache) this._bgCache = this._bakeBackground();
-        ctx.drawImage(this._bgCache, 0, 0);
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
+        ctx.drawImage(this._bgCache, 0, 0, SCREEN_W, SCREEN_H);
         const horizon = SCREEN_H * 0.62;
         const cx = SCREEN_W / 2;
         const t = this.time();
@@ -10367,9 +10456,12 @@ const HUD = {
 
     // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
     _bakeBackground() {
+        const k = Renderer.uiScale || 1;
         const c = document.createElement('canvas');
-        c.width = SCREEN_W; c.height = SCREEN_H;
+        c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
+        c._scale = k;
         const g = c.getContext('2d');
+        g.scale(k, k);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -10395,10 +10487,11 @@ const HUD = {
     },
 
     draw(ctx) {
-        if (!this._bgCache) this._bgCache = this._bakeBackground();
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
         // Only the side panels: the middle of the overlay stays clear for the play area
-        ctx.drawImage(this._bgCache, 0, 0, HUD_LEFT_W + 2, SCREEN_H, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
-        ctx.drawImage(this._bgCache, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        const k = this._bgCache._scale;
+        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
+        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
         this._drawLeft(ctx);
         this._drawRight(ctx);
         this._drawDanger(ctx);
