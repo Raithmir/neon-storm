@@ -2413,6 +2413,7 @@ window.addEventListener('resize', resizeCanvas);
 //    uBoss    0..1 while a boss is on screen
 //    uSurge   0..1 while Neon Surge is active
 //    uDim     0..~0.35, darkens the backdrop under dense bullet patterns
+//    uCalm    1 when Flash Reduction is on: no glitch flicker or strobing
 //
 //  Readability rule: keep backdrops darker and less saturated than
 //  anything the player can collide with. Pixel coords: p = vUV * uRes,
@@ -2443,6 +2444,7 @@ uniform float uPulse;
 uniform float uBoss;
 uniform float uSurge;
 uniform float uDim;
+uniform float uCalm;
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -2771,7 +2773,7 @@ void main() {
     float band = floor(p.y / 22.0);
     float gt = floor(uTime * 9.0);
     float gh = hash(vec2(band, gt));
-    float glitch = step(0.94 - uPulse * 0.2 - uBoss * 0.04, gh);
+    float glitch = step(0.94 - uPulse * 0.2 - uBoss * 0.04, gh) * (1.0 - uCalm);
     p.x += glitch * (hash(vec2(band, gt + 3.0)) - 0.5) * 70.0;
 
     vec2 c = vec2(uRes.x * 0.5 + sin(uTime * 0.4) * 30.0, uRes.y * 0.26);
@@ -2791,13 +2793,13 @@ void main() {
     col += lineCol * grid * depth * (0.35 + uPulse * 0.6 + uSurge * 0.3);
     // Cells flicker in and out
     float cellH = hash(floor(vec2(u, v)));
-    col += lineCol * 0.12 * depth * step(0.93, cellH) * (0.5 + 0.5 * sin(uTime * 8.0 + cellH * 30.0));
+    col += lineCol * 0.12 * depth * step(0.93, cellH) * (0.5 + 0.5 * sin(uTime * 8.0 * (1.0 - uCalm) + cellH * 30.0));
     // The void's eye
     col += vec3(0.8, 0.0, 0.2) * 0.5 * line(abs(r - 0.03), 0.004);
     // Glitched bands tint cyan; rare vertical tears
     col = mix(col, col.gbr * 1.6 + vec3(0.0, 0.08, 0.08), glitch * 0.8);
     float tear = step(0.997, hash(vec2(floor(p.x / 3.0), floor(uTime * 12.0))));
-    col += vec3(1.0, 0.2, 0.5) * tear * 0.3 * step(0.8, hash(vec2(floor(p.y / 90.0), gt)));
+    col += vec3(1.0, 0.2, 0.5) * tear * 0.3 * step(0.8, hash(vec2(floor(p.y / 90.0), gt))) * (1.0 - uCalm);
     gl_FragColor = vec4(finish(col), 1.0);
 }`,
 };
@@ -3157,6 +3159,7 @@ const Renderer = {
                 uBoss:  { value: 0, type: 'f32' },
                 uSurge: { value: 0, type: 'f32' },
                 uDim:   { value: 0, type: 'f32' },
+                uCalm:  { value: 0, type: 'f32' },
             });
             this._bgShaders = {};
             this._bgGeometry = geometry;
@@ -3203,6 +3206,7 @@ const Renderer = {
         u.uBoss = approach(u.uBoss, bossOn, 1.5);
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
+        u.uCalm = this.calm() ? 1 : 0;
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
@@ -3501,14 +3505,14 @@ const Renderer = {
         if (this._chromaFilter) {
             const t = this._chromaDuration > 0 ? this._chromaTimer / this._chromaDuration : 0;
             const offset = this._chromaPersist ? this._chromaIntensity : this._chromaIntensity * t;
-            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = offset;
+            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = this.calm() ? 0 : offset;
         }
 
         // Screen flash
         if (this._flashTimer > 0) {
             this._flashTimer -= dt;
             const t = Math.max(0, this._flashTimer / this._flashDuration);
-            this._flashSprite.alpha = t * 0.8;
+            this._flashSprite.alpha = t * (this._flashPeak || 0.8);
             this._flashSprite.tint = this._flashColor;
             if (this._flashTimer <= 0) this._flashSprite.alpha = 0;
         }
@@ -3520,7 +3524,7 @@ const Renderer = {
             const t = e.elapsed / e.duration;
             const eased = 1 - Math.pow(1 - Math.min(t, 1), 2);
             e.sprite.scale.set(e.maxScale * eased);
-            e.sprite.alpha = 1 - t;
+            e.sprite.alpha = (1 - t) * (this.calm() ? 0.5 : 1);
             if (t >= 1) {
                 this._explosionLayer.removeChild(e.sprite);
                 this._explosionSprites.splice(i, 1);
@@ -3701,7 +3705,7 @@ const Renderer = {
         s.x = x;
         s.y = y;
         s.tint = colorHex || 0xff8800;
-        s.alpha = 1.0;
+        s.alpha = this.calm() ? 0.5 : 1.0;
         s.scale.set(0.05);
         s.blendMode = 'add';
         this._explosionLayer.addChild(s);
@@ -3710,8 +3714,14 @@ const Renderer = {
 
     // --- Screen-space effects ---
 
+    // Flash Reduction setting: every flash, glitch, colour split and backdrop
+    // pulse goes through here, so photosensitive players get a calm screen
+    calm() {
+        return typeof Settings !== 'undefined' && !!Settings.values.flashReduction;
+    },
+
     triggerChroma(intensity, duration) {
-        if (!this._chromaFilter) return;
+        if (!this._chromaFilter || this.calm()) return;
         this._chromaIntensity = intensity || 0.008;
         this._chromaDuration = duration || 0.3;
         this._chromaTimer = this._chromaDuration;
@@ -3726,12 +3736,15 @@ const Renderer = {
     },
 
     triggerFlash(color, duration) {
-        this.bgPulse = Math.max(this.bgPulse || 0, 0.6);
+        const calm = this.calm();
+        this.bgPulse = Math.max(this.bgPulse || 0, calm ? 0.1 : 0.6);
         if (!this.usePixi) return;
         this._flashColor = color || 0xffffff;
-        this._flashDuration = duration || 0.3;
+        // Calm: a faint, slow wash instead of a white-out
+        this._flashDuration = calm ? Math.max(0.5, duration || 0.3) : (duration || 0.3);
+        this._flashPeak = calm ? 0.12 : 0.8;
         this._flashTimer = this._flashDuration;
-        this._flashSprite.alpha = 0.8;
+        this._flashSprite.alpha = this._flashPeak;
         this._flashSprite.tint = this._flashColor;
     },
 
@@ -3744,7 +3757,7 @@ const Renderer = {
 
     // Shockwave ripple expanding from a normalised position (0-1 range)
     triggerShockwave(normX, normY) {
-        this.bgPulse = 1;
+        this.bgPulse = this.calm() ? 0.15 : 1;
         if (!this._shockwaveFilter) return;
         this._shockwaveFilter.center = [normX, normY];
         this._shockwaveFilter.time = 0;
@@ -3767,7 +3780,7 @@ const Renderer = {
 
     // Screen-space glitch burst — use on boss phase transition
     triggerGlitch(duration) {
-        if (!this._glitchFilter) return;
+        if (!this._glitchFilter || this.calm()) return;
         this._glitchTimer = duration || 0.55;
         this._glitchFilter.enabled = true;
         this._rebuildFilterChain();
@@ -5919,6 +5932,7 @@ const Particles = {
 
     // A stationary glow that fades quickly: muzzle flashes, explosion cores, exhaust
     flash(x, y, radius, color, life) {
+        if (Renderer.calm() && radius > 20) radius = 20;   // Flash Reduction: no big white bursts
         this._add({ x, y, vx: 0, vy: 0, life, maxLife: life, size: radius / 2, color, decay: 1, flash: true, drag: 0, gravity: 0, _pp: null });
     },
 
@@ -7604,7 +7618,7 @@ const Enemies = {
             }
 
             // Flash on hit, or random glitch flash in Level 6
-            const glitchFlash = isGlitchLevel && Math.random() < 0.02;
+            const glitchFlash = isGlitchLevel && !Renderer.calm() && Math.random() < 0.02;
             const flash = e.flashTimer > 0 || glitchFlash;
             if (MidBoss.isType(e.type)) MidBoss.draw(ctx, e, flash);
             else this._neon[e.type].call(this, ctx, e, e.radius, flash);

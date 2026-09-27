@@ -58,6 +58,7 @@ const Particles = {
 
     // A stationary glow that fades quickly: muzzle flashes, explosion cores, exhaust
     flash(x, y, radius, color, life) {
+        if (Renderer.calm() && radius > 20) radius = 20;   // Flash Reduction: no big white bursts
         this._add({ x, y, vx: 0, vy: 0, life, maxLife: life, size: radius / 2, color, decay: 1, flash: true, drag: 0, gravity: 0, _pp: null });
     },
 

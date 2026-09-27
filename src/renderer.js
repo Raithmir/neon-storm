@@ -351,6 +351,7 @@ const Renderer = {
                 uBoss:  { value: 0, type: 'f32' },
                 uSurge: { value: 0, type: 'f32' },
                 uDim:   { value: 0, type: 'f32' },
+                uCalm:  { value: 0, type: 'f32' },
             });
             this._bgShaders = {};
             this._bgGeometry = geometry;
@@ -397,6 +398,7 @@ const Renderer = {
         u.uBoss = approach(u.uBoss, bossOn, 1.5);
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
+        u.uCalm = this.calm() ? 1 : 0;
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
@@ -695,14 +697,14 @@ const Renderer = {
         if (this._chromaFilter) {
             const t = this._chromaDuration > 0 ? this._chromaTimer / this._chromaDuration : 0;
             const offset = this._chromaPersist ? this._chromaIntensity : this._chromaIntensity * t;
-            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = offset;
+            this._chromaFilter.resources.chromaUniforms.uniforms.uOffset = this.calm() ? 0 : offset;
         }
 
         // Screen flash
         if (this._flashTimer > 0) {
             this._flashTimer -= dt;
             const t = Math.max(0, this._flashTimer / this._flashDuration);
-            this._flashSprite.alpha = t * 0.8;
+            this._flashSprite.alpha = t * (this._flashPeak || 0.8);
             this._flashSprite.tint = this._flashColor;
             if (this._flashTimer <= 0) this._flashSprite.alpha = 0;
         }
@@ -714,7 +716,7 @@ const Renderer = {
             const t = e.elapsed / e.duration;
             const eased = 1 - Math.pow(1 - Math.min(t, 1), 2);
             e.sprite.scale.set(e.maxScale * eased);
-            e.sprite.alpha = 1 - t;
+            e.sprite.alpha = (1 - t) * (this.calm() ? 0.5 : 1);
             if (t >= 1) {
                 this._explosionLayer.removeChild(e.sprite);
                 this._explosionSprites.splice(i, 1);
@@ -895,7 +897,7 @@ const Renderer = {
         s.x = x;
         s.y = y;
         s.tint = colorHex || 0xff8800;
-        s.alpha = 1.0;
+        s.alpha = this.calm() ? 0.5 : 1.0;
         s.scale.set(0.05);
         s.blendMode = 'add';
         this._explosionLayer.addChild(s);
@@ -904,8 +906,14 @@ const Renderer = {
 
     // --- Screen-space effects ---
 
+    // Flash Reduction setting: every flash, glitch, colour split and backdrop
+    // pulse goes through here, so photosensitive players get a calm screen
+    calm() {
+        return typeof Settings !== 'undefined' && !!Settings.values.flashReduction;
+    },
+
     triggerChroma(intensity, duration) {
-        if (!this._chromaFilter) return;
+        if (!this._chromaFilter || this.calm()) return;
         this._chromaIntensity = intensity || 0.008;
         this._chromaDuration = duration || 0.3;
         this._chromaTimer = this._chromaDuration;
@@ -920,12 +928,15 @@ const Renderer = {
     },
 
     triggerFlash(color, duration) {
-        this.bgPulse = Math.max(this.bgPulse || 0, 0.6);
+        const calm = this.calm();
+        this.bgPulse = Math.max(this.bgPulse || 0, calm ? 0.1 : 0.6);
         if (!this.usePixi) return;
         this._flashColor = color || 0xffffff;
-        this._flashDuration = duration || 0.3;
+        // Calm: a faint, slow wash instead of a white-out
+        this._flashDuration = calm ? Math.max(0.5, duration || 0.3) : (duration || 0.3);
+        this._flashPeak = calm ? 0.12 : 0.8;
         this._flashTimer = this._flashDuration;
-        this._flashSprite.alpha = 0.8;
+        this._flashSprite.alpha = this._flashPeak;
         this._flashSprite.tint = this._flashColor;
     },
 
@@ -938,7 +949,7 @@ const Renderer = {
 
     // Shockwave ripple expanding from a normalised position (0-1 range)
     triggerShockwave(normX, normY) {
-        this.bgPulse = 1;
+        this.bgPulse = this.calm() ? 0.15 : 1;
         if (!this._shockwaveFilter) return;
         this._shockwaveFilter.center = [normX, normY];
         this._shockwaveFilter.time = 0;
@@ -961,7 +972,7 @@ const Renderer = {
 
     // Screen-space glitch burst — use on boss phase transition
     triggerGlitch(duration) {
-        if (!this._glitchFilter) return;
+        if (!this._glitchFilter || this.calm()) return;
         this._glitchTimer = duration || 0.55;
         this._glitchFilter.enabled = true;
         this._rebuildFilterChain();

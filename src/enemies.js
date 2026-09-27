@@ -784,7 +784,7 @@ const Enemies = {
             }
 
             // Flash on hit, or random glitch flash in Level 6
-            const glitchFlash = isGlitchLevel && Math.random() < 0.02;
+            const glitchFlash = isGlitchLevel && !Renderer.calm() && Math.random() < 0.02;
             const flash = e.flashTimer > 0 || glitchFlash;
             if (MidBoss.isType(e.type)) MidBoss.draw(ctx, e, flash);
             else this._neon[e.type].call(this, ctx, e, e.radius, flash);

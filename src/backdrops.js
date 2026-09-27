@@ -13,6 +13,7 @@
 //    uBoss    0..1 while a boss is on screen
 //    uSurge   0..1 while Neon Surge is active
 //    uDim     0..~0.35, darkens the backdrop under dense bullet patterns
+//    uCalm    1 when Flash Reduction is on: no glitch flicker or strobing
 //
 //  Readability rule: keep backdrops darker and less saturated than
 //  anything the player can collide with. Pixel coords: p = vUV * uRes,
@@ -43,6 +44,7 @@ uniform float uPulse;
 uniform float uBoss;
 uniform float uSurge;
 uniform float uDim;
+uniform float uCalm;
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -371,7 +373,7 @@ void main() {
     float band = floor(p.y / 22.0);
     float gt = floor(uTime * 9.0);
     float gh = hash(vec2(band, gt));
-    float glitch = step(0.94 - uPulse * 0.2 - uBoss * 0.04, gh);
+    float glitch = step(0.94 - uPulse * 0.2 - uBoss * 0.04, gh) * (1.0 - uCalm);
     p.x += glitch * (hash(vec2(band, gt + 3.0)) - 0.5) * 70.0;
 
     vec2 c = vec2(uRes.x * 0.5 + sin(uTime * 0.4) * 30.0, uRes.y * 0.26);
@@ -391,13 +393,13 @@ void main() {
     col += lineCol * grid * depth * (0.35 + uPulse * 0.6 + uSurge * 0.3);
     // Cells flicker in and out
     float cellH = hash(floor(vec2(u, v)));
-    col += lineCol * 0.12 * depth * step(0.93, cellH) * (0.5 + 0.5 * sin(uTime * 8.0 + cellH * 30.0));
+    col += lineCol * 0.12 * depth * step(0.93, cellH) * (0.5 + 0.5 * sin(uTime * 8.0 * (1.0 - uCalm) + cellH * 30.0));
     // The void's eye
     col += vec3(0.8, 0.0, 0.2) * 0.5 * line(abs(r - 0.03), 0.004);
     // Glitched bands tint cyan; rare vertical tears
     col = mix(col, col.gbr * 1.6 + vec3(0.0, 0.08, 0.08), glitch * 0.8);
     float tear = step(0.997, hash(vec2(floor(p.x / 3.0), floor(uTime * 12.0))));
-    col += vec3(1.0, 0.2, 0.5) * tear * 0.3 * step(0.8, hash(vec2(floor(p.y / 90.0), gt)));
+    col += vec3(1.0, 0.2, 0.5) * tear * 0.3 * step(0.8, hash(vec2(floor(p.y / 90.0), gt))) * (1.0 - uCalm);
     gl_FragColor = vec4(finish(col), 1.0);
 }`,
 };
