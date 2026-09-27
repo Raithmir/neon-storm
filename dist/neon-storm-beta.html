@@ -5101,10 +5101,81 @@ const Tutorial = {
 //
 //  Set Settings.values.graphicsStyle = 'classic' to fall back to the
 //  original flat-fill art for comparison.
+//
+//  Sprite atlas: the static parts of each entity (hulls, panel lines,
+//  sockets) are drawn once into a shared atlas canvas by Neon.sprite()
+//  and then stamped with drawImage every frame. Only the animated bits
+//  (rotors, lights, flames, eyes) are drawn live. Sprite keys name the
+//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|0'; a
+//  hand-drawn image for a key could later replace the baked one.
 // ============================================================
 const Neon = {
     on() {
         return typeof Settings === 'undefined' || Settings.values.graphicsStyle !== 'classic';
+    },
+
+    // --- Sprite atlas ---
+    BAKE: true,              // false: draw everything live (for comparing output/cost)
+    BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
+    ATLAS_SIZE: 2048,
+    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    _pages: [],
+    _sprites: new Map(),
+
+    // Draw a cached sprite centred on the current origin. `half` is the
+    // sprite's half-extent in play pixels (art plus halo must fit inside).
+    // drawFn(ctx, a, b, c, d) draws the art around (0, 0) in play-pixel
+    // units, the same way it would draw live; it runs only when the key
+    // is new. A null key draws live every frame (for art whose colour
+    // changes continuously, like the chromatic skin).
+    sprite(ctx, key, half, drawFn, a, b, c, d) {
+        if (!this.BAKE || key === null) { drawFn(ctx, a, b, c, d); return; }
+        let spr = this._sprites.get(key);
+        if (!spr) spr = this._bake(key, half, drawFn, a, b, c, d);
+        ctx.drawImage(spr.canvas, spr.x, spr.y, spr.size, spr.size, -half, -half, half * 2, half * 2);
+    },
+
+    _bake(key, half, drawFn, a, b, cArg, d) {
+        const size = Math.ceil(half * 2 * this.BAKE_SCALE) + 2;
+        let page = this._pages[this._pages.length - 1];
+        if (!page || !this._fits(page, size)) {
+            if (this._pages.length >= this.ATLAS_MAX_PAGES) this.flush();
+            page = this._newPage();
+        }
+        if (page.x + size > this.ATLAS_SIZE) { page.x = 0; page.y += page.rowH; page.rowH = 0; }
+        const spr = { canvas: page.canvas, x: page.x + 1, y: page.y + 1, size: size - 2 };
+        page.x += size;
+        page.rowH = Math.max(page.rowH, size);
+
+        const c = page.ctx;
+        c.save();
+        c.beginPath();
+        c.rect(spr.x, spr.y, spr.size, spr.size);
+        c.clip();
+        c.translate(spr.x + spr.size / 2, spr.y + spr.size / 2);
+        c.scale(this.BAKE_SCALE, this.BAKE_SCALE);
+        drawFn(c, a, b, cArg, d);
+        c.restore();
+        this._sprites.set(key, spr);
+        return spr;
+    },
+
+    _fits(page, size) {
+        if (page.x + size <= this.ATLAS_SIZE) return page.y + Math.max(page.rowH, size) <= this.ATLAS_SIZE;
+        return page.y + page.rowH + size <= this.ATLAS_SIZE;
+    },
+
+    _newPage() {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = this.ATLAS_SIZE;
+        const page = { canvas, ctx: canvas.getContext('2d'), x: 0, y: 0, rowH: 0 };
+        this._pages.push(page);
+        return page;
+    },
+
+    flush() {
+        this._pages.length = 0;
+        this._sprites.clear();
     },
 
     // Wall-clock seconds for idle animation (spins, pulses) that
@@ -5183,16 +5254,66 @@ const Neon = {
 
     // Bright point light: coloured halo with a white centre
     light(ctx, x, y, radius, color, intensity) {
-        const a = ctx.globalAlpha;
         const k = intensity != null ? intensity : 1;
-        ctx.fillStyle = color;
-        ctx.globalAlpha = a * 0.35 * k;
-        ctx.beginPath(); ctx.arc(x, y, radius * 2, 0, Math.PI * 2); ctx.fill();
+        if (k <= 0) return;
+        const a = ctx.globalAlpha;
+        if (this.BAKE && color.charCodeAt(0) === 35) {
+            // Stamped from the atlas; radius is rounded to 0.5 px so the
+            // few sizes in use each get one sprite. Only fixed '#hex'
+            // colours are baked (the chromatic skin's hsl() cycles).
+            const rr = Math.max(0.5, Math.round(radius * 2) / 2);
+            const key = 'light|' + color + '|' + rr;
+            let spr = this._sprites.get(key);
+            if (!spr) spr = this._bake(key, rr * 2 + 1, this._drawLight, rr, color);
+            const h = rr * 2 + 1;
+            ctx.globalAlpha = a * k;
+            ctx.drawImage(spr.canvas, spr.x, spr.y, spr.size, spr.size, x - h, y - h, h * 2, h * 2);
+            ctx.globalAlpha = a;
+            return;
+        }
         ctx.globalAlpha = a * k;
+        this._drawLight(ctx, radius, color, x, y);
+        ctx.globalAlpha = a;
+    },
+
+    _drawLight(ctx, radius, color, x, y) {
+        const a = ctx.globalAlpha;
+        x = x || 0; y = y || 0;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = a * 0.35;
+        ctx.beginPath(); ctx.arc(x, y, radius * 2, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = a;
         ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#ffffff';
         ctx.beginPath(); ctx.arc(x, y, radius * 0.45, 0, Math.PI * 2); ctx.fill();
+    },
+
+    // Engine plume pointing down (+y) from (x, y): coloured flame with a
+    // white core. Pass a negative len to point it up.
+    flame(ctx, x, y, w, len, color, alpha) {
+        const a = ctx.globalAlpha;
+        const k = alpha != null ? alpha : 1;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = a * 0.55 * k;
+        ctx.beginPath();
+        ctx.moveTo(x - w, y); ctx.lineTo(x, y + len * 1.5); ctx.lineTo(x + w, y);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = a * 0.9 * k;
+        ctx.beginPath();
+        ctx.moveTo(x - w * 0.4, y); ctx.lineTo(x, y + len); ctx.lineTo(x + w * 0.4, y);
+        ctx.fill();
         ctx.globalAlpha = a;
+    },
+
+    // Regular polygon as a flat point list (for Neon.shape / Neon.path)
+    polygon(sides, rotation, sx, sy) {
+        const pts = [];
+        for (let i = 0; i < sides; i++) {
+            const a = rotation + (Math.PI * 2 / sides) * i;
+            pts.push(Math.cos(a) * (sx || 1), Math.sin(a) * (sy || sx || 1));
+        }
+        return pts;
     },
 
     // Hit reaction: a brief squash-and-stretch around the current origin
@@ -6401,41 +6522,350 @@ const Enemies = {
         if (idx >= 0) this.list.splice(idx, 1);
     },
 
-    // Neon style: twin-rotor scout. Origin is the enemy centre.
-    _SCOUT_BODY: Neon.mirror([0, -0.7, 0.32, -0.25, 0.28, 0.3, 0, 0.55]),
-    _drawScoutDroneNeon(ctx, e, r, flash) {
-        const t = Neon.time();
-        Renderer.addGlow(e.x, e.y, Renderer.colorToHex(e.color), r * 2.6, flash ? 0.6 : 0.22);
-        Neon.squash(ctx, flash, 0.15);
+    // ------------------------------------------------------------
+    //  Neon style art (see neon.js). Each entry draws one enemy type
+    //  around its centre: the static body comes from the sprite atlas,
+    //  animated parts are drawn live on top. Outlines are in units of r.
+    // ------------------------------------------------------------
+    _NEON_SHAPES: {
+        scout: Neon.mirror([0, -0.7, 0.32, -0.25, 0.28, 0.3, 0, 0.55]),
+        gunship: Neon.mirror([0, -0.8, 0.4, -0.3, 0.9, 0, 0.85, 0.2, 0.4, 0.1, 0.35, 0.6, 0.6, 0.8, 0.3, 0.7]),
+        gunshipCanopy: Neon.mirror([0, -0.62, 0.14, -0.42, 0.12, -0.25, 0, -0.2]),
+        gunshipBarrel: [-0.07, 0.62, 0.07, 0.62, 0.07, 0.98, -0.07, 0.98],
+        turretBase: [-0.8, -0.4, 0.8, -0.4, 0.6, 0.4, -0.6, 0.4],
+        turretBracket: [0.5, -0.15, 0.72, -0.15, 0.72, 0.15, 0.5, 0.15],
+        turretBarrel: [-0.1, 0.2, 0.1, 0.2, 0.1, 0.76, -0.1, 0.76],
+        turretTip: [-0.18, 0.74, 0.18, 0.74, 0.18, 0.88, -0.18, 0.88],
+        star: (() => {
+            const pts = [];
+            for (let j = 0; j < 10; j++) {
+                const a = (Math.PI * 2 / 10) * j - Math.PI / 2;
+                const k = j % 2 === 0 ? 1 : 0.45;
+                pts.push(Math.cos(a) * k, Math.sin(a) * k);
+            }
+            return pts;
+        })(),
+        cruiser: Neon.mirror([0, -0.7, 0.5, -0.5, 0.8, -0.1, 0.7, 0.5, 0.3, 0.7]),
+        cruiserBridge: Neon.mirror([0, -0.44, 0.2, -0.34, 0.2, -0.24, 0, -0.18]),
+        bomber: Neon.mirror([0, -0.5, 0.4, -0.4, 0.9, -0.1, 0.8, 0.2, 0.4, 0.3, 0.35, 0.6]),
+        sniperBody: [-0.5, -0.3, 0.5, -0.3, 0.4, 0.3, -0.4, 0.3],
+        sniperVane: [0.45, -0.2, 0.72, -0.4, 0.66, 0.08, 0.42, 0.2],
+        sniperBarrel: [-0.08, 0.25, 0.08, 0.25, 0.08, 1.0, -0.08, 1.0],
+        carrier: Neon.mirror([0, -0.6, 0.6, -0.4, 0.9, 0, 0.8, 0.5, 0.4, 0.7]),
+        carrierBay: [-0.25, 0.3, 0.25, 0.3, 0.2, 0.66, -0.2, 0.66],
+        wall: [-1, -0.3, 1, -0.3, 1, 0.3, -1, 0.3],
+    },
 
-        // Arms out to the rotors
-        Neon.detail(ctx, [-0.3, -0.2, -0.8, -0.35], r, e.accent, 0.8, 1.2);
-        Neon.detail(ctx, [0.3, -0.2, 0.8, -0.35], r, e.accent, 0.8, 1.2);
+    _neonGlow(e, size, flash, alpha) {
+        if (e._glowHex === undefined) e._glowHex = Renderer.colorToHex(e.color);
+        Renderer.addGlow(e.x, e.y, e._glowHex, size, flash ? 0.6 : (alpha || 0.22));
+    },
 
-        // Rotors: faint disc, glowing rim and a spinning blade
-        for (let s = -1; s <= 1; s += 2) {
-            const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.34;
-            ctx.fillStyle = e.accent;
-            ctx.globalAlpha = 0.08;
-            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.fill();
-            ctx.globalAlpha = 1;
-            Neon.ring(ctx, rx, ry, rr, e.accent, 0.6, flash);
-            const a = t * 28 * s + e.x * 0.1;
-            const bx = Math.cos(a) * rr * 0.85, by = Math.sin(a) * rr * 0.85;
+    // Mirror a right-side detail line to the left (x -> -x) and draw both
+    _neonPair(ctx, pts, r, color, alpha, width) {
+        Neon.detail(ctx, pts, r, color, alpha, width);
+        const m = pts.slice();
+        for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+        Neon.detail(ctx, m, r, color, alpha, width);
+    },
+
+    // Static bodies, baked into the atlas once per colour and flash state
+    _bake: {
+        scout(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Enemies._neonPair(c, [0.3, -0.2, 0.8, -0.35], r, e.accent, 0.8, 1.2);
+            for (let s = -1; s <= 1; s += 2) {
+                const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.34;
+                c.fillStyle = e.accent;
+                c.globalAlpha = 0.08;
+                c.beginPath(); c.arc(rx, ry, rr, 0, Math.PI * 2); c.fill();
+                c.globalAlpha = 1;
+                Neon.ring(c, rx, ry, rr, e.accent, 0.6, flash);
+            }
+            Neon.shape(c, S.scout, r, e.color, 1.1, flash, 0.3);
+            Neon.detail(c, [-0.18, 0.2, 0, 0.32, 0.18, 0.2], r, e.accent, 0.6, 0.8);
+        },
+        gunship(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.gunshipBarrel, r, e.accent, 0.8, flash, 0.4);
+            Neon.shape(c, S.gunship, r, e.color, 1.2, flash, 0.24);
+            Enemies._neonPair(c, [0.42, 0.02, 0.84, 0.1], r, e.accent, 0.55, 1);
+            Neon.detail(c, [0, -0.12, 0, 0.55], r, e.accent, 0.4, 1);
+            Neon.detail(c, [-0.3, 0.62, 0.3, 0.62], r, e.accent, 0.4, 1);
+            Neon.shape(c, S.gunshipCanopy, r, e.accent, 0.7, flash, 0.4);
+        },
+        missile_turret(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.turretBarrel, r, e.accent, 0.9, flash, 0.35);
+            Neon.shape(c, S.turretTip, r, e.accent, 0.9, flash, 0.35);
+            Neon.shape(c, S.turretBase, r, e.color, 1.3, flash, 0.24);
+            const m = S.turretBracket.slice();
+            for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+            Neon.shape(c, S.turretBracket, r, e.accent, 0.8, flash, 0.3);
+            Neon.shape(c, m, r, e.accent, 0.8, flash, 0.3);
+            Neon.detail(c, [-0.62, 0.22, 0.62, 0.22], r, e.accent, 0.4, 1);
+            // Dome
+            c.beginPath();
+            c.arc(0, -r * 0.1, r * 0.35, Math.PI, 0);
+            c.closePath();
+            c.fillStyle = flash ? '#ffffff' : e.color;
+            c.globalAlpha = 0.3;
+            c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.color, 1, flash);
+        },
+        phase_shifter(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.star, r, e.color, 1.1, flash, 0.25);
+            for (let j = 0; j < 10; j += 2) {
+                Neon.detail(c, [0, 0, S.star[j * 2], S.star[j * 2 + 1]], r, e.accent, 0.4, 0.8);
+            }
+            c.beginPath();
+            for (let j = 1; j < 10; j += 2) c.lineTo(S.star[j * 2] * r, S.star[j * 2 + 1] * r);
+            c.closePath();
+            c.strokeStyle = e.accent; c.globalAlpha = 0.5; c.lineWidth = 0.8; c.stroke();
+            c.globalAlpha = 1;
+        },
+        shielded_cruiser(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.cruiser, r, e.color, 1.4, flash, 0.22);
+            Neon.path(c, S.cruiser, r * 0.62, true);
+            c.strokeStyle = e.accent; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+            Neon.detail(c, [-0.62, 0, 0.62, 0], r, e.accent, 0.5, 1);
+            Neon.detail(c, [-0.42, 0.35, 0.42, 0.35], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.5, -0.5, 0.35, -0.05], r, e.accent, 0.4, 1);
+            Neon.shape(c, S.cruiserBridge, r, e.accent, 0.8, flash, 0.35);
+        },
+        bomber(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.bomber, r, e.color, 1.3, flash, 0.24);
+            Enemies._neonPair(c, [0.42, -0.25, 0.84, -0.06], r, e.accent, 0.55, 1);
+            Enemies._neonPair(c, [0.42, 0.1, 0.78, 0.16], r, e.accent, 0.4, 1);
+            // Bomb bay frame
+            Neon.path(c, [-0.27, 0.16, 0.27, 0.16, 0.27, 0.57, -0.27, 0.57], r, true);
+            c.fillStyle = '#000000'; c.globalAlpha = 0.5; c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.accent, 0.7, flash);
+        },
+        sniper(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.sniperBarrel, r, e.accent, 0.7, flash, 0.4);
+            const m = S.sniperVane.slice();
+            for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+            Neon.shape(c, S.sniperVane, r, e.color, 0.8, flash, 0.2);
+            Neon.shape(c, m, r, e.color, 0.8, flash, 0.2);
+            Neon.shape(c, S.sniperBody, r, e.color, 1.1, flash, 0.25);
+            Neon.detail(c, [-0.3, -0.12, 0.3, -0.12], r, e.accent, 0.4, 0.8);
+            Neon.ring(c, 0, r * 1.0, r * 0.12, e.accent, 0.5, flash);
+            Neon.ring(c, 0, 0, 3.5, e.accent, 0.5, flash);
+        },
+        carrier(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.carrier, r, e.color, 1.5, flash, 0.22);
+            Neon.path(c, S.carrier, r * 0.62, true);
+            c.strokeStyle = e.accent; c.globalAlpha = 0.35; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+            Neon.detail(c, [-0.55, 0.05, 0.55, 0.05], r, e.accent, 0.45, 1);
+            Enemies._neonPair(c, [0.62, -0.25, 0.82, 0.3], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.45, -0.1, 0.45, 0.55], r, e.accent, 0.35, 1);
+            // Hangar bay
+            Neon.path(c, S.carrierBay, r, true);
+            c.fillStyle = '#000000'; c.globalAlpha = 0.6; c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.accent, 0.9, flash);
+            // Bridge windows
+            for (let j = -1; j <= 1; j++) {
+                Neon.detail(c, [j * 0.1 - 0.035, -0.4, j * 0.1 + 0.035, -0.4], r, e.accent, 0.9, 1.6);
+            }
+        },
+        shield_wall(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.wall, r, e.color, 1.4, flash, 0.1);
+            for (let j = -1; j <= 1; j++) Neon.detail(c, [j * 0.5, -0.26, j * 0.5, 0.26], r, e.accent, 0.3, 1);
+            for (let sx = -1; sx <= 1; sx += 2) {
+                for (let sy = -1; sy <= 1; sy += 2) Neon.light(c, sx * r, sy * r * 0.3, 1.6, e.accent, 1);
+            }
+        },
+    },
+
+    _neon: {
+        scout_drone(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.6, flash);
+            Neon.squash(ctx, flash, 0.15);
+            Neon.sprite(ctx, 'scout|' + e.color + (flash ? '|f' : ''), r * 1.2 + 4, this._bake.scout, e, r, flash);
+            // Spinning rotor blades
             ctx.strokeStyle = '#ffffff';
             ctx.globalAlpha = 0.7;
             ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(rx - bx, ry - by); ctx.lineTo(rx + bx, ry + by); ctx.stroke();
+            for (let s = -1; s <= 1; s += 2) {
+                const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.29;
+                const a = t * 28 * s + e.x * 0.1;
+                const bx = Math.cos(a) * rr, by = Math.sin(a) * rr;
+                ctx.beginPath(); ctx.moveTo(rx - bx, ry - by); ctx.lineTo(rx + bx, ry + by); ctx.stroke();
+            }
             ctx.globalAlpha = 1;
-        }
+            const pulse = 0.7 + Math.sin(t * 9 + e.y * 0.05) * 0.3;
+            Neon.light(ctx, 0, -r * 0.05, 1.8, '#ff3344', flash ? 1 : pulse);
+        },
 
-        // Hull
-        Neon.shape(ctx, this._SCOUT_BODY, r, e.color, 1.1, flash, 0.3);
-        Neon.detail(ctx, [-0.18, 0.2, 0, 0.32, 0.18, 0.2], r, e.accent, 0.6, 0.8);
+        gunship(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.4, flash);
+            Neon.squash(ctx, flash, 0.12);
+            Neon.sprite(ctx, 'gunship|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.gunship, e, r, flash);
+            // Main rotor: faint disc and two crossed blades
+            const cy = -r * 0.1, rl = r * 0.95;
+            ctx.fillStyle = e.accent;
+            ctx.globalAlpha = 0.06;
+            ctx.beginPath(); ctx.arc(0, cy, rl, 0, Math.PI * 2); ctx.fill();
+            const a = t * 18 + e.y * 0.05;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.2;
+            ctx.globalAlpha = 0.55;
+            for (let k = 0; k < 2; k++) {
+                const bx = Math.cos(a + k * Math.PI / 2) * rl, by = Math.sin(a + k * Math.PI / 2) * rl;
+                ctx.beginPath(); ctx.moveTo(-bx, cy - by); ctx.lineTo(bx, cy + by); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, cy, 1.5, e.accent, 1);
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.5));
+            Neon.light(ctx, 0, r * 0.98, 1.6, e.bulletColor || e.color, 0.3 + charge * 0.7);
+        },
 
-        // Sensor eye
-        const pulse = 0.7 + Math.sin(t * 9 + e.y * 0.05) * 0.3;
-        Neon.light(ctx, 0, -r * 0.05, 1.8, '#ff3344', flash ? 1 : pulse);
+        missile_turret(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.08);
+            Neon.sprite(ctx, 'turret|' + e.color + (flash ? '|f' : ''), r * 0.95 + 4, this._bake.missile_turret, e, r, flash);
+            // Missile rack lights chase left to right
+            const lit = Math.floor(t * 6 + e.x * 0.01) % 3;
+            for (let j = 0; j < 3; j++) {
+                Neon.light(ctx, (j - 1) * r * 0.4, -r * 0.28, 1.5, e.accent, j === lit ? 1 : 0.3);
+            }
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.6));
+            Neon.light(ctx, 0, r * 0.88, 2, e.bulletColor || e.color, 0.25 + charge * 0.75);
+        },
+
+        phase_shifter(ctx, e, r, flash) {
+            this._neonGlow(e, r * 3, flash, 0.3);
+            ctx.save();   // keep the spin off the HP bar drawn afterwards
+            ctx.rotate(e.moveTimer * 2);
+            Neon.squash(ctx, flash, 0.15);
+            Neon.sprite(ctx, 'shifter|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.phase_shifter, e, r, flash);
+            // Counter-rotating outer arcs and a pulsing core
+            ctx.rotate(-e.moveTimer * 5);
+            ctx.strokeStyle = e.accent;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.5;
+            for (let k = 0; k < 3; k++) {
+                const a = (Math.PI * 2 / 3) * k;
+                ctx.beginPath(); ctx.arc(0, 0, r * 1.25, a, a + 1.2); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, 0, r * 0.18, e.accent, 0.6 + Math.sin(e.moveTimer * 5) * 0.4);
+            ctx.restore();
+        },
+
+        shielded_cruiser(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.06);
+            Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
+            Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            // Rotating half-shield
+            if (e.shieldHp > 0) {
+                const a = 0.55 + Math.sin(e.moveTimer * 5) * 0.3;
+                ctx.globalAlpha = a;
+                ctx.beginPath(); ctx.arc(0, 0, r + 6, e.shieldAngle, e.shieldAngle + Math.PI);
+                Neon.stroke(ctx, '#4488ff', 1.4, false);
+                ctx.globalAlpha = a * 0.5;
+                ctx.beginPath(); ctx.arc(0, 0, r + 10, e.shieldAngle + 0.3, e.shieldAngle + Math.PI - 0.3);
+                ctx.strokeStyle = '#88bbff'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+        },
+
+        bomber(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.08);
+            // Engine plumes behind the hull
+            const f = Math.sin(e.moveTimer * 30) * 1.5;
+            Neon.flame(ctx, -r * 0.22, r * 0.58, 3, 6 + f, e.color, 0.8);
+            Neon.flame(ctx, r * 0.22, r * 0.58, 3, 6 - f, e.color, 0.8);
+            Neon.sprite(ctx, 'bomber|' + e.color + (flash ? '|f' : ''), r * 0.95 + 5, this._bake.bomber, e, r, flash);
+            // Bay doors slide open; bombs glow inside while open
+            const open = Math.max(0, Math.sin(e.moveTimer * 2));
+            Neon.light(ctx, 0, r * 0.37, 2.2, e.bulletColor || e.color, open);
+            const w = r * 0.25 * (1 - open * 0.7);
+            ctx.strokeStyle = flash ? '#ffffff' : e.accent;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.8;
+            ctx.strokeRect(-r * 0.25, r * 0.18, w, r * 0.37);
+            ctx.strokeRect(r * 0.25 - w, r * 0.18, w, r * 0.37);
+            ctx.globalAlpha = 1;
+        },
+
+        sniper(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            // Targeting laser: faint wide beam with a bright core, thickening before the shot
+            if (e.fireTimer < 0.8) {
+                const k = 0.1 + (0.8 - e.fireTimer) * 0.5;
+                const ex = Math.cos(e.aimAngle) * 300, ey = Math.sin(e.aimAngle) * 300;
+                ctx.strokeStyle = e.color;
+                ctx.globalAlpha = k * 0.35;
+                ctx.lineWidth = e.fireTimer < 0.3 ? 5 : 3;
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ex, ey); ctx.stroke();
+                ctx.strokeStyle = '#ffffff';
+                ctx.globalAlpha = Math.min(1, k);
+                ctx.lineWidth = e.fireTimer < 0.3 ? 1.5 : 0.8;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+            Neon.squash(ctx, flash, 0.12);
+            Neon.sprite(ctx, 'sniper|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.sniper, e, r, flash);
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.8));
+            Neon.light(ctx, 0, 0, 2.2, e.color, 0.4 + charge * 0.6);
+        },
+
+        carrier(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2, flash);
+            Neon.squash(ctx, flash, 0.05);
+            Neon.sprite(ctx, 'carrier|' + e.color + (flash ? '|f' : ''), r * 0.95 + 5, this._bake.carrier, e, r, flash);
+            // Landing lights run down the hangar bay
+            const step = Math.floor(t * 5) % 4;
+            for (let j = 0; j < 3; j++) {
+                Neon.light(ctx, -r * 0.16, r * (0.38 + j * 0.1), 1.2, e.accent, j === step ? 1 : 0.25);
+                Neon.light(ctx, r * 0.16, r * (0.38 + j * 0.1), 1.2, e.accent, j === step ? 1 : 0.25);
+            }
+            // Wing-tip running lights
+            const blink = Math.sin(t * 4 + e.x * 0.02) > 0;
+            Neon.light(ctx, -r * 0.9, 0, 1.6, e.color, blink ? 1 : 0.25);
+            Neon.light(ctx, r * 0.9, 0, 1.6, e.color, blink ? 0.25 : 1);
+        },
+
+        shield_wall(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash, 0.3);
+            Neon.squash(ctx, flash, 0.1);
+            // Energy field: pulsing fill, a sweeping scan line and drifting bands
+            ctx.fillStyle = e.color;
+            ctx.globalAlpha = 0.14 + Math.sin(e.moveTimer * 6) * 0.07;
+            ctx.fillRect(-r * 0.96, -r * 0.27, r * 1.92, r * 0.54);
+            const sx = Math.sin(e.moveTimer * 2.2) * r * 0.9;
+            ctx.strokeStyle = '#ffffff';
+            ctx.globalAlpha = 0.6;
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(sx, -r * 0.27); ctx.lineTo(sx, r * 0.27); ctx.stroke();
+            ctx.strokeStyle = e.accent;
+            ctx.globalAlpha = 0.25;
+            for (let j = 0; j < 2; j++) {
+                const y = ((e.moveTimer * 0.6 + j * 0.5) % 1 - 0.5) * r * 0.5;
+                ctx.beginPath(); ctx.moveTo(-r * 0.95, y); ctx.lineTo(r * 0.95, y); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.sprite(ctx, 'wall|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.shield_wall, e, r, flash);
+        },
     },
 
     draw(ctx) {
@@ -6476,9 +6906,10 @@ const Enemies = {
             const r = e.radius;
             const flash = e.flashTimer > 0 || glitchFlash;
             const accent = flash ? '#ffffff' : e.accent;
-            switch (e.type) {
+            const neonDraw = Neon.on() && this._neon[e.type];
+            if (neonDraw) neonDraw.call(this, ctx, e, r, flash);
+            else switch (e.type) {
                 case 'scout_drone':
-                    if (Neon.on()) { this._drawScoutDroneNeon(ctx, e, r, flash); break; }
                     // Small quad-rotor drone with propeller arms
                     ctx.beginPath();
                     ctx.moveTo(0, -r * 0.6);
@@ -6808,6 +7239,77 @@ const PowerUps = {
         }
     },
 
+    // Neon style: a rotating hex badge with the weapon icon in glowing
+    // line art. Badge and icon are baked; spin, pulse and sparkles are live.
+    _HEX: Neon.polygon(6, 0),
+    _bakeBadge(c, color, r) {
+        Neon.shape(c, PowerUps._HEX, r, color, 1.3, false, 0.3);
+        Neon.path(c, PowerUps._HEX, r * 0.72, true);
+        c.strokeStyle = color; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+        c.globalAlpha = 1;
+    },
+    _bakeIcon(c, type, color) {
+        c.beginPath();
+        switch (type) {
+            case 'spread':
+                for (let j = -2; j <= 2; j++) {
+                    const a = -Math.PI / 2 + j * 0.3;
+                    c.moveTo(0, 3); c.lineTo(Math.cos(a) * 8, 3 + Math.sin(a) * 8);
+                }
+                break;
+            case 'homing':
+                Neon.path(c, [0, -7, 2.5, -2, 2.5, 4, 5, 7, -5, 7, -2.5, 4, -2.5, -2], 1, true);
+                break;
+            case 'laser':
+                c.moveTo(0, -8); c.lineTo(0, 8);
+                c.moveTo(-3.5, -5); c.lineTo(-3.5, 5);
+                c.moveTo(3.5, -5); c.lineTo(3.5, 5);
+                break;
+            case 'drone':
+                c.arc(0, 0, 6, 0, Math.PI * 2);
+                break;
+        }
+        Neon.stroke(c, color, 0.9, false);
+    },
+    _drawNeon(ctx, p, pulse, rot) {
+        const t = p.bobTimer;
+        // Outer pulsing ring
+        ctx.globalAlpha = 0.35 + Math.sin(t * 2) * 0.15;
+        Neon.ring(ctx, 0, 0, p.radius + 5 + Math.sin(t * 1.5) * 2, p.color, 0.6, false);
+        ctx.globalAlpha = 0.75 + pulse * 0.25;
+        ctx.save();
+        ctx.rotate(rot * 0.3);
+        Neon.sprite(ctx, 'pu_badge|' + p.color, p.radius + 5, this._bakeBadge, p.color, p.radius);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        Neon.sprite(ctx, 'pu_icon|' + p.type, 14, this._bakeIcon, p.type, p.color);
+        // Live icon details
+        if (p.type === 'drone') {
+            Neon.light(ctx, 0, 0, 1.6, p.color, 1);
+            for (let j = 0; j < 3; j++) {
+                const a = (Math.PI * 2 / 3) * j + rot * 2;
+                Neon.light(ctx, Math.cos(a) * 6, Math.sin(a) * 6, 1.4, p.color, 1);
+            }
+        } else if (p.type === 'homing') {
+            Neon.flame(ctx, 0, 7, 2, 3 + Math.sin(t * 8) * 1.5, p.color, 0.9);
+        } else if (p.type === 'spread') {
+            for (let j = -2; j <= 2; j++) {
+                const a = -Math.PI / 2 + j * 0.3;
+                Neon.light(ctx, Math.cos(a) * 8, 3 + Math.sin(a) * 8, 1, p.color, 0.6 + pulse * 0.4);
+            }
+        }
+        // Rotating sparkles
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = 0.7;
+        for (let j = 0; j < 4; j++) {
+            const a = rot + (Math.PI / 2) * j;
+            ctx.beginPath();
+            ctx.arc(Math.cos(a) * (p.radius + 5), Math.sin(a) * (p.radius + 5), 1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    },
+
     draw(ctx) {
         for (const p of this.list) {
             const bob = Math.sin(p.bobTimer) * 3;
@@ -6819,6 +7321,11 @@ const PowerUps = {
 
             ctx.save();
             ctx.translate(p.x, p.y + bob);
+            if (Neon.on()) {
+                this._drawNeon(ctx, p, pulse, rot);
+                ctx.restore();
+                continue;
+            }
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;
@@ -6988,7 +7495,7 @@ const MidBossTypes = {
     // Level 3 — debris hauler: spiral bursts and thrown debris
     debris_hauler: {
         name: 'DEBRIS HAULER', level: 3, movement: 'sway',
-        color: '#886644', accent: '#ccaa77', bulletColor: '#00ffaa',
+        color: '#dd9955', accent: '#ffd9a0', bulletColor: '#00ffaa',
         patterns: ['spiral', 'debrisThrow', 'ring'], interval: 1.0,
     },
     // Level 4 — strike leader: darts between positions, fast fans, calls in scouts
@@ -7204,8 +7711,276 @@ const MidBoss = {
         Audio.playExplosionLarge();
     },
 
+    // ------------------------------------------------------------
+    //  Neon style art (see neon.js): one design per mid-boss. Static
+    //  bodies come from the sprite atlas; moving parts are drawn live.
+    //  Outlines are in units of the mid-boss radius.
+    // ------------------------------------------------------------
+    _NEON_SHAPES: {
+        sentinel: Neon.mirror([0, -0.75, 0.35, -0.7, 0.55, -0.4, 1.0, -0.15, 1.0, 0.15, 0.6, 0.3, 0.45, 0.7, 0.15, 0.85]),
+        sentinelBarrel: [0.26, 0.55, 0.38, 0.55, 0.38, 1.05, 0.26, 1.05],
+        forge: Neon.mirror([0, -0.6, 0.55, -0.6, 0.72, -0.35, 0.72, 0.2, 0.5, 0.45, 0.2, 0.5]),
+        forgeStack: [0.28, -0.95, 0.45, -0.95, 0.45, -0.6, 0.28, -0.6],
+        forgeCannon: [-0.09, 0.45, 0.09, 0.45, 0.09, 0.82, -0.09, 0.82],
+        hauler: Neon.mirror([0, -0.72, 0.4, -0.72, 0.62, -0.45, 0.62, 0.25, 0.38, 0.45, 0.2, 0.45]),
+        // Nose points down, toward the player
+        striker: Neon.mirror([0, 1.0, 0.18, 0.55, 0.3, 0.1, 1.0, -0.35, 0.95, -0.55, 0.4, -0.4, 0.3, -0.7, 0.12, -0.6, 0, -0.62]),
+        strikerCanopy: Neon.mirror([0, 0.62, 0.1, 0.42, 0.08, 0.22, 0, 0.16]),
+        wardenOuter: Neon.polygon(8, Math.PI / 8, 0.85),
+        wardenInner: Neon.polygon(8, Math.PI / 8, 0.5),
+        wardenSpike: [0, -1.18, 0.13, -0.92, 0, -0.8, -0.13, -0.92],
+        // The player's ship turned upside down (shared with the Echo boss)
+        echoHull: Neon.mirror([0, 1.15, 0.2, 0.6, 0.3, 0.05, 0.95, -0.45, 0.9, -0.62, 0.45, -0.48, 0.32, -0.72, 0.12, -0.62, 0, -0.66]),
+        echoCanopy: Neon.mirror([0, 0.66, 0.1, 0.42, 0.08, 0.2, 0, 0.14]),
+    },
+
+    _glow(e, size, flash, alpha) {
+        if (e._glowHex === undefined) e._glowHex = Renderer.colorToHex(e.color);
+        Renderer.addGlow(e.x, e.y, e._glowHex, size, flash ? 0.7 : (alpha || 0.3));
+    },
+
+    _flip(pts) {
+        const m = pts.slice();
+        for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+        return m;
+    },
+
+    _bake: {
+        sentinel(c, e, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.sentinelBarrel, r, e.accent, 1, flash, 0.35);
+            Neon.shape(c, MidBoss._flip(S.sentinelBarrel), r, e.accent, 1, flash, 0.35);
+            Neon.shape(c, S.sentinel, r, e.color, 1.8, flash, 0.22);
+            Neon.path(c, S.sentinel, r * 0.6, true);
+            c.strokeStyle = e.accent; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+            Enemies._neonPair(c, [0.58, -0.08, 0.96, -0.04], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.58, 0.1, 0.9, 0.1], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.35, -0.7, 0.45, 0.62], r, e.accent, 0.3, 1);
+            c.beginPath();
+            c.ellipse(0, -r * 0.2, r * 0.22, r * 0.12, 0, 0, Math.PI * 2);
+            c.fillStyle = flash ? '#ffffff' : '#140600'; c.globalAlpha = 0.9; c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.accent, 1, flash);
+        },
+        forge_walker(c, e, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.forgeStack, r, e.accent, 1, flash, 0.3);
+            Neon.shape(c, MidBoss._flip(S.forgeStack), r, e.accent, 1, flash, 0.3);
+            Neon.shape(c, S.forgeCannon, r, e.accent, 1, flash, 0.35);
+            Neon.shape(c, S.forge, r, e.color, 1.8, flash, 0.24);
+            // Furnace grille
+            for (let j = 0; j < 4; j++) {
+                const y = -0.2 + j * 0.12;
+                Neon.detail(c, [-0.34, y, 0.34, y], r, e.accent, 0.45, 1.2);
+            }
+            Enemies._neonPair(c, [0.5, -0.5, 0.62, 0.15], r, e.accent, 0.35, 1);
+            Neon.detail(c, [-0.5, -0.42, 0.5, -0.42], r, e.accent, 0.35, 1);
+        },
+        debris_hauler(c, e, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.hauler, r, e.color, 1.8, flash, 0.22);
+            // Cargo grid
+            for (let j = -1; j <= 1; j++) Neon.detail(c, [j * 0.2, -0.5, j * 0.2, 0.25], r, e.accent, 0.35, 1);
+            Neon.detail(c, [-0.42, -0.25, 0.42, -0.25], r, e.accent, 0.35, 1);
+            Neon.detail(c, [-0.42, 0.02, 0.42, 0.02], r, e.accent, 0.35, 1);
+            Neon.detail(c, [-0.25, -0.62, 0.25, -0.62], r, e.accent, 0.9, 2);
+            Enemies._neonPair(c, [0.62, -0.3, 0.75, -0.3, 0.75, 0.1, 0.62, 0.1], r, e.accent, 0.6, 1.2);
+        },
+        strike_leader(c, e, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.striker, r, e.color, 1.7, flash, 0.22);
+            Neon.detail(c, [0, 0.72, 0, -0.45], r, e.accent, 0.4, 1);
+            Enemies._neonPair(c, [0.32, 0.02, 0.9, -0.4], r, e.accent, 0.6, 1.2);
+            Enemies._neonPair(c, [0.3, -0.2, 0.62, -0.42], r, e.accent, 0.4, 1);
+            Neon.shape(c, S.strikerCanopy, r, e.accent, 0.9, flash, 0.4);
+        },
+        core_warden(c, e, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            for (let k = 0; k < 4; k++) {
+                c.save();
+                c.rotate(k * Math.PI / 2);
+                Neon.shape(c, S.wardenSpike, r, e.accent, 1, flash, 0.3);
+                c.restore();
+            }
+            Neon.shape(c, S.wardenOuter, r, e.color, 1.8, flash, 0.18);
+            Neon.shape(c, S.wardenInner, r, e.accent, 1, flash, 0.14);
+            for (let k = 0; k < 8; k++) {
+                const i = k * 2;
+                Neon.detail(c, [S.wardenInner[i], S.wardenInner[i + 1], S.wardenOuter[i], S.wardenOuter[i + 1]], r, e.accent, 0.4, 1);
+            }
+        },
+        glitch_echo(c, color, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.echoHull, r, color, 1.5, flash, 0.18);
+            Neon.detail(c, [0, 0.78, 0, -0.3], r, color, 0.45, 1);
+            Enemies._neonPair(c, [0.32, -0.1, 0.82, -0.47], r, color, 0.6, 1);
+            Neon.shape(c, S.echoCanopy, r, color, 0.8, flash, 0.35);
+        },
+    },
+
+    _neon: {
+        sentinel(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            this._glow(e, r * 2.6, flash);
+            if (flash) ctx.scale(1.05, 0.96);
+            Neon.sprite(ctx, 'm_sentinel|' + e.color + (flash ? '|f' : ''), r * 1.12 + 6, this._bake.sentinel, e, r, flash);
+            // Rotating weapon ring, eye and barrel muzzles
+            ctx.beginPath();
+            ctx.arc(0, 0, r * 0.5, t * 2, t * 2 + Math.PI * 1.4);
+            ctx.globalAlpha = 0.7;
+            Neon.stroke(ctx, e.accent, 0.8, false);
+            ctx.globalAlpha = 1;
+            const look = Math.max(-1, Math.min(1, (Player.x - e.x) / 200));
+            Neon.light(ctx, look * r * 0.1, -r * 0.2, r * 0.06, e.accent, 1);
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.4));
+            Neon.light(ctx, -r * 0.32, r * 1.05, 2.5, e.bulletColor, 0.3 + charge * 0.7);
+            Neon.light(ctx, r * 0.32, r * 1.05, 2.5, e.bulletColor, 0.3 + charge * 0.7);
+        },
+
+        forge_walker(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            this._glow(e, r * 2.6, flash);
+            // Four legs stepping in alternating pairs (drawn behind the body)
+            for (let k = 0; k < 4; k++) {
+                const side = k < 2 ? -1 : 1;
+                const front = k % 2 === 0 ? -1 : 1;
+                const ph = t * 4 + (k === 0 || k === 3 ? 0 : Math.PI);
+                const lift = Math.max(0, Math.sin(ph)) * 0.12;
+                const hx = side * r * 0.62, hy = r * (0.05 + front * 0.2);
+                const kx = side * r * 0.98, ky = hy - r * (0.18 + lift);
+                const fx = side * r * (1.02 + Math.cos(ph) * 0.06), fy = hy + r * (0.32 - lift);
+                ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy);
+                Neon.stroke(ctx, e.color, 1.3, flash);
+                Neon.light(ctx, fx, fy, 2, e.accent, 0.8);
+            }
+            if (flash) ctx.scale(1.05, 0.96);
+            Neon.sprite(ctx, 'm_forge|' + e.color + (flash ? '|f' : ''), r * 1.0 + 6, this._bake.forge_walker, e, r, flash);
+            Neon.light(ctx, 0, -r * 0.02, r * 0.12, '#ff2200', 0.6 + Math.sin(t * 5) * 0.3);
+            // Smoke and embers rising from the stacks
+            for (let s = -1; s <= 1; s += 2) {
+                for (let j = 0; j < 3; j++) {
+                    const p = (t * 0.8 + j / 3 + (s > 0 ? 0.5 : 0)) % 1;
+                    ctx.fillStyle = j === 0 ? e.accent : '#553322';
+                    ctx.globalAlpha = (1 - p) * (j === 0 ? 0.7 : 0.35);
+                    ctx.beginPath();
+                    ctx.arc(s * r * 0.365 + Math.sin(p * 6 + j) * 3, -r * (0.98 + p * 0.5), j === 0 ? 1.5 : 3 + p * 5, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.globalAlpha = 1;
+        },
+
+        debris_hauler(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            this._glow(e, r * 2.6, flash);
+            // Tractor beam between the claws
+            const beam = e.bulletColor;
+            ctx.fillStyle = beam;
+            ctx.globalAlpha = 0.08 + Math.sin(t * 4) * 0.04;
+            ctx.beginPath();
+            ctx.moveTo(-r * 0.3, r * 0.55); ctx.lineTo(r * 0.3, r * 0.55);
+            ctx.lineTo(r * 0.55, r * 1.3); ctx.lineTo(-r * 0.55, r * 1.3);
+            ctx.fill();
+            ctx.strokeStyle = beam;
+            ctx.lineWidth = 1;
+            for (let j = 0; j < 3; j++) {
+                const p = (t * 0.7 + j / 3) % 1;
+                ctx.globalAlpha = 0.4 * (1 - p);
+                const y = r * (1.3 - p * 0.75), w = r * (0.55 - p * 0.25);
+                ctx.beginPath(); ctx.moveTo(-w, y); ctx.lineTo(w, y); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            // Claws open and close
+            const open = 0.25 + Math.sin(t * 2) * 0.2;
+            for (let s = -1; s <= 1; s += 2) {
+                const bx = s * r * 0.35, by = r * 0.42;
+                const ex = s * r * 0.5, ey = r * 0.8;
+                ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(ex, ey);
+                ctx.lineTo(ex + s * Math.sin(open) * r * 0.25, ey + Math.cos(open) * r * 0.25);
+                ctx.moveTo(ex, ey);
+                ctx.lineTo(ex - s * Math.sin(open) * r * 0.25, ey + Math.cos(open) * r * 0.25);
+                Neon.stroke(ctx, e.accent, 1.1, flash);
+            }
+            if (flash) ctx.scale(1.05, 0.96);
+            Neon.sprite(ctx, 'm_hauler|' + e.color + (flash ? '|f' : ''), r * 0.8 + 6, this._bake.debris_hauler, e, r, flash);
+            const blink = Math.floor(t * 3) % 2;
+            Neon.light(ctx, -r * 0.68, -r * 0.1, 2, beam, blink ? 1 : 0.3);
+            Neon.light(ctx, r * 0.68, -r * 0.1, 2, beam, blink ? 0.3 : 1);
+        },
+
+        strike_leader(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            this._glow(e, r * 2.4, flash);
+            const moving = Math.abs(e.x - e.dartTarget) > 4;
+            // Afterburners at the tail (pointing up), brighter while darting
+            const len = r * (moving ? 0.22 : 0.12) + Math.sin(t * 40) * 1.5;
+            Neon.flame(ctx, -r * 0.2, -r * 0.62, 5, -len, e.accent, moving ? 0.9 : 0.6);
+            Neon.flame(ctx, r * 0.2, -r * 0.62, 5, -len, e.accent, moving ? 0.9 : 0.6);
+            if (moving) ctx.scale(0.86, 1);
+            if (flash) ctx.scale(1.05, 0.96);
+            Neon.sprite(ctx, 'm_striker|' + e.color + (flash ? '|f' : ''), r * 1.1 + 6, this._bake.strike_leader, e, r, flash);
+            const blink = Math.sin(t * 8) > 0;
+            Neon.light(ctx, -r * 0.97, -r * 0.45, 2, e.accent, blink ? 1 : 0.3);
+            Neon.light(ctx, r * 0.97, -r * 0.45, 2, e.accent, blink ? 0.3 : 1);
+        },
+
+        core_warden(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            // Fade and shrink while warping out
+            if (e.warpTimer > 0) {
+                const k = Math.max(0, e.warpTimer / 0.5);
+                ctx.globalAlpha = k;
+                ctx.scale(0.4 + k * 0.6, 0.4 + k * 0.6);
+            }
+            this._glow(e, r * 3, flash, 0.35);
+            ctx.save();
+            ctx.rotate(t * 0.4);
+            if (flash) ctx.scale(1.05, 1.05);
+            Neon.sprite(ctx, 'm_warden|' + e.color + (flash ? '|f' : ''), r * 1.2 + 6, this._bake.core_warden, e, r, flash);
+            ctx.restore();
+            // Two segmented rings turning in opposite directions
+            const a0 = ctx.globalAlpha;
+            for (let ring = 0; ring < 2; ring++) {
+                const rr = r * (ring === 0 ? 0.68 : 1.02);
+                const off = t * (ring === 0 ? -1.4 : 0.9);
+                const n = ring === 0 ? 4 : 6;
+                for (let k = 0; k < n; k++) {
+                    const a = off + (Math.PI * 2 / n) * k;
+                    ctx.beginPath(); ctx.arc(0, 0, rr, a, a + Math.PI / n);
+                    ctx.globalAlpha = a0 * 0.8;
+                    Neon.stroke(ctx, ring === 0 ? e.accent : e.color, 0.8, flash);
+                }
+            }
+            ctx.globalAlpha = a0;
+            Neon.light(ctx, 0, 0, r * 0.13 + Math.sin(t * 6) * 1.5, e.accent, 1);
+        },
+
+        glitch_echo(ctx, e, r, flash) {
+            const t = e.moveTimer;
+            const s = r * 0.9;
+            this._glow(e, r * 2.4, flash);
+            // Engines at the tail (pointing up)
+            const f = Math.sin(t * 40) * 1.5;
+            Neon.flame(ctx, -s * 0.22, -s * 0.62, 4, -(s * 0.15 + f), e.color, 0.7);
+            Neon.flame(ctx, s * 0.22, -s * 0.62, 4, -(s * 0.15 - f), e.color, 0.7);
+            // Magenta ghost copy that jitters, with the odd big glitch jump
+            const big = Math.random() < 0.05;
+            const gx = big ? (Math.random() - 0.5) * 24 : Math.sin(t * 13) * 3;
+            const gy = big ? (Math.random() - 0.5) * 12 : Math.cos(t * 9) * 2;
+            ctx.save();
+            ctx.translate(gx, gy);
+            ctx.globalAlpha = big ? 0.6 : 0.35;
+            Neon.sprite(ctx, 'm_echo|' + e.accent, s * 1.2 + 6, this._bake.glitch_echo, e.accent, s, false);
+            ctx.restore();
+            if (flash) ctx.scale(1.05, 0.96);
+            Neon.sprite(ctx, 'm_echo|' + e.color + (flash ? '|f' : ''), s * 1.2 + 6, this._bake.glitch_echo, e.color, s, flash);
+        },
+    },
+
     draw(ctx, e, flash) {
         const r = e.radius;
+        if (Neon.on() && this._neon[e.type]) { this._neon[e.type].call(this, ctx, e, r, flash); return; }
         const t = e.moveTimer;
         // Hull: armoured hexagon
         ctx.fillStyle = flash ? '#ffffff' : e.color;
@@ -8836,67 +9611,308 @@ const Boss = {
         ScreenShake.trigger(10, 0.8);
     },
 
-    // Neon style outlines, in units of the boss radius
-    _NEON_HEX: [1, 0, 0.5, 0.866, -0.5, 0.866, -1, 0, -0.5, -0.866, 0.5, -0.866],
-    _NEON_ARCH_HULL: Neon.mirror([0, -0.8, 0.4, -0.6, 0.5, -0.1, 0.4, 0.5, 0.15, 0.7, 0, 0.7]),
-    _NEON_ARCH_POD: [0.5, -0.4, 0.95, -0.5, 1.0, -0.15, 0.85, 0.05, 0.5, 0],
-    _NEON_ARCH_BARREL: [0.86, 0.02, 0.95, 0.02, 0.94, 0.3, 0.87, 0.3],
+    // ------------------------------------------------------------
+    //  Neon style art (see neon.js). Static bodies are baked into the
+    //  sprite atlas per phase colour and flash state; eyes, lights,
+    //  tentacles, rings and flames are drawn live. Units of the radius.
+    // ------------------------------------------------------------
+    _NEON_SHAPES: {
+        hex: Neon.polygon(6, 0),
+        archHull: Neon.mirror([0, -0.8, 0.4, -0.6, 0.5, -0.1, 0.4, 0.5, 0.15, 0.7, 0, 0.7]),
+        archPod: [0.5, -0.4, 0.95, -0.5, 1.0, -0.15, 0.85, 0.05, 0.5, 0],
+        archBarrel: [0.86, 0.02, 0.95, 0.02, 0.94, 0.3, 0.87, 0.3],
+        furnace: Neon.mirror([0, -0.7, 0.8, -0.7, 0.9, -0.2, 0.7, 0.6]),
+        furnaceStack: [0.5, -1.0, 0.7, -1.0, 0.7, -0.68, 0.5, -0.68],
+        furnaceGun: [0.82, -0.12, 1.12, -0.12, 1.12, 0.06, 0.82, 0.06],
+        furnaceCannon: [-0.09, 0.58, 0.09, 0.58, 0.09, 0.9, -0.09, 0.9],
+        fighter: Neon.mirror([0, -0.7, 0.2, -0.3, 0.15, -0.1, 0.55, 0.15, 0.5, 0.3, 0.15, 0.4, 0, 0.5]),
+        fighterCanopy: Neon.mirror([0, -0.5, 0.07, -0.36, 0.06, -0.24, 0, -0.2]),
+    },
 
-    // Neon style Architect (origin already at the boss centre)
-    _drawArchitectNeon(ctx, r, color, flash) {
-        const t = this.moveTimer;
-        if (flash) ctx.scale(1.03, 0.98);
+    // Mirror a right-side detail line to the left and draw both
+    _pair(ctx, pts, r, color, alpha, width) {
+        Neon.detail(ctx, pts, r, color, alpha, width);
+        const m = pts.slice();
+        for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+        Neon.detail(ctx, m, r, color, alpha, width);
+    },
 
-        // Legs: jointed struts with a glowing foot
-        for (let s = -1; s <= 1; s += 2) {
-            ctx.beginPath();
-            ctx.moveTo(s * r * 0.15, r * 0.68);
-            ctx.lineTo(s * r * 0.32, r * 0.84);
-            ctx.lineTo(s * r * 0.34, r * 1.02);
-            Neon.stroke(ctx, color, 1.4, flash);
-            Neon.light(ctx, s * r * 0.34, r * 1.02, 2, color, 0.8);
-        }
-
-        // Shoulder pods bob slightly out of step with each other
-        for (let s = -1; s <= 1; s += 2) {
-            ctx.save();
-            ctx.translate(0, Math.sin(t * 2 + (s > 0 ? 0 : Math.PI)) * 2);
-            ctx.scale(s, 1);
-            Neon.shape(ctx, this._NEON_ARCH_BARREL, r, color, 1, flash, 0.3);
-            Neon.shape(ctx, this._NEON_ARCH_POD, r, color, 1.5, flash, 0.18);
-            Neon.detail(ctx, [0.58, -0.3, 0.9, -0.36], r, color, 0.5, 1);
-            Neon.detail(ctx, [0.58, -0.14, 0.92, -0.2], r, color, 0.5, 1);
-            // Muzzle light charges and fades on a loop
-            const charge = 0.4 + 0.6 * Math.max(0, Math.sin(t * 3 + (s > 0 ? 0 : 1.5)));
-            Neon.light(ctx, r * 0.905, r * 0.32, 2.5, color, flash ? 1 : charge);
-            ctx.restore();
-        }
-
-        // Hull, inner frame and panel lines
-        Neon.shape(ctx, this._NEON_ARCH_HULL, r, color, 2, flash, 0.26);
-        ctx.save();
-        ctx.translate(0, r * 0.02);
-        Neon.path(ctx, this._NEON_ARCH_HULL, r * 0.62, true);
-        ctx.strokeStyle = color; ctx.globalAlpha = 0.45; ctx.lineWidth = 1; ctx.stroke();
-        ctx.restore();
-        ctx.globalAlpha = 1;
-        Neon.detail(ctx, [-0.38, 0.12, -0.12, 0.2, 0.12, 0.2, 0.38, 0.12], r, color, 0.5, 1);
-        Neon.detail(ctx, [-0.3, 0.38, -0.1, 0.46, 0.1, 0.46, 0.3, 0.38], r, color, 0.5, 1);
-        Neon.detail(ctx, [0, -0.72, 0, -0.45], r, color, 0.5, 1);
-
-        // Eye: dark socket, sweeping scan line and a pupil that tracks the player
-        const ey = -r * 0.25;
+    // Filled ellipse with a glowing edge
+    _ellipse(ctx, x, y, rx, ry, color, width, flash, fillAlpha, fillColor) {
         ctx.beginPath();
-        ctx.ellipse(0, ey, r * 0.2, r * 0.11, 0, 0, Math.PI * 2);
-        ctx.fillStyle = flash ? '#ffffff' : '#120006';
-        ctx.globalAlpha = flash ? 0.7 : 0.9;
+        ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+        const a = ctx.globalAlpha;
+        ctx.fillStyle = flash ? '#ffffff' : (fillColor || color);
+        ctx.globalAlpha = a * (flash ? 0.6 : fillAlpha);
         ctx.fill();
-        ctx.globalAlpha = 1;
-        Neon.stroke(ctx, color, 1.2, flash);
-        const scan = Math.sin(t * 1.7) * r * 0.16;
-        Neon.detail(ctx, [scan / r, -0.33, scan / r, -0.17], r, color, 0.35, 1);
-        const look = Math.max(-1, Math.min(1, (Player.x - this.x) / 220));
-        Neon.light(ctx, look * r * 0.1, ey, r * 0.05, color, 1);
+        ctx.globalAlpha = a;
+        Neon.stroke(ctx, color, width, flash);
+    },
+
+    _bake: {
+        architect(c, color, r, flash) {
+            const S = Boss._NEON_SHAPES;
+            for (let s = -1; s <= 1; s += 2) {
+                c.beginPath();
+                c.moveTo(s * r * 0.15, r * 0.68);
+                c.lineTo(s * r * 0.32, r * 0.84);
+                c.lineTo(s * r * 0.34, r * 1.02);
+                Neon.stroke(c, color, 1.4, flash);
+            }
+            Neon.shape(c, S.archHull, r, color, 2, flash, 0.26);
+            c.save();
+            c.translate(0, r * 0.02);
+            Neon.path(c, S.archHull, r * 0.62, true);
+            c.strokeStyle = color; c.globalAlpha = 0.45; c.lineWidth = 1; c.stroke();
+            c.restore();
+            c.globalAlpha = 1;
+            Neon.detail(c, [-0.38, 0.12, -0.12, 0.2, 0.12, 0.2, 0.38, 0.12], r, color, 0.5, 1);
+            Neon.detail(c, [-0.3, 0.38, -0.1, 0.46, 0.1, 0.46, 0.3, 0.38], r, color, 0.5, 1);
+            Neon.detail(c, [0, -0.72, 0, -0.45], r, color, 0.5, 1);
+            Boss._ellipse(c, 0, -r * 0.25, r * 0.2, r * 0.11, color, 1.2, flash, 0.9, '#120006');
+        },
+        architectPod(c, color, r, flash) {
+            const S = Boss._NEON_SHAPES;
+            Neon.shape(c, S.archBarrel, r, color, 1, flash, 0.3);
+            Neon.shape(c, S.archPod, r, color, 1.5, flash, 0.18);
+            Neon.detail(c, [0.58, -0.3, 0.9, -0.36], r, color, 0.5, 1);
+            Neon.detail(c, [0.58, -0.14, 0.92, -0.2], r, color, 0.5, 1);
+        },
+        armor(c, color, r, flash) {
+            Neon.shape(c, Boss._NEON_SHAPES.hex, r, color, 1.1, flash, 0.25);
+            Neon.path(c, Boss._NEON_SHAPES.hex, r * 0.5, true);
+            c.strokeStyle = '#ffaa88'; c.globalAlpha = 0.5; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+        },
+        furnace(c, color, r, flash) {
+            const S = Boss._NEON_SHAPES;
+            const accent = '#ffaa66';
+            for (const pts of [S.furnaceStack, S.furnaceGun]) {
+                Neon.shape(c, pts, r, color, 1.1, flash, 0.3);
+                const m = pts.slice();
+                for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+                Neon.shape(c, m, r, color, 1.1, flash, 0.3);
+            }
+            Neon.shape(c, S.furnaceCannon, r, accent, 1, flash, 0.35);
+            Neon.shape(c, [-0.17, 0.86, 0.17, 0.86, 0.17, 0.95, -0.17, 0.95], r, accent, 0.9, flash, 0.35);
+            Neon.shape(c, S.furnace, r, color, 2.2, flash, 0.24);
+            // Armour plating and rivets
+            Neon.detail(c, [-0.78, -0.2, 0.78, -0.2], r, accent, 0.45, 1);
+            Neon.detail(c, [-0.72, 0.28, 0.72, 0.28], r, accent, 0.45, 1);
+            Boss._pair(c, [0.45, -0.7, 0.45, -0.2], r, accent, 0.35, 1);
+            Boss._pair(c, [0.45, 0.28, 0.4, 0.6], r, accent, 0.35, 1);
+            for (let j = -3; j <= 3; j++) {
+                c.fillStyle = accent; c.globalAlpha = 0.6;
+                c.beginPath(); c.arc(j * r * 0.22, -r * 0.6, 1.2, 0, Math.PI * 2); c.fill();
+            }
+            c.globalAlpha = 1;
+            // Furnace mouth with grille bars
+            Boss._ellipse(c, 0, r * 0.04, r * 0.3, r * 0.3, accent, 1.3, flash, 0.85, '#1a0400');
+            for (let j = -2; j <= 2; j++) Neon.detail(c, [j * 0.1, -0.2, j * 0.1, 0.28], r, accent, 0.5, 1.2);
+        },
+        leviathan(c, color, r, flash) {
+            const accent = '#ccffee';
+            Boss._ellipse(c, 0, 0, r * 0.95, r * 0.7, color, 0.8, flash, 0.05);
+            Boss._ellipse(c, 0, 0, r * 0.85, r * 0.6, color, 1.8, flash, 0.2);
+            Boss._ellipse(c, 0, -r * 0.15, r * 0.65, r * 0.45, color, 1.2, flash, 0.18);
+            // Ribs across the carapace
+            for (let j = 0; j < 5; j++) {
+                const y = r * (0.12 + j * 0.09);
+                const w = r * (0.7 - j * 0.1);
+                c.beginPath();
+                c.ellipse(0, y - r * 0.2, w, r * 0.2, 0, 0.15 * Math.PI, 0.85 * Math.PI);
+                c.strokeStyle = color; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+            }
+            c.globalAlpha = 1;
+            // Eye sockets
+            for (const [ex, ey] of [[-0.25, -0.25], [0.25, -0.25], [0, -0.05]]) {
+                Boss._ellipse(c, ex * r, ey * r, r * 0.12, r * 0.08, accent, 0.8, flash, 0.9, '#001a10');
+            }
+        },
+        fighter(c, color, r, flash, trim) {
+            const S = Boss._NEON_SHAPES;
+            Neon.shape(c, S.fighter, r, color, 1.3, flash, 0.24);
+            Neon.detail(c, [0, -0.55, 0, 0.35], r, trim, 0.45, 1);
+            Boss._pair(c, [0.17, 0.02, 0.5, 0.2], r, trim, 0.6, 1);
+            Neon.shape(c, S.fighterCanopy, r, trim, 0.7, flash, 0.4);
+        },
+        nexus(c, color, r, flash) {
+            Boss._ellipse(c, 0, 0, r * 0.9, r * 0.9, color, 0.7, flash, 0.06);
+            Boss._ellipse(c, 0, 0, r * 0.55, r * 0.55, color, 1.8, flash, 0.22);
+            // Latitude and longitude lines give the sphere some depth
+            c.strokeStyle = color; c.lineWidth = 1; c.globalAlpha = 0.4;
+            for (const [rx, ry] of [[0.55, 0.18], [0.55, 0.38], [0.2, 0.55], [0.4, 0.55]]) {
+                c.beginPath(); c.ellipse(0, 0, r * rx, r * ry, 0, 0, Math.PI * 2); c.stroke();
+            }
+            c.globalAlpha = 1;
+        },
+        echo(c, color, r, flash) {
+            const S = MidBoss._NEON_SHAPES;
+            Neon.shape(c, S.echoHull, r, color, 1.8, flash, 0.2);
+            Neon.detail(c, [0, 0.78, 0, -0.3], r, color, 0.45, 1);
+            Boss._pair(c, [0.32, -0.1, 0.82, -0.47], r, color, 0.6, 1);
+            Boss._pair(c, [0.28, 0.05, 0.28, -0.6], r, color, 0.3, 1);
+            Neon.shape(c, S.echoCanopy, r, '#88eeff', 0.9, flash, 0.35);
+        },
+    },
+
+    _neon: {
+        architect(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            const f = flash ? '|f' : '';
+            if (flash) ctx.scale(1.03, 0.98);
+            Neon.sprite(ctx, 'b_arch|' + color + f, r * 1.1 + 6, this._bake.architect, color, r, flash);
+            for (let s = -1; s <= 1; s += 2) Neon.light(ctx, s * r * 0.34, r * 1.02, 2, color, 0.8);
+            // Shoulder pods bob out of step; muzzle lights charge and fade
+            for (let s = -1; s <= 1; s += 2) {
+                ctx.save();
+                ctx.translate(0, Math.sin(t * 2 + (s > 0 ? 0 : Math.PI)) * 2);
+                ctx.scale(s, 1);
+                Neon.sprite(ctx, 'b_archpod|' + color + f, r * 1.05 + 6, this._bake.architectPod, color, r, flash);
+                const charge = 0.4 + 0.6 * Math.max(0, Math.sin(t * 3 + (s > 0 ? 0 : 1.5)));
+                Neon.light(ctx, r * 0.905, r * 0.32, 2.5, color, flash ? 1 : charge);
+                ctx.restore();
+            }
+            // Eye: sweeping scan line and a pupil that tracks the player
+            const scan = Math.sin(t * 1.7) * 0.16;
+            Neon.detail(ctx, [scan, -0.33, scan, -0.17], r, color, 0.35, 1);
+            const look = Math.max(-1, Math.min(1, (Player.x - this.x) / 220));
+            Neon.light(ctx, look * r * 0.1, -r * 0.25, r * 0.05, color, 1);
+        },
+
+        furnace(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            // Smoke and embers from the stacks
+            for (let s = -1; s <= 1; s += 2) {
+                for (let j = 0; j < 4; j++) {
+                    const p = (t * 0.6 + j / 4 + (s > 0 ? 0.4 : 0)) % 1;
+                    const ember = j === 0;
+                    ctx.fillStyle = ember ? '#ffaa44' : '#553322';
+                    ctx.globalAlpha = (1 - p) * (ember ? 0.8 : 0.3);
+                    ctx.beginPath();
+                    ctx.arc(s * r * 0.6 + Math.sin(p * 5 + j) * 4, -r * (1.02 + p * 0.6), ember ? 1.5 : 4 + p * 7, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.globalAlpha = 1;
+            if (flash) ctx.scale(1.03, 0.98);
+            Neon.sprite(ctx, 'b_furnace|' + color + (flash ? '|f' : ''), r * 1.2 + 6, this._bake.furnace, color, r, flash);
+            // Fire behind the grille breathes in and out
+            const heat = 0.55 + Math.sin(t * 4) * 0.3;
+            ctx.fillStyle = '#ff2200';
+            ctx.globalAlpha = heat * 0.5;
+            ctx.beginPath(); ctx.arc(0, r * 0.04, r * 0.26, 0, Math.PI * 2); ctx.fill();
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, r * 0.04, r * 0.08, '#ff6600', heat);
+            Neon.light(ctx, 0, r * 0.95, 2.5, color, 0.5 + Math.sin(t * 6) * 0.4);
+            for (let s = -1; s <= 1; s += 2) Neon.light(ctx, s * r * 1.12, -r * 0.03, 2, color, 0.5 + Math.sin(t * 6 + 1) * 0.4);
+        },
+
+        leviathan(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            // Tentacles behind the body
+            for (let k = 0; k < 6; k++) {
+                const ta = (Math.PI * 2 / 6) * k + t * 0.4;
+                const wave = Math.sin(t * 2.5 + k * 1.2);
+                ctx.beginPath();
+                ctx.moveTo(Math.cos(ta) * r * 0.7, Math.sin(ta) * r * 0.5);
+                ctx.quadraticCurveTo(
+                    Math.cos(ta) * r * 1.3 + wave * 15, Math.sin(ta) * r * 1.0 + wave * 10,
+                    Math.cos(ta + 0.2 + wave * 0.1) * r * 1.8, Math.sin(ta + 0.2 + wave * 0.1) * r * 1.4
+                );
+                ctx.globalAlpha = 0.55 + Math.sin(t * 3 + k) * 0.25;
+                Neon.stroke(ctx, color, 1.1 - k * 0.05, flash);
+                ctx.globalAlpha = 1;
+                Neon.light(ctx, Math.cos(ta + 0.2 + wave * 0.1) * r * 1.8, Math.sin(ta + 0.2 + wave * 0.1) * r * 1.4, 1.6, color, 0.7);
+            }
+            // The body breathes
+            const breathe = 1 + Math.sin(t * 1.8) * 0.02;
+            ctx.save();
+            ctx.scale(breathe, 2 - breathe);
+            Neon.sprite(ctx, 'b_levi|' + color + (flash ? '|f' : ''), r * 1.0 + 6, this._bake.leviathan, color, r, flash);
+            ctx.restore();
+            // Eyes blink in turn and follow the player
+            const look = Math.max(-1, Math.min(1, (Player.x - this.x) / 220));
+            const eyes = [[-0.25, -0.25], [0.25, -0.25], [0, -0.05]];
+            for (let k = 0; k < 3; k++) {
+                const blink = Math.sin(t * 0.9 + k * 2.1) > 0.97;
+                if (blink) continue;
+                Neon.light(ctx, (eyes[k][0] + look * 0.05) * r, eyes[k][1] * r, r * 0.035, '#00ffaa', 1);
+            }
+        },
+
+        interceptor_duo(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            const sep = this.phase === 1 ? 45 : 18;
+            // Phase 2: energy link between the ships, with sparks running along it
+            if (this.phase === 2) {
+                for (let beam = 0; beam < 3; beam++) {
+                    const by = -r * 0.2 + beam * r * 0.25;
+                    ctx.beginPath(); ctx.moveTo(-sep, by); ctx.lineTo(sep, by);
+                    ctx.globalAlpha = 0.5 + Math.sin(t * 5 + beam) * 0.25;
+                    Neon.stroke(ctx, '#ff9900', 0.8, false);
+                    ctx.globalAlpha = 1;
+                    const p = ((t * 1.5 + beam * 0.33) % 1) * 2 - 1;
+                    Neon.light(ctx, p * sep, by, 1.5, '#ffcc44', 1);
+                }
+            }
+            for (let s = -1; s <= 1; s += 2) {
+                const trim = s < 0 ? '#ffcc44' : '#ff6644';
+                ctx.save();
+                ctx.translate(s * sep, 0);
+                Neon.flame(ctx, 0, r * 0.47, 4, r * 0.2 + Math.sin(t * 30 + s) * 2, trim, 0.9);
+                if (flash) ctx.scale(1.05, 0.96);
+                Neon.sprite(ctx, 'b_fighter|' + color + '|' + trim + (flash ? '|f' : ''), r * 0.62 + 6, this._bake.fighter, color, r, flash, trim);
+                ctx.restore();
+            }
+        },
+
+        nexus(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            if (flash) ctx.scale(1.03, 1.03);
+            Neon.sprite(ctx, 'b_nexus|' + color + (flash ? '|f' : ''), r * 0.95 + 6, this._bake.nexus, color, r, flash);
+            // Orbital rings with a node riding each
+            for (let ring = 0; ring < 3; ring++) {
+                const rx = r * (0.75 + ring * 0.12), ry = r * (0.25 + ring * 0.05);
+                const rot = t * (0.6 + ring * 0.4);
+                ctx.beginPath();
+                ctx.ellipse(0, 0, rx, ry, rot, 0, Math.PI * 2);
+                ctx.globalAlpha = 0.6 + Math.sin(t * 2 + ring) * 0.2;
+                Neon.stroke(ctx, ring === 1 ? '#ff00ff' : color, 0.8, flash);
+                ctx.globalAlpha = 1;
+                const na = t * (1.2 + ring * 0.5);
+                const nx = Math.cos(na) * rx, ny = Math.sin(na) * ry;
+                Neon.light(ctx, nx * Math.cos(rot) - ny * Math.sin(rot), nx * Math.sin(rot) + ny * Math.cos(rot), 2.2, '#ff00ff', 1);
+            }
+            Neon.light(ctx, 0, 0, r * 0.14, color, 0.6 + Math.sin(t * 3) * 0.3);
+            // Data stream motes
+            ctx.fillStyle = '#ffffff';
+            for (let p = 0; p < 8; p++) {
+                const pa = t * 1.5 + p * 0.8;
+                const pd = r * 0.4 + Math.sin(pa * 2) * r * 0.3;
+                ctx.globalAlpha = 0.6;
+                ctx.fillRect(Math.cos(pa) * pd - 1, Math.sin(pa) * pd - 1, 2, 2);
+            }
+            ctx.globalAlpha = 1;
+        },
+
+        echo(ctx, r, color, flash) {
+            const t = this.moveTimer;
+            // Engines at the tail (pointing up)
+            const f = Math.sin(t * 40) * 1.5;
+            Neon.flame(ctx, -r * 0.22, -r * 0.66, 5, -(r * 0.14 + f), '#00ffff', 0.7);
+            Neon.flame(ctx, r * 0.22, -r * 0.66, 5, -(r * 0.14 - f), '#00ffff', 0.7);
+            // Magenta ghost copy that jitters, with the odd big glitch jump
+            const big = Math.random() < 0.06;
+            ctx.save();
+            ctx.translate(big ? (Math.random() - 0.5) * 20 : Math.sin(t * 11) * 3, big ? (Math.random() - 0.5) * 20 : Math.cos(t * 7) * 2);
+            ctx.globalAlpha = big ? 0.55 : 0.3;
+            Neon.sprite(ctx, 'b_echo|#ff00ff', r * 1.2 + 6, this._bake.echo, '#ff00ff', r, false);
+            ctx.restore();
+            if (flash) ctx.scale(1.03, 0.98);
+            Neon.sprite(ctx, 'b_echo|' + color + (flash ? '|f' : ''), r * 1.2 + 6, this._bake.echo, color, r, flash);
+            Neon.light(ctx, 0, r * 0.4, r * 0.05, '#ff00ff', 0.6 + Math.sin(t * 4) * 0.4);
+        },
     },
 
     draw(ctx) {
@@ -8929,7 +9945,9 @@ const Boss = {
 
         // Type-specific body shapes
         const r = this.radius;
-        switch (this.bossType) {
+        const neonDraw = Neon.on() && this._neon[this.bossType];
+        if (neonDraw) neonDraw.call(this, ctx, r, this.colors[this.phase - 1] || '#ff4444', flash);
+        else switch (this.bossType) {
             case 'furnace': {
                 // Industrial war machine — heavy armoured hull, smokestacks, cannons
                 // Main hull
@@ -9166,7 +10184,6 @@ const Boss = {
                 break;
             }
             default: {
-                if (Neon.on()) { this._drawArchitectNeon(ctx, r, mainColor, flash); break; }
                 // Architect — angular mech with shoulder pods, central eye, leg struts
                 // Main body
                 ctx.beginPath();
@@ -9221,10 +10238,7 @@ const Boss = {
                     ctx.save();
                     ctx.translate(ax, ay);
                     ctx.rotate(-this.moveTimer * 2 + seg.angle);
-                    Neon.shape(ctx, this._NEON_HEX, BOSS_ARMOR_RADIUS - 3, '#ff6644', 1.1, flash, 0.25);
-                    Neon.path(ctx, this._NEON_HEX, (BOSS_ARMOR_RADIUS - 3) * 0.5, true);
-                    ctx.strokeStyle = '#ffaa88'; ctx.globalAlpha = 0.5; ctx.lineWidth = 1; ctx.stroke();
-                    ctx.globalAlpha = 1;
+                    Neon.sprite(ctx, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
                     ctx.restore();
                     continue;
                 }
@@ -9239,7 +10253,13 @@ const Boss = {
         }
 
         // Core glow (phases 2-3)
-        if (this.phase >= 2) {
+        if (this.phase >= 2 && Neon.on()) {
+            const pulse = Math.sin(this.moveTimer * 5);
+            ctx.globalAlpha = 0.5 + Math.sin(this.moveTimer * 3) * 0.2;
+            Neon.ring(ctx, 0, 0, 13 + pulse * 4, '#ff00ff', 0.8, false);
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, 0, 4 + pulse, '#ff00ff', 1);
+        } else if (this.phase >= 2) {
             const pulseR = 15 + Math.sin(this.moveTimer * 5) * 5;
             ctx.fillStyle = `rgba(255, 0, 255, ${0.3 + Math.sin(this.moveTimer * 3) * 0.2})`;
             ctx.beginPath();
@@ -9998,6 +11018,14 @@ const Player = {
     _neonBank: 0,
     _neonLastX: null,
 
+    _bakeShipNeon(c, sc, r, surge) {
+        Neon.shape(c, Player._NEON_HULL, r, sc, 1.2, false, 0.2);
+        Neon.detail(c, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
+        Neon.detail(c, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
+        Neon.detail(c, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        Neon.shape(c, Player._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
+    },
+
     // Neon style ship body (origin already translated to the ship).
     // Banks into horizontal movement by narrowing the hull.
     _drawShipNeon(ctx) {
@@ -10041,11 +11069,10 @@ const Player = {
         }
         ctx.globalAlpha = shipAlpha;
 
-        // Hull, then panel lines on top
-        Neon.shape(ctx, this._NEON_HULL, r, sc, 1.2, false, 0.2);
-        Neon.detail(ctx, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
-        Neon.detail(ctx, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
-        Neon.detail(ctx, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        // Hull, panel lines and canopy (baked per colour; the chromatic
+        // skin changes colour every frame, so it is drawn live)
+        const key = Hangar.equipped.skin === 'chromatic' && !surge ? null : 'player|' + sc;
+        Neon.sprite(ctx, key, r * 1.25 + 4, this._bakeShipNeon, sc, r, surge);
         // The wing on the side we're banking towards catches more light
         if (Math.abs(bank) > 0.05) {
             const side = bank > 0 ? 1 : -1;
@@ -10055,9 +11082,6 @@ const Player = {
             ctx.fill();
             ctx.globalAlpha = shipAlpha;
         }
-
-        // Canopy
-        Neon.shape(ctx, this._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
 
         // Wing-tip running lights, blinking out of step
         const blink = Math.sin(this.engineFlicker * 0.5);

@@ -16,10 +16,81 @@
 //
 //  Set Settings.values.graphicsStyle = 'classic' to fall back to the
 //  original flat-fill art for comparison.
+//
+//  Sprite atlas: the static parts of each entity (hulls, panel lines,
+//  sockets) are drawn once into a shared atlas canvas by Neon.sprite()
+//  and then stamped with drawImage every frame. Only the animated bits
+//  (rotors, lights, flames, eyes) are drawn live. Sprite keys name the
+//  entity, its colour and its flash state, e.g. 'scout|#ff8c00|0'; a
+//  hand-drawn image for a key could later replace the baked one.
 // ============================================================
 const Neon = {
     on() {
         return typeof Settings === 'undefined' || Settings.values.graphicsStyle !== 'classic';
+    },
+
+    // --- Sprite atlas ---
+    BAKE: true,              // false: draw everything live (for comparing output/cost)
+    BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
+    ATLAS_SIZE: 2048,
+    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    _pages: [],
+    _sprites: new Map(),
+
+    // Draw a cached sprite centred on the current origin. `half` is the
+    // sprite's half-extent in play pixels (art plus halo must fit inside).
+    // drawFn(ctx, a, b, c, d) draws the art around (0, 0) in play-pixel
+    // units, the same way it would draw live; it runs only when the key
+    // is new. A null key draws live every frame (for art whose colour
+    // changes continuously, like the chromatic skin).
+    sprite(ctx, key, half, drawFn, a, b, c, d) {
+        if (!this.BAKE || key === null) { drawFn(ctx, a, b, c, d); return; }
+        let spr = this._sprites.get(key);
+        if (!spr) spr = this._bake(key, half, drawFn, a, b, c, d);
+        ctx.drawImage(spr.canvas, spr.x, spr.y, spr.size, spr.size, -half, -half, half * 2, half * 2);
+    },
+
+    _bake(key, half, drawFn, a, b, cArg, d) {
+        const size = Math.ceil(half * 2 * this.BAKE_SCALE) + 2;
+        let page = this._pages[this._pages.length - 1];
+        if (!page || !this._fits(page, size)) {
+            if (this._pages.length >= this.ATLAS_MAX_PAGES) this.flush();
+            page = this._newPage();
+        }
+        if (page.x + size > this.ATLAS_SIZE) { page.x = 0; page.y += page.rowH; page.rowH = 0; }
+        const spr = { canvas: page.canvas, x: page.x + 1, y: page.y + 1, size: size - 2 };
+        page.x += size;
+        page.rowH = Math.max(page.rowH, size);
+
+        const c = page.ctx;
+        c.save();
+        c.beginPath();
+        c.rect(spr.x, spr.y, spr.size, spr.size);
+        c.clip();
+        c.translate(spr.x + spr.size / 2, spr.y + spr.size / 2);
+        c.scale(this.BAKE_SCALE, this.BAKE_SCALE);
+        drawFn(c, a, b, cArg, d);
+        c.restore();
+        this._sprites.set(key, spr);
+        return spr;
+    },
+
+    _fits(page, size) {
+        if (page.x + size <= this.ATLAS_SIZE) return page.y + Math.max(page.rowH, size) <= this.ATLAS_SIZE;
+        return page.y + page.rowH + size <= this.ATLAS_SIZE;
+    },
+
+    _newPage() {
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = this.ATLAS_SIZE;
+        const page = { canvas, ctx: canvas.getContext('2d'), x: 0, y: 0, rowH: 0 };
+        this._pages.push(page);
+        return page;
+    },
+
+    flush() {
+        this._pages.length = 0;
+        this._sprites.clear();
     },
 
     // Wall-clock seconds for idle animation (spins, pulses) that
@@ -98,16 +169,66 @@ const Neon = {
 
     // Bright point light: coloured halo with a white centre
     light(ctx, x, y, radius, color, intensity) {
-        const a = ctx.globalAlpha;
         const k = intensity != null ? intensity : 1;
-        ctx.fillStyle = color;
-        ctx.globalAlpha = a * 0.35 * k;
-        ctx.beginPath(); ctx.arc(x, y, radius * 2, 0, Math.PI * 2); ctx.fill();
+        if (k <= 0) return;
+        const a = ctx.globalAlpha;
+        if (this.BAKE && color.charCodeAt(0) === 35) {
+            // Stamped from the atlas; radius is rounded to 0.5 px so the
+            // few sizes in use each get one sprite. Only fixed '#hex'
+            // colours are baked (the chromatic skin's hsl() cycles).
+            const rr = Math.max(0.5, Math.round(radius * 2) / 2);
+            const key = 'light|' + color + '|' + rr;
+            let spr = this._sprites.get(key);
+            if (!spr) spr = this._bake(key, rr * 2 + 1, this._drawLight, rr, color);
+            const h = rr * 2 + 1;
+            ctx.globalAlpha = a * k;
+            ctx.drawImage(spr.canvas, spr.x, spr.y, spr.size, spr.size, x - h, y - h, h * 2, h * 2);
+            ctx.globalAlpha = a;
+            return;
+        }
         ctx.globalAlpha = a * k;
+        this._drawLight(ctx, radius, color, x, y);
+        ctx.globalAlpha = a;
+    },
+
+    _drawLight(ctx, radius, color, x, y) {
+        const a = ctx.globalAlpha;
+        x = x || 0; y = y || 0;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = a * 0.35;
+        ctx.beginPath(); ctx.arc(x, y, radius * 2, 0, Math.PI * 2); ctx.fill();
+        ctx.globalAlpha = a;
         ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = '#ffffff';
         ctx.beginPath(); ctx.arc(x, y, radius * 0.45, 0, Math.PI * 2); ctx.fill();
+    },
+
+    // Engine plume pointing down (+y) from (x, y): coloured flame with a
+    // white core. Pass a negative len to point it up.
+    flame(ctx, x, y, w, len, color, alpha) {
+        const a = ctx.globalAlpha;
+        const k = alpha != null ? alpha : 1;
+        ctx.fillStyle = color;
+        ctx.globalAlpha = a * 0.55 * k;
+        ctx.beginPath();
+        ctx.moveTo(x - w, y); ctx.lineTo(x, y + len * 1.5); ctx.lineTo(x + w, y);
+        ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = a * 0.9 * k;
+        ctx.beginPath();
+        ctx.moveTo(x - w * 0.4, y); ctx.lineTo(x, y + len); ctx.lineTo(x + w * 0.4, y);
+        ctx.fill();
         ctx.globalAlpha = a;
+    },
+
+    // Regular polygon as a flat point list (for Neon.shape / Neon.path)
+    polygon(sides, rotation, sx, sy) {
+        const pts = [];
+        for (let i = 0; i < sides; i++) {
+            const a = rotation + (Math.PI * 2 / sides) * i;
+            pts.push(Math.cos(a) * (sx || 1), Math.sin(a) * (sy || sx || 1));
+        }
+        return pts;
     },
 
     // Hit reaction: a brief squash-and-stretch around the current origin

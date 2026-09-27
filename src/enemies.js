@@ -400,41 +400,350 @@ const Enemies = {
         if (idx >= 0) this.list.splice(idx, 1);
     },
 
-    // Neon style: twin-rotor scout. Origin is the enemy centre.
-    _SCOUT_BODY: Neon.mirror([0, -0.7, 0.32, -0.25, 0.28, 0.3, 0, 0.55]),
-    _drawScoutDroneNeon(ctx, e, r, flash) {
-        const t = Neon.time();
-        Renderer.addGlow(e.x, e.y, Renderer.colorToHex(e.color), r * 2.6, flash ? 0.6 : 0.22);
-        Neon.squash(ctx, flash, 0.15);
+    // ------------------------------------------------------------
+    //  Neon style art (see neon.js). Each entry draws one enemy type
+    //  around its centre: the static body comes from the sprite atlas,
+    //  animated parts are drawn live on top. Outlines are in units of r.
+    // ------------------------------------------------------------
+    _NEON_SHAPES: {
+        scout: Neon.mirror([0, -0.7, 0.32, -0.25, 0.28, 0.3, 0, 0.55]),
+        gunship: Neon.mirror([0, -0.8, 0.4, -0.3, 0.9, 0, 0.85, 0.2, 0.4, 0.1, 0.35, 0.6, 0.6, 0.8, 0.3, 0.7]),
+        gunshipCanopy: Neon.mirror([0, -0.62, 0.14, -0.42, 0.12, -0.25, 0, -0.2]),
+        gunshipBarrel: [-0.07, 0.62, 0.07, 0.62, 0.07, 0.98, -0.07, 0.98],
+        turretBase: [-0.8, -0.4, 0.8, -0.4, 0.6, 0.4, -0.6, 0.4],
+        turretBracket: [0.5, -0.15, 0.72, -0.15, 0.72, 0.15, 0.5, 0.15],
+        turretBarrel: [-0.1, 0.2, 0.1, 0.2, 0.1, 0.76, -0.1, 0.76],
+        turretTip: [-0.18, 0.74, 0.18, 0.74, 0.18, 0.88, -0.18, 0.88],
+        star: (() => {
+            const pts = [];
+            for (let j = 0; j < 10; j++) {
+                const a = (Math.PI * 2 / 10) * j - Math.PI / 2;
+                const k = j % 2 === 0 ? 1 : 0.45;
+                pts.push(Math.cos(a) * k, Math.sin(a) * k);
+            }
+            return pts;
+        })(),
+        cruiser: Neon.mirror([0, -0.7, 0.5, -0.5, 0.8, -0.1, 0.7, 0.5, 0.3, 0.7]),
+        cruiserBridge: Neon.mirror([0, -0.44, 0.2, -0.34, 0.2, -0.24, 0, -0.18]),
+        bomber: Neon.mirror([0, -0.5, 0.4, -0.4, 0.9, -0.1, 0.8, 0.2, 0.4, 0.3, 0.35, 0.6]),
+        sniperBody: [-0.5, -0.3, 0.5, -0.3, 0.4, 0.3, -0.4, 0.3],
+        sniperVane: [0.45, -0.2, 0.72, -0.4, 0.66, 0.08, 0.42, 0.2],
+        sniperBarrel: [-0.08, 0.25, 0.08, 0.25, 0.08, 1.0, -0.08, 1.0],
+        carrier: Neon.mirror([0, -0.6, 0.6, -0.4, 0.9, 0, 0.8, 0.5, 0.4, 0.7]),
+        carrierBay: [-0.25, 0.3, 0.25, 0.3, 0.2, 0.66, -0.2, 0.66],
+        wall: [-1, -0.3, 1, -0.3, 1, 0.3, -1, 0.3],
+    },
 
-        // Arms out to the rotors
-        Neon.detail(ctx, [-0.3, -0.2, -0.8, -0.35], r, e.accent, 0.8, 1.2);
-        Neon.detail(ctx, [0.3, -0.2, 0.8, -0.35], r, e.accent, 0.8, 1.2);
+    _neonGlow(e, size, flash, alpha) {
+        if (e._glowHex === undefined) e._glowHex = Renderer.colorToHex(e.color);
+        Renderer.addGlow(e.x, e.y, e._glowHex, size, flash ? 0.6 : (alpha || 0.22));
+    },
 
-        // Rotors: faint disc, glowing rim and a spinning blade
-        for (let s = -1; s <= 1; s += 2) {
-            const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.34;
-            ctx.fillStyle = e.accent;
-            ctx.globalAlpha = 0.08;
-            ctx.beginPath(); ctx.arc(rx, ry, rr, 0, Math.PI * 2); ctx.fill();
-            ctx.globalAlpha = 1;
-            Neon.ring(ctx, rx, ry, rr, e.accent, 0.6, flash);
-            const a = t * 28 * s + e.x * 0.1;
-            const bx = Math.cos(a) * rr * 0.85, by = Math.sin(a) * rr * 0.85;
+    // Mirror a right-side detail line to the left (x -> -x) and draw both
+    _neonPair(ctx, pts, r, color, alpha, width) {
+        Neon.detail(ctx, pts, r, color, alpha, width);
+        const m = pts.slice();
+        for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+        Neon.detail(ctx, m, r, color, alpha, width);
+    },
+
+    // Static bodies, baked into the atlas once per colour and flash state
+    _bake: {
+        scout(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Enemies._neonPair(c, [0.3, -0.2, 0.8, -0.35], r, e.accent, 0.8, 1.2);
+            for (let s = -1; s <= 1; s += 2) {
+                const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.34;
+                c.fillStyle = e.accent;
+                c.globalAlpha = 0.08;
+                c.beginPath(); c.arc(rx, ry, rr, 0, Math.PI * 2); c.fill();
+                c.globalAlpha = 1;
+                Neon.ring(c, rx, ry, rr, e.accent, 0.6, flash);
+            }
+            Neon.shape(c, S.scout, r, e.color, 1.1, flash, 0.3);
+            Neon.detail(c, [-0.18, 0.2, 0, 0.32, 0.18, 0.2], r, e.accent, 0.6, 0.8);
+        },
+        gunship(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.gunshipBarrel, r, e.accent, 0.8, flash, 0.4);
+            Neon.shape(c, S.gunship, r, e.color, 1.2, flash, 0.24);
+            Enemies._neonPair(c, [0.42, 0.02, 0.84, 0.1], r, e.accent, 0.55, 1);
+            Neon.detail(c, [0, -0.12, 0, 0.55], r, e.accent, 0.4, 1);
+            Neon.detail(c, [-0.3, 0.62, 0.3, 0.62], r, e.accent, 0.4, 1);
+            Neon.shape(c, S.gunshipCanopy, r, e.accent, 0.7, flash, 0.4);
+        },
+        missile_turret(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.turretBarrel, r, e.accent, 0.9, flash, 0.35);
+            Neon.shape(c, S.turretTip, r, e.accent, 0.9, flash, 0.35);
+            Neon.shape(c, S.turretBase, r, e.color, 1.3, flash, 0.24);
+            const m = S.turretBracket.slice();
+            for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+            Neon.shape(c, S.turretBracket, r, e.accent, 0.8, flash, 0.3);
+            Neon.shape(c, m, r, e.accent, 0.8, flash, 0.3);
+            Neon.detail(c, [-0.62, 0.22, 0.62, 0.22], r, e.accent, 0.4, 1);
+            // Dome
+            c.beginPath();
+            c.arc(0, -r * 0.1, r * 0.35, Math.PI, 0);
+            c.closePath();
+            c.fillStyle = flash ? '#ffffff' : e.color;
+            c.globalAlpha = 0.3;
+            c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.color, 1, flash);
+        },
+        phase_shifter(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.star, r, e.color, 1.1, flash, 0.25);
+            for (let j = 0; j < 10; j += 2) {
+                Neon.detail(c, [0, 0, S.star[j * 2], S.star[j * 2 + 1]], r, e.accent, 0.4, 0.8);
+            }
+            c.beginPath();
+            for (let j = 1; j < 10; j += 2) c.lineTo(S.star[j * 2] * r, S.star[j * 2 + 1] * r);
+            c.closePath();
+            c.strokeStyle = e.accent; c.globalAlpha = 0.5; c.lineWidth = 0.8; c.stroke();
+            c.globalAlpha = 1;
+        },
+        shielded_cruiser(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.cruiser, r, e.color, 1.4, flash, 0.22);
+            Neon.path(c, S.cruiser, r * 0.62, true);
+            c.strokeStyle = e.accent; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+            Neon.detail(c, [-0.62, 0, 0.62, 0], r, e.accent, 0.5, 1);
+            Neon.detail(c, [-0.42, 0.35, 0.42, 0.35], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.5, -0.5, 0.35, -0.05], r, e.accent, 0.4, 1);
+            Neon.shape(c, S.cruiserBridge, r, e.accent, 0.8, flash, 0.35);
+        },
+        bomber(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.bomber, r, e.color, 1.3, flash, 0.24);
+            Enemies._neonPair(c, [0.42, -0.25, 0.84, -0.06], r, e.accent, 0.55, 1);
+            Enemies._neonPair(c, [0.42, 0.1, 0.78, 0.16], r, e.accent, 0.4, 1);
+            // Bomb bay frame
+            Neon.path(c, [-0.27, 0.16, 0.27, 0.16, 0.27, 0.57, -0.27, 0.57], r, true);
+            c.fillStyle = '#000000'; c.globalAlpha = 0.5; c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.accent, 0.7, flash);
+        },
+        sniper(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.sniperBarrel, r, e.accent, 0.7, flash, 0.4);
+            const m = S.sniperVane.slice();
+            for (let i = 0; i < m.length; i += 2) m[i] = -m[i];
+            Neon.shape(c, S.sniperVane, r, e.color, 0.8, flash, 0.2);
+            Neon.shape(c, m, r, e.color, 0.8, flash, 0.2);
+            Neon.shape(c, S.sniperBody, r, e.color, 1.1, flash, 0.25);
+            Neon.detail(c, [-0.3, -0.12, 0.3, -0.12], r, e.accent, 0.4, 0.8);
+            Neon.ring(c, 0, r * 1.0, r * 0.12, e.accent, 0.5, flash);
+            Neon.ring(c, 0, 0, 3.5, e.accent, 0.5, flash);
+        },
+        carrier(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.carrier, r, e.color, 1.5, flash, 0.22);
+            Neon.path(c, S.carrier, r * 0.62, true);
+            c.strokeStyle = e.accent; c.globalAlpha = 0.35; c.lineWidth = 1; c.stroke();
+            c.globalAlpha = 1;
+            Neon.detail(c, [-0.55, 0.05, 0.55, 0.05], r, e.accent, 0.45, 1);
+            Enemies._neonPair(c, [0.62, -0.25, 0.82, 0.3], r, e.accent, 0.5, 1);
+            Enemies._neonPair(c, [0.45, -0.1, 0.45, 0.55], r, e.accent, 0.35, 1);
+            // Hangar bay
+            Neon.path(c, S.carrierBay, r, true);
+            c.fillStyle = '#000000'; c.globalAlpha = 0.6; c.fill();
+            c.globalAlpha = 1;
+            Neon.stroke(c, e.accent, 0.9, flash);
+            // Bridge windows
+            for (let j = -1; j <= 1; j++) {
+                Neon.detail(c, [j * 0.1 - 0.035, -0.4, j * 0.1 + 0.035, -0.4], r, e.accent, 0.9, 1.6);
+            }
+        },
+        shield_wall(c, e, r, flash) {
+            const S = Enemies._NEON_SHAPES;
+            Neon.shape(c, S.wall, r, e.color, 1.4, flash, 0.1);
+            for (let j = -1; j <= 1; j++) Neon.detail(c, [j * 0.5, -0.26, j * 0.5, 0.26], r, e.accent, 0.3, 1);
+            for (let sx = -1; sx <= 1; sx += 2) {
+                for (let sy = -1; sy <= 1; sy += 2) Neon.light(c, sx * r, sy * r * 0.3, 1.6, e.accent, 1);
+            }
+        },
+    },
+
+    _neon: {
+        scout_drone(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.6, flash);
+            Neon.squash(ctx, flash, 0.15);
+            Neon.sprite(ctx, 'scout|' + e.color + (flash ? '|f' : ''), r * 1.2 + 4, this._bake.scout, e, r, flash);
+            // Spinning rotor blades
             ctx.strokeStyle = '#ffffff';
             ctx.globalAlpha = 0.7;
             ctx.lineWidth = 1;
-            ctx.beginPath(); ctx.moveTo(rx - bx, ry - by); ctx.lineTo(rx + bx, ry + by); ctx.stroke();
+            for (let s = -1; s <= 1; s += 2) {
+                const rx = s * r * 0.8, ry = -r * 0.35, rr = r * 0.29;
+                const a = t * 28 * s + e.x * 0.1;
+                const bx = Math.cos(a) * rr, by = Math.sin(a) * rr;
+                ctx.beginPath(); ctx.moveTo(rx - bx, ry - by); ctx.lineTo(rx + bx, ry + by); ctx.stroke();
+            }
             ctx.globalAlpha = 1;
-        }
+            const pulse = 0.7 + Math.sin(t * 9 + e.y * 0.05) * 0.3;
+            Neon.light(ctx, 0, -r * 0.05, 1.8, '#ff3344', flash ? 1 : pulse);
+        },
 
-        // Hull
-        Neon.shape(ctx, this._SCOUT_BODY, r, e.color, 1.1, flash, 0.3);
-        Neon.detail(ctx, [-0.18, 0.2, 0, 0.32, 0.18, 0.2], r, e.accent, 0.6, 0.8);
+        gunship(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.4, flash);
+            Neon.squash(ctx, flash, 0.12);
+            Neon.sprite(ctx, 'gunship|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.gunship, e, r, flash);
+            // Main rotor: faint disc and two crossed blades
+            const cy = -r * 0.1, rl = r * 0.95;
+            ctx.fillStyle = e.accent;
+            ctx.globalAlpha = 0.06;
+            ctx.beginPath(); ctx.arc(0, cy, rl, 0, Math.PI * 2); ctx.fill();
+            const a = t * 18 + e.y * 0.05;
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.2;
+            ctx.globalAlpha = 0.55;
+            for (let k = 0; k < 2; k++) {
+                const bx = Math.cos(a + k * Math.PI / 2) * rl, by = Math.sin(a + k * Math.PI / 2) * rl;
+                ctx.beginPath(); ctx.moveTo(-bx, cy - by); ctx.lineTo(bx, cy + by); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, cy, 1.5, e.accent, 1);
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.5));
+            Neon.light(ctx, 0, r * 0.98, 1.6, e.bulletColor || e.color, 0.3 + charge * 0.7);
+        },
 
-        // Sensor eye
-        const pulse = 0.7 + Math.sin(t * 9 + e.y * 0.05) * 0.3;
-        Neon.light(ctx, 0, -r * 0.05, 1.8, '#ff3344', flash ? 1 : pulse);
+        missile_turret(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.08);
+            Neon.sprite(ctx, 'turret|' + e.color + (flash ? '|f' : ''), r * 0.95 + 4, this._bake.missile_turret, e, r, flash);
+            // Missile rack lights chase left to right
+            const lit = Math.floor(t * 6 + e.x * 0.01) % 3;
+            for (let j = 0; j < 3; j++) {
+                Neon.light(ctx, (j - 1) * r * 0.4, -r * 0.28, 1.5, e.accent, j === lit ? 1 : 0.3);
+            }
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.6));
+            Neon.light(ctx, 0, r * 0.88, 2, e.bulletColor || e.color, 0.25 + charge * 0.75);
+        },
+
+        phase_shifter(ctx, e, r, flash) {
+            this._neonGlow(e, r * 3, flash, 0.3);
+            ctx.save();   // keep the spin off the HP bar drawn afterwards
+            ctx.rotate(e.moveTimer * 2);
+            Neon.squash(ctx, flash, 0.15);
+            Neon.sprite(ctx, 'shifter|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.phase_shifter, e, r, flash);
+            // Counter-rotating outer arcs and a pulsing core
+            ctx.rotate(-e.moveTimer * 5);
+            ctx.strokeStyle = e.accent;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.5;
+            for (let k = 0; k < 3; k++) {
+                const a = (Math.PI * 2 / 3) * k;
+                ctx.beginPath(); ctx.arc(0, 0, r * 1.25, a, a + 1.2); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.light(ctx, 0, 0, r * 0.18, e.accent, 0.6 + Math.sin(e.moveTimer * 5) * 0.4);
+            ctx.restore();
+        },
+
+        shielded_cruiser(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.06);
+            Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
+            Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            // Rotating half-shield
+            if (e.shieldHp > 0) {
+                const a = 0.55 + Math.sin(e.moveTimer * 5) * 0.3;
+                ctx.globalAlpha = a;
+                ctx.beginPath(); ctx.arc(0, 0, r + 6, e.shieldAngle, e.shieldAngle + Math.PI);
+                Neon.stroke(ctx, '#4488ff', 1.4, false);
+                ctx.globalAlpha = a * 0.5;
+                ctx.beginPath(); ctx.arc(0, 0, r + 10, e.shieldAngle + 0.3, e.shieldAngle + Math.PI - 0.3);
+                ctx.strokeStyle = '#88bbff'; ctx.lineWidth = 1; ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+        },
+
+        bomber(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            Neon.squash(ctx, flash, 0.08);
+            // Engine plumes behind the hull
+            const f = Math.sin(e.moveTimer * 30) * 1.5;
+            Neon.flame(ctx, -r * 0.22, r * 0.58, 3, 6 + f, e.color, 0.8);
+            Neon.flame(ctx, r * 0.22, r * 0.58, 3, 6 - f, e.color, 0.8);
+            Neon.sprite(ctx, 'bomber|' + e.color + (flash ? '|f' : ''), r * 0.95 + 5, this._bake.bomber, e, r, flash);
+            // Bay doors slide open; bombs glow inside while open
+            const open = Math.max(0, Math.sin(e.moveTimer * 2));
+            Neon.light(ctx, 0, r * 0.37, 2.2, e.bulletColor || e.color, open);
+            const w = r * 0.25 * (1 - open * 0.7);
+            ctx.strokeStyle = flash ? '#ffffff' : e.accent;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.8;
+            ctx.strokeRect(-r * 0.25, r * 0.18, w, r * 0.37);
+            ctx.strokeRect(r * 0.25 - w, r * 0.18, w, r * 0.37);
+            ctx.globalAlpha = 1;
+        },
+
+        sniper(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash);
+            // Targeting laser: faint wide beam with a bright core, thickening before the shot
+            if (e.fireTimer < 0.8) {
+                const k = 0.1 + (0.8 - e.fireTimer) * 0.5;
+                const ex = Math.cos(e.aimAngle) * 300, ey = Math.sin(e.aimAngle) * 300;
+                ctx.strokeStyle = e.color;
+                ctx.globalAlpha = k * 0.35;
+                ctx.lineWidth = e.fireTimer < 0.3 ? 5 : 3;
+                ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ex, ey); ctx.stroke();
+                ctx.strokeStyle = '#ffffff';
+                ctx.globalAlpha = Math.min(1, k);
+                ctx.lineWidth = e.fireTimer < 0.3 ? 1.5 : 0.8;
+                ctx.stroke();
+                ctx.globalAlpha = 1;
+            }
+            Neon.squash(ctx, flash, 0.12);
+            Neon.sprite(ctx, 'sniper|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.sniper, e, r, flash);
+            const charge = Math.max(0, Math.min(1, 1 - e.fireTimer / 0.8));
+            Neon.light(ctx, 0, 0, 2.2, e.color, 0.4 + charge * 0.6);
+        },
+
+        carrier(ctx, e, r, flash) {
+            const t = Neon.time();
+            this._neonGlow(e, r * 2, flash);
+            Neon.squash(ctx, flash, 0.05);
+            Neon.sprite(ctx, 'carrier|' + e.color + (flash ? '|f' : ''), r * 0.95 + 5, this._bake.carrier, e, r, flash);
+            // Landing lights run down the hangar bay
+            const step = Math.floor(t * 5) % 4;
+            for (let j = 0; j < 3; j++) {
+                Neon.light(ctx, -r * 0.16, r * (0.38 + j * 0.1), 1.2, e.accent, j === step ? 1 : 0.25);
+                Neon.light(ctx, r * 0.16, r * (0.38 + j * 0.1), 1.2, e.accent, j === step ? 1 : 0.25);
+            }
+            // Wing-tip running lights
+            const blink = Math.sin(t * 4 + e.x * 0.02) > 0;
+            Neon.light(ctx, -r * 0.9, 0, 1.6, e.color, blink ? 1 : 0.25);
+            Neon.light(ctx, r * 0.9, 0, 1.6, e.color, blink ? 0.25 : 1);
+        },
+
+        shield_wall(ctx, e, r, flash) {
+            this._neonGlow(e, r * 2.2, flash, 0.3);
+            Neon.squash(ctx, flash, 0.1);
+            // Energy field: pulsing fill, a sweeping scan line and drifting bands
+            ctx.fillStyle = e.color;
+            ctx.globalAlpha = 0.14 + Math.sin(e.moveTimer * 6) * 0.07;
+            ctx.fillRect(-r * 0.96, -r * 0.27, r * 1.92, r * 0.54);
+            const sx = Math.sin(e.moveTimer * 2.2) * r * 0.9;
+            ctx.strokeStyle = '#ffffff';
+            ctx.globalAlpha = 0.6;
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(sx, -r * 0.27); ctx.lineTo(sx, r * 0.27); ctx.stroke();
+            ctx.strokeStyle = e.accent;
+            ctx.globalAlpha = 0.25;
+            for (let j = 0; j < 2; j++) {
+                const y = ((e.moveTimer * 0.6 + j * 0.5) % 1 - 0.5) * r * 0.5;
+                ctx.beginPath(); ctx.moveTo(-r * 0.95, y); ctx.lineTo(r * 0.95, y); ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+            Neon.sprite(ctx, 'wall|' + e.color + (flash ? '|f' : ''), r * 1.1 + 4, this._bake.shield_wall, e, r, flash);
+        },
     },
 
     draw(ctx) {
@@ -475,9 +784,10 @@ const Enemies = {
             const r = e.radius;
             const flash = e.flashTimer > 0 || glitchFlash;
             const accent = flash ? '#ffffff' : e.accent;
-            switch (e.type) {
+            const neonDraw = Neon.on() && this._neon[e.type];
+            if (neonDraw) neonDraw.call(this, ctx, e, r, flash);
+            else switch (e.type) {
                 case 'scout_drone':
-                    if (Neon.on()) { this._drawScoutDroneNeon(ctx, e, r, flash); break; }
                     // Small quad-rotor drone with propeller arms
                     ctx.beginPath();
                     ctx.moveTo(0, -r * 0.6);
@@ -807,6 +1117,77 @@ const PowerUps = {
         }
     },
 
+    // Neon style: a rotating hex badge with the weapon icon in glowing
+    // line art. Badge and icon are baked; spin, pulse and sparkles are live.
+    _HEX: Neon.polygon(6, 0),
+    _bakeBadge(c, color, r) {
+        Neon.shape(c, PowerUps._HEX, r, color, 1.3, false, 0.3);
+        Neon.path(c, PowerUps._HEX, r * 0.72, true);
+        c.strokeStyle = color; c.globalAlpha = 0.4; c.lineWidth = 1; c.stroke();
+        c.globalAlpha = 1;
+    },
+    _bakeIcon(c, type, color) {
+        c.beginPath();
+        switch (type) {
+            case 'spread':
+                for (let j = -2; j <= 2; j++) {
+                    const a = -Math.PI / 2 + j * 0.3;
+                    c.moveTo(0, 3); c.lineTo(Math.cos(a) * 8, 3 + Math.sin(a) * 8);
+                }
+                break;
+            case 'homing':
+                Neon.path(c, [0, -7, 2.5, -2, 2.5, 4, 5, 7, -5, 7, -2.5, 4, -2.5, -2], 1, true);
+                break;
+            case 'laser':
+                c.moveTo(0, -8); c.lineTo(0, 8);
+                c.moveTo(-3.5, -5); c.lineTo(-3.5, 5);
+                c.moveTo(3.5, -5); c.lineTo(3.5, 5);
+                break;
+            case 'drone':
+                c.arc(0, 0, 6, 0, Math.PI * 2);
+                break;
+        }
+        Neon.stroke(c, color, 0.9, false);
+    },
+    _drawNeon(ctx, p, pulse, rot) {
+        const t = p.bobTimer;
+        // Outer pulsing ring
+        ctx.globalAlpha = 0.35 + Math.sin(t * 2) * 0.15;
+        Neon.ring(ctx, 0, 0, p.radius + 5 + Math.sin(t * 1.5) * 2, p.color, 0.6, false);
+        ctx.globalAlpha = 0.75 + pulse * 0.25;
+        ctx.save();
+        ctx.rotate(rot * 0.3);
+        Neon.sprite(ctx, 'pu_badge|' + p.color, p.radius + 5, this._bakeBadge, p.color, p.radius);
+        ctx.restore();
+        ctx.globalAlpha = 1;
+        Neon.sprite(ctx, 'pu_icon|' + p.type, 14, this._bakeIcon, p.type, p.color);
+        // Live icon details
+        if (p.type === 'drone') {
+            Neon.light(ctx, 0, 0, 1.6, p.color, 1);
+            for (let j = 0; j < 3; j++) {
+                const a = (Math.PI * 2 / 3) * j + rot * 2;
+                Neon.light(ctx, Math.cos(a) * 6, Math.sin(a) * 6, 1.4, p.color, 1);
+            }
+        } else if (p.type === 'homing') {
+            Neon.flame(ctx, 0, 7, 2, 3 + Math.sin(t * 8) * 1.5, p.color, 0.9);
+        } else if (p.type === 'spread') {
+            for (let j = -2; j <= 2; j++) {
+                const a = -Math.PI / 2 + j * 0.3;
+                Neon.light(ctx, Math.cos(a) * 8, 3 + Math.sin(a) * 8, 1, p.color, 0.6 + pulse * 0.4);
+            }
+        }
+        // Rotating sparkles
+        ctx.fillStyle = '#ffffff';
+        ctx.globalAlpha = 0.7;
+        for (let j = 0; j < 4; j++) {
+            const a = rot + (Math.PI / 2) * j;
+            ctx.beginPath();
+            ctx.arc(Math.cos(a) * (p.radius + 5), Math.sin(a) * (p.radius + 5), 1, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+    },
+
     draw(ctx) {
         for (const p of this.list) {
             const bob = Math.sin(p.bobTimer) * 3;
@@ -818,6 +1199,11 @@ const PowerUps = {
 
             ctx.save();
             ctx.translate(p.x, p.y + bob);
+            if (Neon.on()) {
+                this._drawNeon(ctx, p, pulse, rot);
+                ctx.restore();
+                continue;
+            }
 
             // Outer pulsing ring
             ctx.strokeStyle = p.color;

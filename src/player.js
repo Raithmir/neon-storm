@@ -715,6 +715,14 @@ const Player = {
     _neonBank: 0,
     _neonLastX: null,
 
+    _bakeShipNeon(c, sc, r, surge) {
+        Neon.shape(c, Player._NEON_HULL, r, sc, 1.2, false, 0.2);
+        Neon.detail(c, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
+        Neon.detail(c, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
+        Neon.detail(c, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        Neon.shape(c, Player._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
+    },
+
     // Neon style ship body (origin already translated to the ship).
     // Banks into horizontal movement by narrowing the hull.
     _drawShipNeon(ctx) {
@@ -758,11 +766,10 @@ const Player = {
         }
         ctx.globalAlpha = shipAlpha;
 
-        // Hull, then panel lines on top
-        Neon.shape(ctx, this._NEON_HULL, r, sc, 1.2, false, 0.2);
-        Neon.detail(ctx, [0, -0.78, 0, 0.3], r, sc, 0.45, 1);
-        Neon.detail(ctx, [0.32, 0.1, 0.82, 0.47], r, sc, 0.6, 1);
-        Neon.detail(ctx, [-0.32, 0.1, -0.82, 0.47], r, sc, 0.6, 1);
+        // Hull, panel lines and canopy (baked per colour; the chromatic
+        // skin changes colour every frame, so it is drawn live)
+        const key = Hangar.equipped.skin === 'chromatic' && !surge ? null : 'player|' + sc;
+        Neon.sprite(ctx, key, r * 1.25 + 4, this._bakeShipNeon, sc, r, surge);
         // The wing on the side we're banking towards catches more light
         if (Math.abs(bank) > 0.05) {
             const side = bank > 0 ? 1 : -1;
@@ -772,9 +779,6 @@ const Player = {
             ctx.fill();
             ctx.globalAlpha = shipAlpha;
         }
-
-        // Canopy
-        Neon.shape(ctx, this._NEON_CANOPY, r, surge ? '#ffffff' : '#aaddff', 0.7, false, 0.4);
 
         // Wing-tip running lights, blinking out of step
         const blink = Math.sin(this.engineFlicker * 0.5);
