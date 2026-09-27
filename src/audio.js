@@ -1,5 +1,5 @@
 // ============================================================
-//  AUDIO SYSTEM (Procedural SFX via Web Audio API)
+//  AUDIO SYSTEM (Procedural SFX via Web Audio API; music is in music.js)
 // ============================================================
 const Audio = {
     ctx: null,
@@ -13,6 +13,7 @@ const Audio = {
         const createCtx = () => {
             if (this.ctx) return;
             this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            this._buildMix();
             window.removeEventListener('click', createCtx);
             window.removeEventListener('keydown', createCtx);
             window.removeEventListener('touchstart', createCtx);
@@ -22,11 +23,57 @@ const Audio = {
         window.addEventListener('touchstart', createCtx);
     },
 
+    // Mix: SFX bus and music bus (volume → pause filter → duck) share one
+    // compressor so explosions over the music never clip. Music (music.js)
+    // plays into musicBus and sets its level each frame.
+    master: null,
+    sfxBus: null,
+    musicBus: null,
+    musicFilter: null,
+    musicDuck: null,
+
+    _buildMix() {
+        const c = this.ctx;
+        this.master = c.createDynamicsCompressor();
+        this.master.threshold.value = -12;
+        this.master.knee.value = 10;
+        this.master.ratio.value = 4;
+        this.master.attack.value = 0.004;
+        this.master.release.value = 0.2;
+        // The compressor adds makeup gain (~+3.3 dB at these settings); trim it
+        // back so quiet sounds keep their old level and only peaks are squeezed
+        const trim = c.createGain();
+        trim.gain.value = 0.68;
+        this.master.connect(trim);
+        trim.connect(c.destination);
+        this.sfxBus = c.createGain();
+        this.sfxBus.connect(this.master);
+        this.musicBus = c.createGain();
+        this.musicBus.gain.value = 0;
+        this.musicFilter = c.createBiquadFilter();
+        this.musicFilter.type = 'lowpass';
+        this.musicFilter.frequency.value = 20000;
+        this.musicFilter.Q.value = 0.7;
+        this.musicDuck = c.createGain();
+        this.musicBus.connect(this.musicFilter);
+        this.musicFilter.connect(this.musicDuck);
+        this.musicDuck.connect(this.master);
+    },
+
+    // Dip the music under a big sound (bomb, death) and let it swell back
+    duckMusic(depth, recover) {
+        if (!this.musicDuck) return;
+        const g = this.musicDuck.gain, t = this.ctx.currentTime;
+        g.cancelScheduledValues(t);
+        g.setTargetAtTime(1 - depth, t, 0.015);
+        g.setTargetAtTime(1, t + 0.08, recover / 3);
+    },
+
     _createGain(volume) {
         if (!this.ctx) return null;
         const gain = this.ctx.createGain();
         gain.gain.value = volume * this.sfxVolume * this.masterVolume;
-        gain.connect(this.ctx.destination);
+        gain.connect(this.sfxBus || this.ctx.destination);
         return gain;
     },
 
@@ -121,6 +168,7 @@ const Audio = {
     playBomb() {
         if (!this.enabled || !this.ctx) return;
         const t = this.ctx.currentTime;
+        this.duckMusic(0.6, 1.4);
         // Deep boom
         const osc = this.ctx.createOscillator();
         const gain = this._createGain(0.4);
@@ -245,6 +293,7 @@ const Audio = {
     playPlayerDeath() {
         if (!this.enabled || !this.ctx) return;
         const t = this.ctx.currentTime;
+        this.duckMusic(0.75, 1.8);
         const osc = this.ctx.createOscillator();
         const gain = this._createGain(0.2);
         osc.type = 'sawtooth';
@@ -323,9 +372,4 @@ const Audio = {
         osc.start(t);
         osc.stop(t + 0.04);
     },
-
-    // Music hooks (for future)
-    playMusic(trackId) { /* TODO: Load and play audio file */ },
-    stopMusic() { /* TODO */ },
-    crossfadeMusic(trackId) { /* TODO */ }
 };

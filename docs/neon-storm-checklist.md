@@ -124,7 +124,8 @@ Features that add entirely new ways to play.
 
 ## Audio
 
-- [ ] Music tracks — original or royalty-free synthwave music for: menu theme, per-level gameplay (6 tracks), boss theme, victory sting, game over sting. Music system hooks already exist (playMusic/stopMusic/crossfadeMusic)
+- [x] Procedural synthwave soundtrack (`music.js`): menu theme, a track per level, boss track in each level's key, Endless, victory and game-over stings; intensity layers follow play (mid-boss, boss phases, Surge); pause muffles, bombs/deaths duck; `npm run sim:music` in CI
+- [ ] Tune the music by ear after play-testing (levels, tempos, which layers play when)
 - [ ] SFX upgrade to match the γ visuals — weightier layered explosions, distinct graze sound, boss WARNING siren, shatter/impact sounds, UI sounds for the new menus
 
 ---

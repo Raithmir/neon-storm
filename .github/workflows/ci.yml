@@ -3,6 +3,8 @@
 #   2. gameplay regression checks (tools/sim/checks.js)
 #   3. render smoke test: every screen and level drawn, fails on any error
 #      (tools/sim/render-smoke.js)
+#   4. music check: every track rendered offline, fails on errors, silence
+#      or clipping, and on the wrong track for a game state (tools/sim/music.js)
 name: CI
 
 on:
@@ -47,6 +49,9 @@ jobs:
 
       - name: Render smoke test
         run: npm run sim:render
+
+      - name: Music check
+        run: npm run sim:music
 
       - name: Upload simulation results
         if: always()

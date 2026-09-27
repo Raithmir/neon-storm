@@ -42,6 +42,7 @@ const SOURCE_FILES = [
     'hud.js',
     'menus.js',
     'game.js',
+    'music.js',
     'main.js',
 ];
 

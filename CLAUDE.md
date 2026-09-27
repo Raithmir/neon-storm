@@ -20,9 +20,10 @@ There are no unit tests, no lint, and no transpilation — vanilla JS only.
 # Headless gameplay simulation (dev-only; needs: npm install --no-save playwright)
 npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
 npm run sim:render     # render smoke test: every screen + every level drawn, fails on any error
+npm run sim:music      # music check: every track rendered offline; --wav writes previews
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks` and `sim:render`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks`, `sim:render` and `sim:music`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
 
 Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 
@@ -34,7 +35,7 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 24 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 25 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -77,7 +78,8 @@ Other states: settings, high_scores, hangar, tutorial
 | `Renderer` | renderer.js | PixiJS pipeline manager |
 | `GameConfig` | config.js | Live difficulty settings (mutated at level start) |
 | `Input` | input.js | Keyboard/gamepad polling |
-| `Audio` | audio.js | Procedural SFX via Web Audio API |
+| `Audio` | audio.js | Procedural SFX via Web Audio API; the mix buses (SFX, music, compressor) |
+| `Music` | music.js | Procedural synthwave soundtrack, driven by game state each frame |
 | `Player` | player.js | Player ship state |
 | `Enemies` | enemies.js | Enemy manager |
 | `Boss` | bosses.js | Boss singleton |
@@ -117,6 +119,10 @@ Menus, briefing, results screens and the HUD are drawn on the overlay canvas wit
 Flash Reduction (`Settings.values.flashReduction`) is honoured through `Renderer.calm()`: every flash, glitch, chromatic split and backdrop pulse must check it.
 
 Hangar cosmetics change the look, not just the colour: bullet styles pick the player shot shape (`BulletPool._addParticles`), trails pick the style in `Player.drawTrail`, explosions pass `variant` to `Particles.spawnExplosion`. The Hangar preview reuses the same drawing where it can.
+
+### Music
+
+The soundtrack is procedural (`music.js`), so the build stays one offline file. `MusicTracks` describes each track as data: tempo, key/scale, chord progression, drum kit, bass and arp patterns, timbres. The lead melody is generated from the progression with a seeded RNG, so it's the same every time. `Music.update()` (called from the game loop) picks the track from game state in `Music._want()` — title for menus, one per level, `boss:<level>` in the level's key, `results`/`gameover` with a sting — and sets the intensity (0 pads+arp, 1 +drums/bass, 2 +lead, 3 +fills; changes land on bar lines). Pause muffles the music via `Audio.musicFilter`; bombs and deaths call `Audio.duckMusic()`. **Adding a track:** add an entry to `MusicTracks` and return its id from `_want()`; check it with `node tools/sim/music.js --wav` and listen to the WAV.
 
 ### Persistence
 

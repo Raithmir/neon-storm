@@ -4,7 +4,7 @@
 
 Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, and a full meta-game with persistent unlockables.
 
-**Tech stack:** PixiJS v8 (WebGPU/WebGL) with pixi-filters v6 for gameplay rendering and GLSL shader backgrounds, HTML5 Canvas 2D for gameplay art (neon line art via a sprite atlas) and UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX, localStorage/Artifact Storage API for persistence.
+**Tech stack:** PixiJS v8 (WebGPU/WebGL) with pixi-filters v6 for gameplay rendering and GLSL shader backgrounds, HTML5 Canvas 2D for gameplay art (neon line art via a sprite atlas) and UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX and a procedural synthwave soundtrack, localStorage/Artifact Storage API for persistence.
 
 **Target:** Desktop browsers; laid out at 1920×1080 and scaled to fit the window, rendering at the display's pixel density (up to 2× on HIGH graphics quality).
 
@@ -14,7 +14,7 @@ Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level
 
 ## File Structure
 
-The project is split into 24 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
+The project is split into 25 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
 
 ### Module Map (in dependency order)
 
@@ -25,7 +25,7 @@ The project is split into 24 source modules in `src/`, concatenated by `build.js
 | `renderer.js` | ~1085 | PixiJS pipeline, offscreen Canvas 2D bridge, FX texture sheet, backdrop, bloom/screen effects, resolution & graphics quality |
 | `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
 | `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions (incl. `surge`) |
-| `audio.js` | ~330 | Web Audio API procedural SFX + music hooks (no music yet) |
+| `audio.js` | ~370 | Web Audio API procedural SFX; mix buses (SFX, music with pause filter and ducking, master compressor) |
 | `storage.js` | ~725 | Persistence, high scores, settings (+ screen), controls screen, NC, achievements, end-of-level bonuses |
 | `ui-systems.js` | ~500 | Custom difficulty, hangar/shop (with live previews), tutorial |
 | `neon.js` | ~315 | Neon line-art helpers (strokes, lights, text, bars) and the sprite atlas |
@@ -43,6 +43,7 @@ The project is split into 24 source modules in `src/`, concatenated by `build.js
 | `hud.js` | ~275 | HUD panels (left + right) and the FPS meter |
 | `menus.js` | ~370 | Title, difficulty, briefing, level select, scores, achievements, pause, results |
 | `game.js` | ~805 | Main game state machine, level scaling, level flow |
+| `music.js` | ~500 | Procedural synthwave soundtrack: track data, sequencer, instruments, stings, state-driven track choice |
 | `main.js` | ~25 | Boot sequence + game loop |
 
 ### Rendering Architecture
@@ -301,7 +302,23 @@ playMySound() {
 }
 ```
 
-**Music hooks** exist but are unimplemented (`playMusic`, `stopMusic`, `crossfadeMusic`). These are ready to accept external audio file loading when music is added.
+SFX go through `Audio.sfxBus`, music through `Audio.musicBus` → `musicFilter` (pause muffle) → `musicDuck` (`Audio.duckMusic()`, used by bombs and deaths); both share a master compressor, trimmed so quiet sounds keep their level.
+
+### Music
+
+The soundtrack is generated live by `music.js` — no audio files, no licensing. Each entry in `MusicTracks` is data: `bpm`, `root` (MIDI note of the bass), `scale`, `prog` (chord per bar as scale degrees), `kit` (`MUSIC_KITS`), `bass` and `arp` patterns (`MUSIC_BASS`, `MUSIC_ARPS`), oscillator waves and filter cutoffs, and optionally `sting` and `verb`. The lead melody is generated once per track from the progression (seeded, so it never changes).
+
+| Track | Plays during | Feel |
+|---|---|---|
+| `title` | all menus | A minor, 96 bpm, soft kit |
+| `level_1`…`level_6` | briefing (intensity 0) and play | one per level, matched to the backdrop: city synthwave, industrial phrygian, spacious dorian, bright major sky, fast digital arps, slow dark void |
+| `boss:<level>` | boss fight (after the WARNING) | 140 bpm harmonic minor in the level's key |
+| `endless` | Endless mode | 126 bpm |
+| `results` / `gameover` | victory, campaign complete / game over | a sting, then a quiet loop |
+
+`Music.update()` runs every frame from `main.js`: `_want()` maps game state to a track and intensity, a change of track crossfades (1.2 s), and notes are scheduled 0.2 s ahead on the audio clock. Intensity (applied at the next bar): 0 pads + arpeggio (briefing, boss WARNING, after a boss dies), 1 + drums and bass, 2 + lead and 16th hats (mid-boss, boss), 3 + fills and brighter pads (boss final phase, Neon Surge). Pads, bass and arp are side-chained to the kick. MUSIC VOLUME 0 stops the music.
+
+`npm run sim:music` renders every track offline through the real mix and fails on errors, silence or clipping, and checks the track chosen for each game state. `node tools/sim/music.js --wav` also writes WAV previews to `tools/sim/out/music/`.
 
 ### Persistence
 
@@ -406,7 +423,7 @@ See `neon-storm-checklist.md` for the complete remaining work tracker.
 - [ ] Endless has no mid-bosses
 
 ### Audio
-- [ ] Music system has hooks but no actual music tracks
+- [ ] SFX not yet upgraded to match the γ visuals (see checklist)
 
 ### UI/UX
 - [ ] Gamepad button prompts not shown when controller is detected
