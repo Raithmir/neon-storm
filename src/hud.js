@@ -154,7 +154,8 @@ const HUD = {
         let y = 40;
         UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
         Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
-        const board = HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
+        const board = BossRush.practice ? null
+            : HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
         if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
         y += 154;
 
@@ -194,8 +195,9 @@ const HUD = {
         const lvlData = ALL_LEVELS[Game.currentLevelIndex];
         const escort = Escort.active && Escort.alive;
         const rush = BossRush.active;
-        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN, { title: rush ? 'BOSS RUSH' : (isEndless ? 'ENDLESS' : 'MISSION') });
-        Neon.text(ctx, rush ? 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName()
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN,
+            { title: rush ? (BossRush.practice ? 'BOSS PRACTICE' : 'BOSS RUSH') : (isEndless ? 'ENDLESS' : 'MISSION') });
+        Neon.text(ctx, rush ? (BossRush.practice ? BossRush.bossName() : 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName())
             : isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
             x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', rush ? 20 : 22, { align: 'left', halo: 0.2 });
         // Boss Rush shows its run clock instead of the level time

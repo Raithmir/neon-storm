@@ -132,6 +132,7 @@ const Music = {
             }
             case 'victory':
             case 'rush_complete':
+            case 'practice_complete':
             case 'campaign_complete':
                 return { id: 'results', intensity: 0 };
             case 'game_over':

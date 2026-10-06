@@ -77,6 +77,10 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             BossRush.splits = [62, 71, 80, 55, 90]; BossRush.time = 358; BossRush.bonuses(true); Game.state = 'rush_complete';
         }],
         ['high_scores (boss rush tab)', () => { Game.state = 'high_scores'; Menu.highScoreTab = 4; BossRush.active = false; }],
+        ['boss_menu', () => { Campaign.bossesDefeated = ['architect', 'furnace']; Game.state = 'boss_menu'; }],
+        ['practice_setup', () => { Game._openPracticeSetup(); }],
+        ['practice game_over', () => { Game.startPractice(Game._practice); Game.state = 'game_over'; }],
+        ['practice_complete', () => { BossRush.time = 64.2; Game._practiceNewBest = true; Game.state = 'practice_complete'; }],
         ['gamepad prompts', () => {
             Input.lastDevice = 'pad';
             for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }
