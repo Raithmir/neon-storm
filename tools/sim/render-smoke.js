@@ -11,8 +11,9 @@
 // For each level it simulates ~45 s of play and ~25 s of the boss fight
 // (including its final phase), drawing the gameplay layers every few
 // frames and a full frame (PixiJS render included) now and then. It then
-// repeats one level with Flash Reduction on and one on the Canvas 2D
-// fallback (no WebGL). Takes a few minutes.
+// repeats one level with Flash Reduction on, one on the Canvas 2D
+// fallback (no WebGL) and one with the shader backdrop instead of the 3D
+// scene. A level fails if its 3D scene broke and fell back. Takes a few minutes.
 
 const { launch, writeResult } = require('./harness');
 
@@ -85,9 +86,11 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
     const runs = [0, 1, 2, 3, 4, 5].map(l => ({ lvl: l, label: 'level ' + (l + 1) }));
     runs.push({ lvl: 5, label: 'level 6 (flash reduction)', calm: true });
     runs.push({ lvl: 2, label: 'level 3 (Canvas 2D fallback)', fallback: true });
+    runs.push({ lvl: 3, label: 'level 4 (shader backdrop, 3D off)', no3d: true });
     for (const run of runs) {
         const r = await step(run.label, (run) => {
             Settings.values.flashReduction = !!run.calm;
+            Settings.values.backdrop3d = !run.no3d;
             if (run.fallback) Renderer.usePixi = false;
             Game.startLevel(run.lvl, 'normal', false);
             Player.invincible = true; Player.invincibleTimer = 1e9;
@@ -120,7 +123,9 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             if (Boss.active) Boss.hit(1e6);
             for (let f = 0; f < 60 * 4; f++) { Game.update(1 / 60); if (f % 10 === 0) Game.draw(); }
             Settings.values.flashReduction = false;
+            Settings.values.backdrop3d = true;
             if (run.fallback) Renderer.usePixi = true;
+            if (Backdrop3D.broken) throw new Error('3D backdrop failed and fell back to the shader');
             return stats;
         }, run);
         results.levels[run.label] = { ok: r.ok, ...(r.out || {}), errors: r.errs };

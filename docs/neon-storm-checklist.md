@@ -46,7 +46,7 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 ### δ Delta — renderer and content (in progress)
 
 1. **Native Pixi sprites for entities** — Renderer Phase 7 (plan below). First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
-2. **three.js 3D backdrops** — Renderer Phase 8 (plan below). Spike the context sharing, prototype the sky city, then decide how far to take it.
+2. ~~**three.js 3D backdrops**~~ — Renderer Phase 8: done, a 3D scene for every level (play-test pending, see below).
 3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
 
 If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
@@ -85,7 +85,7 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 - [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
 - [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
 - [ ] Phase 7: Native Pixi sprites for entities — see below
-- [ ] Phase 8: 3D backdrops with three.js — see below
+- [x] Phase 8: 3D backdrops with three.js — see below
 
 ### Phase 7: Native Pixi sprites for entities
 
@@ -103,10 +103,11 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 
 **Why:** real geometry (fly-through cities, tunnels, wireframe terrain, glTF set pieces) instead of 2D fragment shaders. Starts after Phase 7 step 6, when the frame-time headroom is known.
 
-- [ ] **1. Spike the context sharing (throwaway branch, no build changes).** Load three.js from a local file in the dev build only, share Pixi's WebGL context (Pixi is already forced to WebGL, `renderer.js` `preference: 'webgl'`; follow PixiJS's "Mixing PixiJS and Three.js" guide with `resetState()` on both sides), and draw one rotating wireframe city block. Answer three questions: (a) can a three render target become `_bgMesh`'s texture — Pixi v8 has no public API for adopting an external GL texture, so this means touching renderer internals — or does three have to draw first to the screen with Pixi drawing over it without clearing (robust, but bloom/shockwave filters then miss the 3D layer)? (b) what does it cost per frame on top of the Phase 7 numbers? (c) how big is a tree-shaken three build for what we'd use? Go/no-go decision on the answers.
-- [ ] **2. Build integration (only on go).** three.js ships ES modules only; bundle a small entry (`window.THREE = { …the parts used }`) into an IIFE with esbuild as a dev dependency, inlined by `build.js` like Pixi. Target ≤ 400 KB added to the single-file build.
-- [ ] **3. Sky city prototype** behind a setting: feed the existing uniforms (`bgPulse`, bullet-density dimming, Flash Reduction); fall back to the shader backdrop on LOW quality, if three fails, and in `sim:render` (plus one `sim:render` case with 3D on).
-- [ ] **4. Decide scope** — more 3D levels in δ, or move the rest to ε (see Roadmap).
+- [x] **1. Spike** (`spike/three-backdrop`, deleted): three.js shares Pixi's WebGL context; its render target becomes a Pixi texture by swapping the WebGLTexture inside a `TextureSource` (Pixi internals — Pixi now pinned to 8.18.1). Needs three's colour management off, Pixi's unpack state reset, and a y-flip. Size: ~520 KB for the classes used (whole three.js 725 KB). Play-test: locked 60 fps at 1440p HIGH, switching seamlessly. **Go.**
+- [x] **2. Build integration:** `vendor/three.min.js` is a committed esbuild bundle of the classes in `tools/three/entry.js` (`npm run three:bundle`), inlined by `build.js` like Pixi — no new tools for a normal build or CI. The single-file build grew from 1.58 MB to ~2.2 MB.
+- [x] **3. All six levels have a 3D scene** (`src/backdrop3d.js`): synthwave grid city with a striped sun, foundry canyon with a molten channel, asteroid belt with a ringed gas giant, night flight over moonlit clouds, circuit-board city toward the Core, collapsing tunnel into a singularity. A composite shader applies the shared backdrop uniforms (haze, dimming, pulse, Flash Reduction, Level 6's band glitches). Fallbacks to the shader backdrops: Settings → 3D BACKDROPS off, LOW quality (including auto stepping down), no WebGL2, any error or context loss. `sim:render` runs every level in 3D, one with 3D off, and fails if a scene breaks.
+- [ ] **4. Play-test the six scenes** in a real browser: looks, readability of bullets over each, and SHOW FPS at HIGH (and on a slower machine if possible). Tune by eye in `BACKDROP_SCENES_3D`.
+- [ ] Ideas: Endless could cycle through the scenes as waves pass; bosses could get a set-piece (e.g. the Leviathan surfacing behind the planet); glTF models for hero objects.
 ---
 
 ## Gameplay Review Follow-ups

@@ -14,7 +14,7 @@ Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level
 
 ## File Structure
 
-The project is split into 26 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
+The project is split into 27 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
 
 ### Module Map (in dependency order)
 
@@ -23,6 +23,7 @@ The project is split into 26 source modules in `src/`, concatenated by `build.js
 | `constants.js` | ~45 | Canvas setup, screen constants, dual-canvas sizing |
 | `backdrops.js` | ~405 | GPU fragment shaders for the six level backgrounds |
 | `renderer.js` | ~1130 | PixiJS pipeline, FX texture sheet, backdrop, GPU glow/bloom, screen effects, resolution & graphics quality; offscreen Canvas 2D for the no-WebGL fallback |
+| `backdrop3d.js` | ~1590 | three.js 3D level backgrounds (`Backdrop3D`, `BACKDROP_SCENES_3D`) on Pixi's GL context |
 | `gpu-ctx.js` | ~480 | `GpuCtx`: the Canvas 2D subset the play-area draw code uses, emitted as pooled Pixi sprites/graphics |
 | `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
 | `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions (incl. `surge`) |
@@ -272,7 +273,17 @@ Targets: ~2.3× power from Lv1 to Lv5, all weapons within ~20% on a single targe
 
 ### Background Themes
 
-Each level's `bgType` selects a GPU fragment shader in `BACKDROP_SHADERS` (`src/backdrops.js`), drawn under all gameplay with the world streaming toward the player:
+Each level's `bgType` selects a three.js scene in `BACKDROP_SCENES_3D` (`src/backdrop3d.js`; how it is wired into Pixi is in that file's header):
+- `synthwave` — neon grid toward a striped sun setting behind a Neo-Tokyo skyline, wireframe mountains, light pylons
+- `industrial` — foundry canyon: molten channel, riveted decks and conveyors, vent-lit factory blocks, pipes, gantries overhead, smokestacks, embers
+- `space` — asteroid belt: nebula with dust lanes and a galactic band, ringed gas giant, tumbling rocks, glinting debris
+- `sky` — night flight: moonlit cloud decks, a city and highways far below, moon and aurora, the convoy's navigation lights
+- `digital` — circuit-board city: routed traces with data pulses, chips and data towers, the Core with rings and beams, hex sky
+- `void` — collapsing tunnel of panels breaking away, a singularity with an accretion disc, band glitches
+
+A scene is `{ build() }` returning `{ scene, camera, update(s), glitch? }`; `s` carries the time and the backdrop uniforms (pulse, boss, surge, calm). Scenes use ShaderMaterials with their own fog (helpers in `B3D` and `B3D_GLSL`); anything that moves per frame or in its vertex shader needs `B3D.always()` (no frustum culling). Preview a scene by starting its level; `npm run sim:render` catches shader errors.
+
+**Fallback:** the GPU fragment shader in `BACKDROP_SHADERS` (`src/backdrops.js`), drawn under all gameplay with the world streaming toward the player:
 - `synthwave` — perspective neon grid, striped sun and wireframe mountains on a horizon near the top
 - `industrial` — top-down foundry deck: vents, conveyor belts, pipes, girders overhead, embers
 - `space` — parallax star layers, nebula, ringed planet

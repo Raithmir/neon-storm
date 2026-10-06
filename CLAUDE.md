@@ -35,7 +35,7 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 26 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 27 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -54,7 +54,8 @@ Menus / HUD / transitions → Overlay Canvas 2D (1920×1080) directly
 - `Renderer.getPlayCtx()` — the offscreen Canvas 2D context; in Pixi mode only `Background.draw()` uses it, and only when there's no shader backdrop, so it is neither cleared nor uploaded otherwise
 - `Renderer.beginFrame()` / `Renderer.endFrame()` — frame lifecycle; `endFrame()` renders the glow halos (`addGlow`) into `_glowRT` for bloom, then the stage
 - `Renderer.setShake(x, y)` — screen shake via PixiJS sprite offset
-- Each level's background is a GPU fragment shader in `backdrops.js` (`BACKDROP_SHADERS[bgType]`), drawn by `Renderer.setBackdrop()` under everything else. Its uniforms (`Renderer._updateBackdrop`) react to bombs/flashes (`bgPulse`), bosses, Surge and bullet density (it dims under dense patterns). When it is active, `Background.draw()` skips the painted Canvas 2D background, which remains the no-WebGL fallback
+- Each level's background is a three.js scene in `backdrop3d.js` (`BACKDROP_SCENES_3D[bgType]`): three shares Pixi's WebGL context, renders into a render target whose GL texture is swapped into a Pixi `TextureSource` (Pixi internals — Pixi is pinned to 8.18.1; re-check `Backdrop3D._target` when upgrading), and `Backdrop3D.mesh` shows it through the backdrop uniforms. three.js is `vendor/three.min.js`, an esbuild bundle of the classes in `tools/three/entry.js` (`npm run three:bundle` after adding one). The 2D shader backdrop below is the fallback: 3D BACKDROPS off, LOW quality, no WebGL2, errors, context loss
+- The shader backdrop is a GPU fragment shader in `backdrops.js` (`BACKDROP_SHADERS[bgType]`), drawn by `Renderer.setBackdrop()` under everything else. Its uniforms (`Renderer._updateBackdrop`) react to bombs/flashes (`bgPulse`), bosses, Surge and bullet density (it dims under dense patterns). When it is active, `Background.draw()` skips the painted Canvas 2D background, which remains the no-WebGL fallback
 - Bullets and particles are native Pixi particles using shapes from one FX texture sheet (`Renderer.fx`: glow, orb, core, shadow, streak, needle, missile, spark). Enemy bullets get a dark shadow (normal blend) under an additive orb/needle and core; player shots are streaks/missiles pointing along their velocity. `Particles.flash/impact/spawnExplosion/shatter` build effects; `shatter` breaks an entity's neon outline (`Enemies.outline`, `MidBoss.outline`, `Boss.outlines`) into spinning line segments
 - Resolution: both the overlay and the play area render at the display's pixel density (CSS scale × `devicePixelRatio`), capped by the GRAPHICS QUALITY setting (`Renderer.QUALITY`: high 2×, medium 1.5×, low 1×; `auto` starts high and steps down after ~3 s of slow frames in play). Draw code keeps using logical coordinates; `Renderer.applyResolution()` sets the canvas transforms (`Renderer.uiScale`, `Renderer.playScale`). Pixi filters use `resolution: 'inherit'`. Caches drawn onto the overlay must be baked at `Renderer.uiScale` (see `UI._bakeBackground`)
 - Screen effects (bomb shockwave, boss god-rays, phase-change glitch) use pixi-filters v6 (the PixiJS v8 line, `PIXI.filters`), bundled by `build.js`; `Renderer._filtersLib()` guards them, and their centres are in play-area pixels
@@ -99,7 +100,7 @@ Levels, enemies, bosses, and difficulty are data objects — not hardcoded logic
 
 **Adding a new enemy:** define in `Enemies.types`, add firing case in `Enemies._firePattern()`, add its art in `Enemies._bake` / `Enemies._neon` (see Art Style), optionally add movement in `Enemies._updateMovement()`.
 
-**Adding a new level:** create a level data object with `id`, `name`, `briefing`, `bgType`, `bossType`, `levelScale`, `waves[]`, add to `ALL_LEVELS`, update `Campaign.getLevelCount()`.
+**Adding a new level:** create a level data object with `id`, `name`, `briefing`, `bgType`, `bossType`, `levelScale`, `waves[]`, add to `ALL_LEVELS`, update `Campaign.getLevelCount()`. Give a new `bgType` both a 3D scene (`BACKDROP_SCENES_3D`, see the header of `backdrop3d.js`) and a shader fallback (`BACKDROP_SHADERS`); keep both darker and less saturated than anything collidable, and check bullets over them during the boss.
 
 **Adding a new mid-boss:** define it in `MidBossTypes` (`midbosses.js`) with `movement` and `patterns` (implement new pattern names in `MidBoss.fire()`), then add `{ time: T, midboss: 'id' }` to a level's `waves`. The wave clock (`WaveSystem.waveTime`) pauses while it is alive; it escapes after `MIDBOSS_TIME_LIMIT`.
 

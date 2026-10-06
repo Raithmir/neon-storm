@@ -9,7 +9,7 @@ A vertical scrolling bullet hell shooter built with HTML5 Canvas, PixiJS, and va
 Neon Storm γ is a full visual overhaul: everything is redrawn in a **neon vector** style (glowing line art, as in Geometry Wars or Tempest 4000), and the whole game renders sharp at your screen's real resolution.
 
 - **Neon line art:** the player, all enemies, mid-bosses (each now with its own design), bosses, power-ups, asteroids and the escort are glowing outlines with animated parts, cached in a sprite atlas (`src/neon.js`).
-- **Shader backgrounds:** each level is a GPU shader (`src/backdrops.js`) that streams toward you: a synthwave grid, a foundry floor, deep space, city lights under clouds, a circuit board and a collapsing void tunnel. They pulse on bombs, shift for bosses and dim under dense bullet patterns.
+- **3D backgrounds:** each level flies through a three.js scene (`src/backdrop3d.js`): a synthwave grid racing toward a striped sun over Neo-Tokyo, a foundry canyon with a molten channel, an asteroid belt by a ringed gas giant, a night flight over moonlit clouds, a circuit-board city toward the Core, and a collapsing tunnel into a singularity. They pulse on bombs, shift for bosses and dim under dense bullet patterns. GPU shader versions (`src/backdrops.js`) are the fallback (Settings → 3D BACKDROPS, LOW quality).
 - **Shots and explosions:** shaped bullets (enemy orbs with dark shadows for readability, needles, player streaks, missiles, a continuous laser), impact sparks, and ships that shatter into their own outline pieces.
 - **New UI:** neon title, menus, briefing (with the level's backdrop and boss preview), results screens, hangar with live previews, and a redesigned HUD (`src/ui-kit.js`).
 - **Cosmetics that look different:** Hangar bullet styles, trails and explosions each have their own shapes, not just colours.
@@ -50,9 +50,10 @@ neon-storm/
 │   └── neon-storm.js        — Combined JS (for debugging)
 ├── src/                     — Source modules
 │   ├── constants.js         — Canvas setup, screen layout, dual-canvas sizing
-│   ├── backdrops.js         — GPU shader backgrounds for each level
+│   ├── backdrops.js         — GPU shader backgrounds for each level (fallback)
 │   ├── renderer.js          — PixiJS pipeline (Canvas 2D fallback)
 │   ├── gpu-ctx.js           — Canvas 2D-shaped context that draws with Pixi objects
+│   ├── backdrop3d.js        — three.js 3D level backgrounds on Pixi's GL context
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
 │   ├── audio.js             — Procedural SFX + mix (Web Audio API)
