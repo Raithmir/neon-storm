@@ -83,13 +83,12 @@ const Menu = {
                 y += 26;
             }
         }
+        // The end-of-run bonuses are already in Scoring.score: show the score before them, then the total
         UI.label(ctx, 'SCORE', cx, y + 24, UI.DIM, 15);
-        Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 66, scoreColor, 42, { core: 0.4 });
+        Neon.text(ctx, (Scoring.score - EndRunBonus.totalBonus).toLocaleString(), cx, y + 66, scoreColor, 42, { core: 0.4 });
         const bonusEndY = EndRunBonus.draw(ctx, cx, y + 104);
-        const totalScore = Scoring.score + EndRunBonus.totalBonus;
-        Neon.text(ctx, 'TOTAL  ' + totalScore.toLocaleString(), cx, bonusEndY + 22, '#ffee33', 28, { core: 0.35 });
-        const ncEarned = Math.floor(totalScore / 3000 * GameConfig.scoreMultiplier);
-        UI.label(ctx, '+ ' + ncEarned + ' NEON CREDITS', cx, bonusEndY + 54, '#ffaa00', 17);
+        Neon.text(ctx, 'TOTAL  ' + Scoring.score.toLocaleString(), cx, bonusEndY + 22, '#ffee33', 28, { core: 0.35 });
+        if (NeonCredits.lastEarned > 0) UI.label(ctx, '+ ' + NeonCredits.lastEarned + ' NEON CREDITS', cx, bonusEndY + 54, '#ffaa00', 17);
         return bonusEndY + 70;
     },
 

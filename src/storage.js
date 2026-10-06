@@ -718,9 +718,12 @@ const NeonCredits = {
         await Storage.set('neonCredits', this.balance);
     },
 
+    lastEarned: 0,   // credits from the run that just ended (shown on the results screen)
+
     earn(score, difficulty) {
         const multipliers = { casual: 0.75, normal: 1.0, hardcore: 1.5, custom: 0.75 };
         const nc = Math.max(5, Math.floor(score / 3000 * (multipliers[difficulty] || 1)));
+        this.lastEarned = nc;
         this.balance += nc;
         this.save();
         return nc;

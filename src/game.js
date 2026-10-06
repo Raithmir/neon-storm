@@ -287,6 +287,7 @@ const Game = {
     _processEndRun(won) {
         if (this.endRunProcessed) return;
         this.endRunProcessed = true;
+        NeonCredits.lastEarned = 0;   // only a run's end pays out
 
         if (BossRush.active) {
             Scoring.score += BossRush.bonuses(won);
