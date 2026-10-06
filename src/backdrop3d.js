@@ -1158,4 +1158,249 @@ void main() {
             };
         },
     },
+
+    // Level 5 — The Core: skimming a circuit-board city toward the machine's
+    // heart. Routed traces carry data pulses toward the player between chips,
+    // capacitors and data towers streaming light; on the horizon the Core, a
+    // pulsing sphere in counter-rotating rings, sends beams up into a hex sky
+    digital: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 5000);
+            camera.position.set(0, 60, 0);
+            camera.rotation.x = -0.3;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uBoss: { value: 0 }, uBright: { value: 1 },
+                uA: { value: B3D.col(0xa633ff) }, uB: { value: B3D.col(0x00ffcc) },
+                uFog: { value: B3D.col(0x0c0322) }, uCore: { value: B3D.col(0x33ffdd) },
+            };
+            const FOG = `
+uniform vec3 uFog;
+vec3 coreFog(vec3 col, vec3 w, float far) {
+    return mix(col, uFog, smoothstep(far * 0.08, far, length(w - cameraPosition)));
+}`;
+            const rnd = B3D.rng(5150);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+
+            // Sky: deep indigo with a faint hex lattice and the Core's glow at the horizon
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(4500, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore; uniform float uBoss;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec3 col = mix(vec3(0.06, 0.015, 0.14), vec3(0.008, 0.004, 0.025), smoothstep(-0.02, 0.5, e));
+    // Hex lattice
+    vec2 q = vec2(atan(d.x, -d.z) * 14.0, e * 18.0 - uTime * 0.05);
+    vec2 r = vec2(1.0, 1.732);
+    vec2 a = mod(q, r) - r * 0.5, b = mod(q - r * 0.5, r) - r * 0.5;
+    vec2 g = dot(a, a) < dot(b, b) ? a : b;
+    vec2 ag = abs(g);
+    float hex = max(dot(ag, vec2(0.5, 0.866)), ag.x);
+    col += vec3(0.25, 0.1, 0.5) * smoothstep(0.035, 0.0, abs(hex - 0.5)) * 0.2 * smoothstep(0.02, 0.25, e);
+    // The Core's light, low and ahead
+    col += uCore * 0.22 * exp(-length(vec2(atan(d.x, -d.z), e * 1.6)) * 4.0);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Board: routed traces with pads, data pulses running toward the camera
+            const board = new THREE.Mesh(new THREE.PlaneGeometry(5000, 7000), B3D.mat(B3D.VS_WORLD, FOG + `
+uniform float uTime; uniform float uScroll; uniform vec3 uA; uniform vec3 uB; uniform float uBright;
+varying vec3 vW;
+vec2 eh(vec2 c) { return vec2(h21(c + 0.5), h21(c + 17.3)); }
+void main() {
+    float S = 22.0;
+    vec2 w = vec2(vW.x, vW.z - uScroll);
+    vec2 c = floor(w / S);
+    vec2 f = fract(w / S) * S - S * 0.5;
+    // Traces about 1.5 px wide at any distance, no thinner than 0.35 units up close
+    float px = max(fwidth(w.x), fwidth(w.y));
+    float tw = max(0.35, px * 0.9);
+    float right = step(0.55, eh(c).x), down = step(0.45, eh(c).y);
+    float left = step(0.55, eh(c - vec2(1.0, 0.0)).x), up = step(0.45, eh(c - vec2(0.0, 1.0)).y);
+    float tr = 0.0;
+    tr = max(tr, right * smoothstep(tw, tw * 0.4, abs(f.y)) * step(0.0, f.x));
+    tr = max(tr, left  * smoothstep(tw, tw * 0.4, abs(f.y)) * step(f.x, 0.0));
+    tr = max(tr, down  * smoothstep(tw, tw * 0.4, abs(f.x)) * step(0.0, f.y));
+    tr = max(tr, up    * smoothstep(tw, tw * 0.4, abs(f.x)) * step(f.y, 0.0));
+    float links = right + down + left + up;
+    float pad = step(0.5, links) * smoothstep(tw * 1.1, tw * 0.3, abs(length(f) - 1.8));
+    vec3 tc = mix(uA, uB, step(0.5, h21(vec2(c.x, 7.0))));
+    float dist = length(vW - cameraPosition);
+    float detail = 1.0 - smoothstep(250.0, 1000.0, dist);     // traces would alias far away
+    vec3 col = vec3(0.012, 0.006, 0.035);
+    col += tc * (tr * 0.3 + pad * 0.4) * detail * uBright;
+    // Data pulses along the traces running toward the camera
+    float seed = h21(vec2(c.x, 91.0));
+    float py = fract(w.y / (S * 7.0) + uTime * (0.35 + seed * 0.5) + seed * 5.0);
+    float pulse = smoothstep(0.05, 0.0, abs(py - 0.5)) * (down * step(0.0, f.y) + up * step(f.y, 0.0))
+                * smoothstep(tw * 2.5, tw * 0.5, abs(f.x));
+    col += vec3(0.7, 1.0, 1.0) * pulse * 0.6 * detail;
+    // A faint glow on the board toward the Core
+    col += uB * 0.05 * smoothstep(400.0, 3000.0, dist) * exp(-abs(vW.x) / 600.0);
+    gl_FragColor = vec4(coreFog(col, vW, 3800.0), 1.0);
+}`, U));
+            board.rotation.x = -Math.PI / 2;
+            board.position.z = -3300;
+            scene.add(board);
+
+            // Components: chips (wide, low, with pins and a lit die), capacitors, data towers
+            const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+            boxGeo.translate(0, 0.5, 0);
+            const compMat = B3D.mat(B3D.VS_WORLD, FOG + `
+uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform float uBright;
+varying vec3 vW; varying vec3 vN; varying vec2 vUv; varying float vSeed;
+void main() {
+    vec3 tc = mix(uA, uB, step(0.5, vSeed));
+    vec3 col = vec3(0.02, 0.012, 0.045);
+    float top = step(0.5, vN.y);
+    if (vSeed > 0.72) {
+        // Data tower: vertical light strips with packets streaming up
+        vec2 q = vec2((abs(vN.x) > 0.5 ? vW.z : vW.x) / 6.0, vW.y / 40.0);
+        float strip = smoothstep(0.12, 0.0, abs(fract(q.x) - 0.5)) * (1.0 - top);
+        float flow = smoothstep(0.85, 1.0, fract(q.y * 0.6 - uTime * (0.8 + vSeed) + h21(vec2(floor(q.x), vSeed))));
+        col += tc * strip * (0.3 + 1.0 * flow) * uBright;
+        col += tc * top * 0.35;
+    } else {
+        // Chip: pin rows along the sides, a glowing die mark on top
+        float pins = step(0.5, fract((abs(vN.x) > 0.5 ? vW.z : vW.x) / 3.0)) * step(vW.y, 2.2) * (1.0 - top);
+        col += vec3(0.45, 0.45, 0.55) * pins * 0.35;
+        vec2 uvp = vUv - 0.5;
+        float die = top * smoothstep(0.02, 0.0, abs(max(abs(uvp.x), abs(uvp.y)) - 0.3));
+        float blink = 0.6 + 0.4 * sin(uTime * (1.0 + vSeed * 4.0) + vSeed * 20.0);
+        col += tc * die * blink * 0.8 * uBright;
+        col += tc * top * 0.05;
+    }
+    gl_FragColor = vec4(coreFog(col, vW, 3800.0), 1.0);
+}`, U);
+            const COMPS = 70, CSPAN = 2800;
+            const comps = new THREE.InstancedMesh(boxGeo, compMat, COMPS);
+            const compDefs = [];
+            for (let i = 0; i < COMPS; i++) {
+                const side = rnd() < 0.5 ? -1 : 1;
+                const tower = rnd() < 0.35;
+                compDefs.push({
+                    x: side * (90 + rnd() * 500), z0: -rnd() * CSPAN,
+                    w: tower ? 14 + rnd() * 16 : 40 + rnd() * 60, d: tower ? 14 + rnd() * 16 : 30 + rnd() * 50,
+                    h: tower ? 80 + rnd() * 260 : 4 + rnd() * 5,
+                });
+            }
+            B3D.always(comps);
+            scene.add(comps);
+
+            // The Core on the horizon: glowing sphere, three wireframe rings, light beams
+            const core = new THREE.Group();
+            core.position.set(0, 260, -3200);
+            const coreBall = new THREE.Mesh(new THREE.SphereGeometry(150, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore; uniform float uBoss;
+varying vec3 vW; varying vec3 vN;
+void main() {
+    vec3 V = normalize(cameraPosition - vW);
+    float f = pow(1.0 - max(dot(normalize(vN), V), 0.0), 2.0);
+    float beat = 0.7 + 0.3 * sin(uTime * (2.0 + uBoss * 4.0));
+    vec3 col = uCore * (0.35 + 1.0 * f) * beat;
+    col += uCore * 0.25 * smoothstep(0.55, 0.9, fbm3(vec2(atan(vN.x, vN.z) * 3.0, vN.y * 3.0 - uTime * 0.4)));
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            core.add(coreBall);
+            // Halo behind the sphere
+            const halo = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uCore; uniform float uTime;
+varying vec2 vUv;
+void main() {
+    float r = length(vUv - 0.5) * 2.0;
+    float a = exp(-r * 3.2) * (0.85 + 0.15 * sin(uTime * 2.0));
+    gl_FragColor = vec4(uCore * a * 0.5, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            halo.position.z = -160;
+            core.add(halo);
+            const ringMat = new THREE.LineBasicMaterial({ color: 0x33ffdd, transparent: true, opacity: 0.55, fog: false });
+            const rings = [];
+            for (let i = 0; i < 3; i++) {
+                const ringG = new THREE.EdgesGeometry(new THREE.TorusGeometry(240 + i * 70, 4 + i, 4, 48 + i * 16));
+                const r = new THREE.LineSegments(ringG, ringMat);
+                r.rotation.set(Math.PI / 2 + (i - 1) * 0.5, i * 0.7, 0);
+                core.add(r);
+                rings.push(r);
+            }
+            // Beams rising from the Core
+            const beamMat = B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore;
+varying vec2 vUv;
+void main() {
+    float a = smoothstep(0.5, 0.0, abs(vUv.x - 0.5)) * (1.0 - vUv.y) * (0.6 + 0.4 * sin(uTime * 3.0 + vUv.y * 10.0));
+    gl_FragColor = vec4(uCore * a * 0.35, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+            for (let i = 0; i < 5; i++) {
+                const b = new THREE.Mesh(new THREE.PlaneGeometry(30, 2200), beamMat);
+                b.position.set((i - 2) * 140, 1100, -60);
+                b.rotation.z = (i - 2) * 0.08;
+                core.add(b);
+            }
+            scene.add(core);
+
+            // Data motes rising: small glowing squares
+            const MOTES = 400;
+            const mGeo = new THREE.BufferGeometry();
+            const mPos = new Float32Array(MOTES * 3), mSeed = new Float32Array(MOTES);
+            for (let i = 0; i < MOTES; i++) {
+                mPos.set([(rnd() - 0.5) * 1400, rnd() * 300, -rnd() * 1800], i * 3);
+                mSeed[i] = rnd();
+            }
+            mGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
+            mGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(mSeed, 1));
+            const motes = new THREE.Points(mGeo, B3D.mat(`
+uniform float uTime; uniform float uScroll;
+attribute float aSeed;
+varying float vA; varying float vS;
+void main() {
+    vec3 p = position;
+    p.y = mod(position.y + uTime * (8.0 + aSeed * 20.0), 300.0);
+    p.z = mod(position.z + uScroll, 1800.0) - 1780.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = smoothstep(0.0, 40.0, p.y) * (1.0 - smoothstep(800.0, 1700.0, -mv.z)) * (0.5 + 0.5 * sin(uTime * 4.0 + aSeed * 30.0));
+    vS = aSeed;
+    gl_PointSize = clamp(500.0 / -mv.z, 1.0, 5.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uA; uniform vec3 uB;
+varying float vA; varying float vS;
+void main() {
+    vec2 q = abs(gl_PointCoord - 0.5);
+    float sq = step(max(q.x, q.y), 0.4);
+    gl_FragColor = vec4(mix(uA, uB, step(0.5, vS)) * vA * sq * 0.6, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(motes);
+            scene.add(motes);
+
+            const SPEED = 110;
+            const coreBase = B3D.col(0x33ffdd), coreBoss = B3D.col(0xff2255);
+            const aBase = B3D.col(0xa633ff), bBase = B3D.col(0x00ffcc), bossCol = B3D.col(0xff2659);
+            return {
+                scene, camera,
+                update(s) {
+                    const adv = s.t * SPEED;
+                    U.uTime.value = s.t;
+                    U.uScroll.value = adv;
+                    U.uBoss.value = s.boss;
+                    U.uBright.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    B3D.lerpColor(U.uCore.value, coreBase, coreBoss, s.boss * 0.85);
+                    ringMat.color.copy(U.uCore.value);
+                    B3D.lerpColor(U.uA.value, aBase, bossCol, s.boss * 0.5);
+                    B3D.lerpColor(U.uB.value, bBase, bossCol, s.boss * 0.5);
+                    for (let i = 0; i < rings.length; i++) rings[i].rotation.z = s.t * (0.15 + i * 0.1) * (i % 2 ? -1 : 1) * (1 + s.boss * 2);
+                    for (let i = 0; i < COMPS; i++) {
+                        const c = compDefs[i];
+                        const z = ((c.z0 + adv) % CSPAN + CSPAN) % CSPAN - CSPAN + 80;
+                        m4.compose(pos.set(c.x, 0, z), quat, scl.set(c.w, c.h, c.d));
+                        comps.setMatrixAt(i, m4);
+                    }
+                    comps.instanceMatrix.needsUpdate = true;
+                },
+            };
+        },
+    },
 };
