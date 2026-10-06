@@ -2,7 +2,7 @@
 
 ## Overview
 
-Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, and a full meta-game with persistent unlockables.
+Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, a Boss Rush mode, and a full meta-game with persistent unlockables.
 
 **Tech stack:** PixiJS v8 (WebGPU/WebGL) with pixi-filters v6 for gameplay rendering and GLSL shader backgrounds, HTML5 Canvas 2D for gameplay art (neon line art via a sprite atlas) and UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX and a procedural synthwave soundtrack, localStorage/Artifact Storage API for persistence.
 

@@ -70,6 +70,9 @@ title → difficulty_select → briefing → playing ↔ paused
                                            ↓
                                        victory → briefing (next level) → title
 
+Boss Rush (BossRush in level-systems.js): difficulty_select → rush_intermission (pick) → playing
+    → boss down → rush_intermission → … → rush_complete;  death → game_over (RETRY restarts the rush)
+
 Other states: settings, high_scores, hangar, tutorial
 ```
 

@@ -47,7 +47,7 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 1. **Native Pixi sprites for entities** — Renderer Phase 7 (plan below). First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
 2. ~~**three.js 3D backdrops**~~ — Renderer Phase 8: done, a 3D scene for every level (play-test pending, see below).
-3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
+3. **More levels and modes** — ~~Boss Rush~~ done (play-test pending); Boss Practice next (it reuses Boss Rush), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
 
 If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
 
@@ -136,7 +136,7 @@ Small-to-medium effort items that would improve existing features.
 
 ### Hangar Bonus Content
 These are listed as purchasable items in the Hangar shop but have no implementation behind them:
-- [ ] Boss Practice Mode — fight any previously defeated boss with selectable loadout
+- [ ] Boss Practice Mode — fight any previously defeated boss with selectable loadout (can reuse `BossRush`: a one-boss order and the intermission's choices)
 - [ ] Enemy Gallery / Bestiary — view all encountered enemies with stats, lore, and kill counts
 - [ ] Music Player — listen to the soundtrack from the menu. Now feasible: `Music.play(id)` plays any track in `MusicTracks`, and the intensity can be stepped 0–3 to hear the layers
 - [ ] Ship Color Designer — custom color picker for ship palette
@@ -165,7 +165,8 @@ Medium-to-large effort features that add new mechanics or depth.
 
 Features that add entirely new ways to play.
 
-- [ ] Boss Rush Mode — consecutive boss fights with brief intermissions and power-up selection between rounds
+- [x] Boss Rush Mode — every campaign boss back to back in its own level (the Echo once the secret level is unlocked), unlocked by clearing Level 5. Weapon pick before boss 1, one upgrade of three between bosses, score + time bonus, split times, BOSS RUSH high-score tab (`BossRush` in `level-systems.js`; check `bossRushRunsEveryBoss`)
+- [ ] Play-test Boss Rush: difficulty with the starting loadout, the upgrade choices, par time (`BossRush.PAR_PER_BOSS`)
 - [ ] Time Attack Mode — fixed 3-minute stage with dense spawns, infinite lives, score-only leaderboard
 - [ ] Daily Challenge Mode — daily seeded run with specific modifiers (requires online infrastructure for shared leaderboard)
 
