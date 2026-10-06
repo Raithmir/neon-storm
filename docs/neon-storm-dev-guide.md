@@ -401,7 +401,7 @@ There are no unit tests; the game is verified headlessly with `tools/sim/` (Play
 - `tools/sim/playthrough.js`, `tools/sim/campaign.js` — single levels and whole campaigns played by a bot (perfect, or human-like with reaction time and perception noise).
 - `tools/sim/perf.js` — game-logic cost per frame (logic only). For rendering, use Settings → SHOW FPS in a real browser.
 
-**CI** (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: build, a check that the committed `dist/` matches `src/`, `sim:checks` and `sim:render`. **Hosting** (`.github/workflows/pages.yml`) publishes the build from main to GitHub Pages.
+**CI** (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/delta: build, a check that the committed `dist/` matches `src/`, `sim:checks` and `sim:render`. **Hosting** (`.github/workflows/pages.yml`) publishes the build from main to GitHub Pages.
 
 Checks reach into game globals (`Player`, `Boss`, `WaveSystem`…); keep them in step when renaming.
 
