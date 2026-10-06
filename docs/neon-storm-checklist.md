@@ -1,4 +1,4 @@
-# NEON STORM γ — Remaining Work
+# NEON STORM δ — Remaining Work
 
 *All completed items removed. This is the single tracker for what's left to do.*
 
@@ -20,7 +20,9 @@ npm run sim:checks && npm run sim:render && npm run sim:audio    # all should pa
 ```
 Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-storm-dev-guide.md` has the detail. Claude Code picks up `CLAUDE.md` and the PixiJS skills in `.claude/skills/` automatically.
 
-**How changes flow:** work on a feature branch → PR into `gamma` (later `delta`) → PR from that branch into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For δ, create a `delta` branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-gamma.html`), `package.json`'s version, the title's γ and label in `menus.js`, and this file's title. `grep -rn gamma` finds them.
+**How changes flow:** work on a feature branch → PR into `delta` → PR from `delta` into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For the next version (ε), create its branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-delta.html`; delete the old `dist/` HTML, since Pages copies `dist/neon-storm-*.html`), `package.json`'s version, the title's δ and label in `menus.js`, the branch list in `.github/workflows/ci.yml`, and this file's title. `grep -rn delta` finds them.
+
+**Before calling δ done:** change the title screen's "DELTA BUILD — WORK IN PROGRESS" label (`Menu.drawTitle` in `menus.js`).
 
 **Decisions to revisit if wanted:**
 - The γ save migration resets high scores and level records (old ones are kept in storage as `highscores_v1` / `levelBests_v1`). Showing them as a "β scores" tab instead is a small change.
@@ -41,10 +43,10 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 γ shipped as v0.3.0.
 
-### δ Delta — renderer and content (next)
+### δ Delta — renderer and content (in progress)
 
-1. **Native Pixi sprites for entities** — Renderer Phase 7. First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
-2. **three.js 3D backdrops** — Renderer Phase 8. Prototype the sky city, then decide how far to take it.
+1. **Native Pixi sprites for entities** — Renderer Phase 7 (plan below). First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
+2. **three.js 3D backdrops** — Renderer Phase 8 (plan below). Spike the context sharing, prototype the sky city, then decide how far to take it.
 3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
 
 If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
@@ -82,9 +84,32 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 - [x] Phase 4: Weapons & Combat VFX — enemy hit spark bursts with GPU glow flash, enhanced death explosions with white-hot flash particles and glow burst, bomb visual upgrade with centre glow + white-hot core + secondary ring, shield hit ripple shockwave with glow
 - [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
 - [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
-- [ ] Phase 7: Native Pixi sprites for entities — enemies, mid-bosses, bosses, player, power-ups, asteroids and the escort are still drawn on the offscreen Canvas 2D, which is re-uploaded to the GPU every frame (1440×1920 at high quality), probably the biggest per-frame cost. Turn the `Neon.sprite()` atlas pages into Pixi textures and give each entity a `PIXI.Sprite` (position/rotation/tint/alpha set per frame), keeping only the animated parts (lights, rotors, flames) live or moving them to sprites too. Migrate one module at a time (enemies first); once nothing draws to the offscreen canvas during play, skip its upload. Unlocks per-object filters (heat haze behind bosses, shield outlines, phase-shifter warp) and frees frame time for Phase 8. Keep the Canvas 2D path as the no-WebGL fallback and keep `sim:render` green. Do this before Phase 8.
-- [ ] Phase 8 (idea): 3D backdrops with three.js — real geometry (fly-through cities, tunnels, wireframe terrain, glTF set pieces) instead of 2D fragment shaders. Recommended route: three.js and PixiJS share one WebGL context (PixiJS's "Mixing PixiJS and Three.js" guide); three renders the level into a render target that replaces `Renderer._bgMesh`'s texture, so bloom/shockwave filters, `bgPulse`, bullet-density dimming and Flash Reduction keep working unchanged. Separate layered canvases are fine for a quick prototype but cost a second WebGL context, and Pixi filters can't touch the 3D layer. Watch: three.js ships ES modules only (needs an esbuild step or a shim in `build.js`, which concatenates globals); adds ~600 KB to the single-file build; low-quality mode should drop back to the shader backdrop; keep the shader backdrop as the fallback and cover it in `sim:render`. Prototype one level first (sky city is the best candidate).
+- [ ] Phase 7: Native Pixi sprites for entities — see below
+- [ ] Phase 8: 3D backdrops with three.js — see below
 
+### Phase 7: Native Pixi sprites for entities
+
+**Why:** every frame uploads two full canvases to the GPU — the offscreen play canvas (720×960 logical, 1440×1920 at HIGH) and the full-size glow canvas that `Renderer.addGlow()` fills for bloom. Entities (enemies, mid-bosses, bosses, player, power-ups, asteroids, escort) stamp `Neon.sprite()` atlas images onto the play canvas and draw their live parts (mostly `Neon.light`, plus `shape`/`detail`/`squash`, rotors and flames) around them. Moving all of it to Pixi objects removes both uploads, unlocks per-object filters and frees frame time for Phase 8.
+
+**Constraints:** keep the Canvas 2D path as the no-WebGL fallback (each module gets a `Renderer.usePixi` branch, as `Particles.draw` already has, rather than a rewrite); keep `sim:render` green after every step; keep Flash Reduction and the Hangar previews working.
+
+- [ ] **0. Baseline.** Add a render-time mode to `tools/sim/perf.js` (it times logic only today) and take SHOW FPS readings at HIGH and at 4K in late Endless. Judge every later step against these numbers.
+- [ ] **1. Atlas pages as Pixi textures.** Each `Neon` atlas page gets a `CanvasSource`; each sprite key becomes a `Texture` frame on it. Pages upload only when something new is baked. `Neon.flush()` must destroy those textures and invalidate sprites still using them.
+- [ ] **2. Entity layer.** A Container between the backdrop and `gameSprite`, with one child container per module in today's draw order (asteroids, escort, power-ups, enemies, player, boss). During the migration, bodies are on the GPU and not-yet-migrated live parts draw on the canvas above them, so lights are never hidden under hulls.
+- [ ] **3. Migrate one module at a time** — enemies, mid-bosses, bosses, player, power-ups, asteroids, escort. Each entity owns a pooled `PIXI.Sprite` (or small Container) synced each frame: position, rotation, squash scale, alpha. Hit flash stays a texture swap (the flash state is already in the sprite key). `Neon.light` stamps become child sprites; procedural parts (rotors, flames) become `Graphics` or move last. Add a `sim:render` check that fails if a migrated module draws to the canvas.
+- [ ] **4. Glow on the GPU.** `addGlow()` becomes additive glow-texture particles in their own ParticleContainer with the blur filter on it; the glow canvas goes away in Pixi mode.
+- [ ] **5. Leftovers.** Score popups (BitmapText), shockwave rings, shield and hitbox, anything `Background.draw` still paints.
+- [ ] **6. Stop the upload.** Once nothing draws to the offscreen canvas during play, skip `_canvasSource.update()` (keep a dirty flag for menus and the briefing). Re-measure against step 0.
+- [ ] **7. Per-object effects** the migration unlocks: heat haze behind bosses, shield outlines, phase-shifter warp.
+
+### Phase 8: 3D backdrops with three.js
+
+**Why:** real geometry (fly-through cities, tunnels, wireframe terrain, glTF set pieces) instead of 2D fragment shaders. Starts after Phase 7 step 6, when the frame-time headroom is known.
+
+- [ ] **1. Spike the context sharing (throwaway branch, no build changes).** Load three.js from a local file in the dev build only, share Pixi's WebGL context (Pixi is already forced to WebGL, `renderer.js` `preference: 'webgl'`; follow PixiJS's "Mixing PixiJS and Three.js" guide with `resetState()` on both sides), and draw one rotating wireframe city block. Answer three questions: (a) can a three render target become `_bgMesh`'s texture — Pixi v8 has no public API for adopting an external GL texture, so this means touching renderer internals — or does three have to draw first to the screen with Pixi drawing over it without clearing (robust, but bloom/shockwave filters then miss the 3D layer)? (b) what does it cost per frame on top of the Phase 7 numbers? (c) how big is a tree-shaken three build for what we'd use? Go/no-go decision on the answers.
+- [ ] **2. Build integration (only on go).** three.js ships ES modules only; bundle a small entry (`window.THREE = { …the parts used }`) into an IIFE with esbuild as a dev dependency, inlined by `build.js` like Pixi. Target ≤ 400 KB added to the single-file build.
+- [ ] **3. Sky city prototype** behind a setting: feed the existing uniforms (`bgPulse`, bullet-density dimming, Flash Reduction); fall back to the shader backdrop on LOW quality, if three fails, and in `sim:render` (plus one `sim:render` case with 3D on).
+- [ ] **4. Decide scope** — more 3D levels in δ, or move the rest to ε (see Roadmap).
 ---
 
 ## Gameplay Review Follow-ups

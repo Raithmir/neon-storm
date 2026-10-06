@@ -46,7 +46,7 @@ neon-storm/
 │   ├── pixi.min.js          — PixiJS v8 (downloaded on first build)
 │   └── pixi-filters.min.js  — pixi-filters v6: shockwave, god-ray and glitch effects
 ├── dist/                    — Built output (generated)
-│   ├── neon-storm-gamma.html — Playable game (single file, works offline)
+│   ├── neon-storm-delta.html — Playable game (single file, works offline)
 │   └── neon-storm.js        — Combined JS (for debugging)
 ├── src/                     — Source modules
 │   ├── constants.js         — Canvas setup, screen layout, dual-canvas sizing
@@ -88,7 +88,7 @@ neon-storm/
 ```bash
 node build.js
 ```
-First build downloads PixiJS (~250KB) and caches it in `vendor/`. Output is `dist/neon-storm-gamma.html` — double-click to play, no server required.
+First build downloads PixiJS (~250KB) and caches it in `vendor/`. Output is `dist/neon-storm-delta.html` — double-click to play, no server required.
 
 ### Play (web server, for development)
 ```bash

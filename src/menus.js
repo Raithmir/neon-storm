@@ -16,7 +16,7 @@ const Menu = {
         const cx = SCREEN_W / 2;
         const bob = Renderer.calm() ? 0 : Math.sin(t * 1.3) * 4;
         Neon.text(ctx, 'NEON STORM', cx - 26, 200 + bob, UI.CYAN, 110, { core: 0.5, halo: 0.55 });
-        Neon.text(ctx, 'γ', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
+        Neon.text(ctx, 'δ', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
         Neon.text(ctx, 'BULLET HELL SHOOTER', cx, 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
 
         // The player's ship hovering over the grid, engines lit
@@ -38,7 +38,7 @@ const Menu = {
             UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 774, UI.DIM, 13);
         }
         UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
-        UI.label(ctx, 'GAMMA BUILD — v0.3.0', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
+        UI.label(ctx, 'DELTA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
     },
 
     drawDifficultySelect(ctx) {

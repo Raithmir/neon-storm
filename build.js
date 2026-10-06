@@ -135,11 +135,11 @@ async function build() {
         + '\n</script>\n</body>\n</html>';
 
     fs.writeFileSync(path.join(DIST, 'neon-storm.js'), combinedJS);
-    fs.writeFileSync(path.join(DIST, 'neon-storm-gamma.html'), html);
+    fs.writeFileSync(path.join(DIST, 'neon-storm-delta.html'), html);
 
     console.log('\nBuild complete: ' + SOURCE_FILES.length + ' modules, ' + totalLines + ' total lines');
     console.log('Libraries: ' + VENDOR_LIBS.map((l, i) => l.name + (libTags[i].includes(' src=') ? ' (CDN link)' : ' (inline)')).join(', '));
-    console.log('Output: dist/neon-storm-gamma.html');
+    console.log('Output: dist/neon-storm-delta.html');
     console.log('Debug:  dist/neon-storm.js');
 }
 

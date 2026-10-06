@@ -8,7 +8,7 @@
 // Input.keys map, the same path keyboard events use.
 //
 // Environment:
-//   GAME_HTML      Built game to load (default: dist/neon-storm-gamma.html)
+//   GAME_HTML      Built game to load (default: dist/neon-storm-delta.html)
 //   CHROMIUM_PATH  Chromium executable (default: Playwright's own browser)
 
 const fs = require('fs');
@@ -22,7 +22,7 @@ try {
     process.exit(1);
 }
 
-const GAME_HTML = path.resolve(process.env.GAME_HTML || path.join(__dirname, '..', '..', 'dist', 'neon-storm-gamma.html'));
+const GAME_HTML = path.resolve(process.env.GAME_HTML || path.join(__dirname, '..', '..', 'dist', 'neon-storm-delta.html'));
 const OUT_DIR = path.join(__dirname, 'out');
 
 // opts.draw: keep rendering on (for render tests); the default stubs it out for speed
