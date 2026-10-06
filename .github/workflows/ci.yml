@@ -1,11 +1,11 @@
-# Runs on every pull request and on pushes to main/gamma:
-#   1. builds the game and checks the committed dist/ matches src/
-#   2. gameplay regression checks (tools/sim/checks.js)
-#   3. render smoke test: every screen and level drawn, fails on any error
-#      (tools/sim/render-smoke.js)
-#   4. audio check: every music track and sound effect rendered offline, fails
-#      on errors, silence or clipping, and on the wrong track for a game state
-#      (tools/sim/audio.js)
+# Runs on every pull request and on pushes to main/gamma, as two parallel jobs.
+# Both build the game and check the committed dist/ matches src/, then:
+#   gameplay      gameplay regression checks (tools/sim/checks.js)
+#   render-audio  render smoke test: every screen and level drawn, fails on any
+#                 error (tools/sim/render-smoke.js); then the audio check: every
+#                 music track and sound effect rendered offline, fails on errors,
+#                 silence or clipping, and on the wrong track for a game state
+#                 (tools/sim/audio.js)
 name: CI
 
 on:
@@ -19,9 +19,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
+  sim:
+    name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gameplay
+            run: npm run sim:checks
+          - name: render-audio
+            run: npm run sim:render && npm run sim:audio
     steps:
       - uses: actions/checkout@v4
 
@@ -40,24 +49,35 @@ jobs:
             exit 1
           fi
 
-      - name: Install Playwright and Chromium
+      - name: Install Playwright
+        id: playwright
         run: |
           npm install --no-save playwright
-          npx playwright install --with-deps chromium
+          echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Gameplay regression checks
-        run: npm run sim:checks
+      # Chromium is cached per Playwright version; the system libraries it needs are always installed
+      - name: Cache Chromium
+        id: chromium-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: chromium-${{ runner.os }}-${{ steps.playwright.outputs.version }}
 
-      - name: Render smoke test
-        run: npm run sim:render
+      - name: Install Chromium
+        if: steps.chromium-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
 
-      - name: Audio check
-        run: npm run sim:audio
+      - name: Install Chromium system dependencies
+        if: steps.chromium-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Run ${{ matrix.name }} checks
+        run: ${{ matrix.run }}
 
       - name: Upload simulation results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: sim-results
+          name: sim-results-${{ matrix.name }}
           path: tools/sim/out/
           if-no-files-found: ignore
