@@ -118,7 +118,7 @@ vec2 haze(vec2 p) {
     float f = smoothstep(1.0, 0.2, length(d)) * uHaze.w;
     if (f <= 0.0) return p;
     vec2 q = p * 0.035 + vec2(0.0, uTime * 1.8);
-    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 16.0 * f;
+    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 9.0 * f;
 }
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
@@ -921,7 +921,7 @@ const Renderer = {
         u.uCalm = this.calm() ? 1 : 0;
         // Heat haze behind the boss, centred a little above it (heat rises)
         const h = u.uHaze;
-        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.6; }
+        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.2; }
         h[3] = approach(h[3], bossOn * (this.calm() ? 0.5 : 1), 1.5);
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
@@ -1717,7 +1717,7 @@ function _rendererHslToRgb(h, s, l) {
 //
 //    drawImage            → PIXI.Sprite on a texture of the source canvas
 //                           (Neon atlas pages, baked text); a canvas flagged
-//                           __gpuDirty is re-uploaded on its next use
+//                           __gpuDirty is re-uploaded once, at end()
 //    paths, fill, stroke  → PIXI.Graphics; paths are flattened to polylines
 //                           in play coordinates, so any transform works
 //    fillText/strokeText  → white text baked once per string/font, tinted
@@ -1781,6 +1781,9 @@ class GpuCtx {
 
     end() {
         this._g = null;
+        // Canvases baked into this frame upload once, however many sprites were added
+        for (const src of GpuCtx._dirty) src.update();
+        GpuCtx._dirty.clear();
     }
 
     // Free a canvas's GPU texture once this frame has been rendered
@@ -2110,6 +2113,7 @@ GpuCtx.TEXT_RES = 2;            // text canvas pixels per play pixel
 GpuCtx.TEXT_CACHE_MAX = 400;
 GpuCtx._textCache = new Map();
 GpuCtx._colors = new Map();
+GpuCtx._dirty = new Set();      // texture sources to re-upload at end()
 
 // CSS colour → { rgb, a }, cached. Unparsed forms go through a canvas once.
 GpuCtx.color = function (style) {
@@ -2157,7 +2161,7 @@ GpuCtx.texture = function (img, sx, sy, sw, sh) {
         gpu = img.__gpu = { source: new PIXI.CanvasSource({ resource: img }), frames: new Map() };
         img.__gpuDirty = false;
     } else if (img.__gpuDirty) {
-        gpu.source.update();
+        this._dirty.add(gpu.source);
         img.__gpuDirty = false;
     }
     const key = sx + ',' + sy + ',' + sw + ',' + sh;
@@ -4282,8 +4286,9 @@ const Neon = {
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
-    ATLAS_SIZE: 2048,
-    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    ATLAS_SIZE: 1024,        // each page is a GPU texture re-uploaded whole when a sprite is
+                             // baked into it, so pages stay small (4 MB per upload)
+    ATLAS_MAX_PAGES: 16,     // past this the cache is flushed and rebuilt on demand
     _pages: [],
     _sprites: new Map(),
 
@@ -8233,6 +8238,29 @@ const Boss = {
                 this.armor.push({ hp: def.armorHp || 15, angle: (Math.PI * 2 / count) * i, alive: true });
             }
         }
+        this._prebake();
+    },
+
+    // Bake every phase colour and hit-flash variant of the art now, while the
+    // WARNING banner is up. Baked mid-fight, each new sprite re-uploads an atlas
+    // page to the GPU, a visible hitch at phase changes and on the first hit.
+    _prebake() {
+        if (!Neon.BAKE) return;
+        const c = this._scratchCtx || (this._scratchCtx = document.createElement('canvas').getContext('2d'));
+        const draw = this._neon[this.bossType] || this._neon.architect;
+        const phase = this.phase;
+        for (let p = 1; p <= this.totalPhases; p++) {
+            this.phase = p;
+            for (const flash of [false, true]) {
+                c.save();
+                draw.call(this, c, this.radius, this.colors[p - 1] || '#ff4444', flash);
+                c.restore();
+                if (this.armor.length) {
+                    Neon.sprite(c, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
+                }
+            }
+        }
+        this.phase = phase;
     },
 
     update(dt, playerX, playerY) {
@@ -9350,7 +9378,7 @@ const Boss = {
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
         // Dynamic light — boss core glow (brighter during flash)
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 3.6 : 3), flash ? 0.45 : 0.35);
 
         // Type-specific body (unknown types draw as the Architect, matching init())
         const draw = this._neon[this.bossType] || this._neon.architect;

@@ -25,8 +25,9 @@ const Neon = {
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
-    ATLAS_SIZE: 2048,
-    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    ATLAS_SIZE: 1024,        // each page is a GPU texture re-uploaded whole when a sprite is
+                             // baked into it, so pages stay small (4 MB per upload)
+    ATLAS_MAX_PAGES: 16,     // past this the cache is flushed and rebuilt on demand
     _pages: [],
     _sprites: new Map(),
 

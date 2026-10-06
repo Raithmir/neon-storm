@@ -450,7 +450,7 @@ const Renderer = {
         u.uCalm = this.calm() ? 1 : 0;
         // Heat haze behind the boss, centred a little above it (heat rises)
         const h = u.uHaze;
-        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.6; }
+        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.2; }
         h[3] = approach(h[3], bossOn * (this.calm() ? 0.5 : 1), 1.5);
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },

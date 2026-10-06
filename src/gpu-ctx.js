@@ -9,7 +9,7 @@
 //
 //    drawImage            → PIXI.Sprite on a texture of the source canvas
 //                           (Neon atlas pages, baked text); a canvas flagged
-//                           __gpuDirty is re-uploaded on its next use
+//                           __gpuDirty is re-uploaded once, at end()
 //    paths, fill, stroke  → PIXI.Graphics; paths are flattened to polylines
 //                           in play coordinates, so any transform works
 //    fillText/strokeText  → white text baked once per string/font, tinted
@@ -73,6 +73,9 @@ class GpuCtx {
 
     end() {
         this._g = null;
+        // Canvases baked into this frame upload once, however many sprites were added
+        for (const src of GpuCtx._dirty) src.update();
+        GpuCtx._dirty.clear();
     }
 
     // Free a canvas's GPU texture once this frame has been rendered
@@ -402,6 +405,7 @@ GpuCtx.TEXT_RES = 2;            // text canvas pixels per play pixel
 GpuCtx.TEXT_CACHE_MAX = 400;
 GpuCtx._textCache = new Map();
 GpuCtx._colors = new Map();
+GpuCtx._dirty = new Set();      // texture sources to re-upload at end()
 
 // CSS colour → { rgb, a }, cached. Unparsed forms go through a canvas once.
 GpuCtx.color = function (style) {
@@ -449,7 +453,7 @@ GpuCtx.texture = function (img, sx, sy, sw, sh) {
         gpu = img.__gpu = { source: new PIXI.CanvasSource({ resource: img }), frames: new Map() };
         img.__gpuDirty = false;
     } else if (img.__gpuDirty) {
-        gpu.source.update();
+        this._dirty.add(gpu.source);
         img.__gpuDirty = false;
     }
     const key = sx + ',' + sy + ',' + sw + ',' + sh;

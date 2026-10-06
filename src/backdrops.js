@@ -68,7 +68,7 @@ vec2 haze(vec2 p) {
     float f = smoothstep(1.0, 0.2, length(d)) * uHaze.w;
     if (f <= 0.0) return p;
     vec2 q = p * 0.035 + vec2(0.0, uTime * 1.8);
-    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 16.0 * f;
+    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 9.0 * f;
 }
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
