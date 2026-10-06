@@ -549,20 +549,33 @@ const checks = {
 
 (async () => {
     const only = process.argv[2] ? process.argv[2].split(',') : null;
-    const results = [];
-    for (const [name, fn] of Object.entries(checks)) {
-        if (only && !only.includes(name)) continue;
-        const g = await launch();
-        let r;
-        try {
-            r = await fn(g);
-        } catch (e) {
-            r = { expect: '(error)', pass: false, evidence: { error: e.message } };
+    const names = Object.keys(checks).filter(n => !only || only.includes(n));
+    // Each check gets its own browser, so they run in parallel (SIM_JOBS, default one per CPU, max 4)
+    const jobs = Math.max(1, +process.env.SIM_JOBS || Math.min(4, require('os').cpus().length));
+    const results = new Array(names.length);
+    let next = 0, printed = 0;
+    const print = () => {   // report in definition order as results arrive
+        for (; printed < names.length && results[printed]; printed++) {
+            const r = results[printed];
+            console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name} ${r.section || ''} — ${r.expect}\n      ${JSON.stringify(r.evidence)}`);
         }
-        await g.close();
-        results.push({ name, ...r });
-        console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} ${r.section || ''} — ${r.expect}\n      ${JSON.stringify(r.evidence)}`);
-    }
+    };
+    const worker = async () => {
+        while (next < names.length) {
+            const i = next++, name = names[i];
+            const g = await launch();
+            let r;
+            try {
+                r = await checks[name](g);
+            } catch (e) {
+                r = { expect: '(error)', pass: false, evidence: { error: e.message } };
+            }
+            await g.close();
+            results[i] = { name, ...r };
+            print();
+        }
+    };
+    await Promise.all(Array.from({ length: jobs }, worker));
     writeResult('checks.json', results);
     const failed = results.filter(r => !r.pass).length;
     console.log(`\n${results.length - failed} passed, ${failed} failed`);
