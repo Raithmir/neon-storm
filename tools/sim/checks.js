@@ -526,6 +526,49 @@ const checks = {
             pass, evidence: { stages, end } };
     },
 
+    async bossPracticeFromChosenPhase(g) {
+        const start = await g.ev(() => {
+            Campaign.bossesDefeated = ['architect', 'furnace', 'leviathan', 'interceptor_duo', 'nexus'];
+            Campaign.practiceBests = {};
+            window.__credits = NeonCredits.balance;
+            Game._practice = { level: 4, phase: 2, difficulty: 'hardcore', weapon: 'laser', weaponLevel: 4, drones: 3 };
+            Game.startPractice(Game._practice);
+            Player.invincible = true; Player.invincibleTimer = 1e9;
+            return { state: Game.state, boss: Boss.bossType, phase: Boss.phase, hpIsPhase2: Boss.hp === Boss.phaseHps[1],
+                diff: GameConfig.difficulty, loadout: Player.primaryWeapon + Player.primaryLevel + '/d' + Player.droneLevel,
+                levels: BossRush.practiceLevels() };
+        });
+        await g.run(6000);
+        await g.ev(() => {
+            Player.invincible = true; Player.invincibleTimer = 1e9;
+            Boss.phase = Boss.totalPhases; Boss.armor = []; Boss.phaseTransitionTimer = 0; Boss.hit(1e6, true);
+        });
+        await g.run(9000);
+        const end = await g.ev(() => ({ state: Game.state, best: Campaign.practiceBests.hardcore_nexus,
+            newBest: Game._practiceNewBest, creditsChanged: NeonCredits.balance !== window.__credits, initials: HighScores.enteringInitials }));
+        const pass = start.state === 'playing' && start.boss === 'nexus' && start.phase === 2 && start.hpIsPhase2 &&
+            start.diff === 'hardcore' && start.loadout === 'laser4/d3' && JSON.stringify(start.levels) === '[0,1,2,3,4]' &&
+            end.state === 'practice_complete' && end.best > 0 && end.newBest && !end.creditsChanged && !end.initials;
+        return { section: 'δ', expect: 'Boss Practice starts the chosen boss at the chosen phase with the chosen loadout, records a best time, pays no credits or score',
+            pass, evidence: { start, end } };
+    },
+
+    async bossesDefeatedFromOldSave(g) {
+        const r = await g.ev(async () => {
+            const put = (k, v) => localStorage.setItem('neonstorm_' + k, JSON.stringify(v));
+            put('campaign', { levelsUnlocked: 4, secretUnlocked: false, levelBests: {} });
+            await Campaign.load();
+            const midway = Campaign.bossesDefeated.slice();
+            put('campaign', { levelsUnlocked: 5, secretUnlocked: true, levelBests: { normal_L5: { score: 1 } } });
+            await Campaign.load();
+            return { midway, cleared: Campaign.bossesDefeated.slice(), rush: BossRush.unlocked() };
+        });
+        const pass = JSON.stringify(r.midway) === '["architect","furnace","leviathan"]' &&
+            r.cleared.length === 6 && r.rush;
+        return { section: 'δ', expect: 'Saves from before Boss Practice count the bosses of levels already passed as beaten',
+            pass, evidence: r };
+    },
+
     // --- Save data ------------------------------------------------------------
 
     async saveMigrationKeepsProgress(g) {

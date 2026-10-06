@@ -17,6 +17,7 @@ Neon Storm γ is a full visual overhaul: everything is redrawn in a **neon vecto
 - **Soundtrack:** procedural synthwave generated live (`src/music.js`): a menu theme, a track for each level, boss tracks, Endless, and victory / game-over stings. It builds with the action (drums join after the briefing, a lead comes in for mid-bosses and bosses, fills for the final phase and Neon Surge), muffles on pause and ducks under bombs. MUSIC VOLUME now works.
 - **Sound effects:** reworked to match the visuals: layered explosions with glassy shatter, a heavier bomb, a laser hum, missile launches, a boss WARNING siren, phase-change glitches and an extra-life fanfare.
 - **Boss Rush (δ):** clear the campaign to unlock every boss back to back, each in its own level. Pick a weapon, then one upgrade out of three between bosses; ranked by score with a time bonus, with split times and its own high-score tab.
+- **Boss Practice (δ):** fight any boss you've beaten, from any phase, with your choice of difficulty and loadout; keeps a best time per boss. Both are under BOSS MODES on the title screen.
 - **Gamepad prompts:** menus show controller buttons when you're playing with a gamepad.
 - **Save versioning:** older saves are upgraded automatically. High scores and level records from before the rebalance are archived and reset; unlocks, credits, cosmetics and achievements are kept.
 

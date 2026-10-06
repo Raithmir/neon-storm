@@ -12,6 +12,8 @@ const Game = {
     _pendingEndless: false,
     _pendingBossRush: false,
     _rushDifficulty: 'normal',
+    _practice: null,            // Boss Practice setup (kept for RETRY and CHANGE SETUP)
+    _practiceNewBest: false,
     _gameOverPending: false,
 
     async init() {
@@ -202,6 +204,24 @@ const Game = {
         this._showRushIntermission();
     },
 
+    // Boss Practice: one beaten boss, from a chosen phase, with a chosen loadout
+    startPractice(setup) {
+        SaveData.migrated = null;
+        GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[setup.difficulty]));
+        GameConfig.difficulty = setup.difficulty;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity || 1.0;
+        this._retryLoadout = null;
+        EndlessMode.active = false;
+        Player.init();
+        Player.primaryWeapon = setup.weapon;
+        Player.primaryLevel = setup.weaponLevel;
+        Player.droneLevel = setup.drones;
+        Scoring.reset();
+        BossRush.beginPractice(setup);
+        this._beginRushStage();
+    },
+
     // Between bosses: the next boss's backdrop plays behind the upgrade choice
     _showRushIntermission() {
         const lvl = BossRush.level();
@@ -241,6 +261,13 @@ const Game = {
         Player.y = PLAY_H - 80;
         Player.bullets.clear();
         Boss.init(lvl.bossType || 'architect');
+        const startPhase = BossRush.practice ? Math.min(BossRush.practice.phase, Boss.totalPhases) : 1;
+        if (startPhase > 1) {
+            // Practice from a later phase: that phase's HP, armour already gone
+            Boss.phase = startPhase;
+            Boss.hp = Boss.maxHp = Boss.phaseHps[startPhase - 1];
+            Boss.armor = [];
+        }
         Audio.playBossWarning();
         WaveSystem.bossActive = true;
         BossRush.stageTime = 0;
@@ -252,6 +279,13 @@ const Game = {
     // A Boss Rush boss is down: on to the next intermission, or the results
     _rushBossDown() {
         if (this.state !== 'playing') return;
+        if (BossRush.practice) {
+            BossRush.cleared();
+            this._processEndRun(true);
+            this.state = 'practice_complete';
+            Menu.selectedIndex = 0;
+            return;
+        }
         if (BossRush.cleared()) {
             this._processEndRun(true);
             this.state = 'rush_complete';
@@ -266,7 +300,8 @@ const Game = {
     // Restart whatever mode the current run is in
     _restartRun() {
         const diff = GameConfig.difficulty;
-        if (BossRush.active) this.startBossRush(this._rushDifficulty);
+        if (BossRush.practice) this.startPractice(BossRush.practice);
+        else if (BossRush.active) this.startBossRush(this._rushDifficulty);
         else if (this.currentLevelIndex === -1) this.startEndless(diff);
         else this.startLevel(this.currentLevelIndex, diff, false);
     },
@@ -289,6 +324,14 @@ const Game = {
         this.endRunProcessed = true;
         NeonCredits.lastEarned = 0;   // only a run's end pays out
 
+        if (BossRush.practice) {
+            // Practice pays nothing and has no leaderboard; it keeps a best time
+            EndRunBonus.bonuses = [];
+            EndRunBonus.totalBonus = 0;
+            const p = BossRush.practice;
+            this._practiceNewBest = won && Campaign.recordPractice(p.difficulty, ALL_LEVELS[p.level].bossType, BossRush.time);
+            return;
+        }
         if (BossRush.active) {
             Scoring.score += BossRush.bonuses(won);
             NeonCredits.earn(Scoring.score, GameConfig.difficulty);
@@ -380,7 +423,7 @@ const Game = {
             case 'title':
                 this._updateMenu(dt, 8);
                 if (Input.isPressed('confirm')) {
-                    if (Menu.selectedIndex === 2 && !BossRush.unlocked()) {
+                    if (Menu.selectedIndex === 2 && !BossRush.unlocked() && !BossRush.practiceLevels().length) {
                         Audio.playMenuNav();   // locked: the title explains how to unlock it
                         break;
                     }
@@ -395,10 +438,9 @@ const Game = {
                             this._pendingEndless = true;
                             Menu.selectedIndex = 1;
                             break;
-                        case 2: // Boss Rush
-                            this.state = 'difficulty_select';
-                            this._pendingBossRush = true;
-                            Menu.selectedIndex = 1;
+                        case 2: // Boss modes: Rush and Practice
+                            this.state = 'boss_menu';
+                            Menu.selectedIndex = BossRush.unlocked() ? 0 : 1;
                             break;
                         case 3: // Hangar
                             this.state = 'hangar';
@@ -458,15 +500,19 @@ const Game = {
                             CustomDifficulty.init();
                             break;
                         case 4:
-                            this._pendingEndless = this._pendingBossRush = false;
-                            this.state = 'title';
+                            this.state = this._pendingBossRush ? 'boss_menu' : 'title';
                             Menu.selectedIndex = 0;
+                            this._pendingEndless = this._pendingBossRush = false;
                             break;
                     }
                 }
-                if (Input.isPressed('back')) {
-                    this._pendingEndless = false;
+                if (Input.isPressed('back') && this._pendingBossRush) {
                     this._pendingBossRush = false;
+                    this.state = 'boss_menu';
+                    Menu.selectedIndex = 0;
+                    Audio.playMenuNav();
+                } else if (Input.isPressed('back')) {
+                    this._pendingEndless = false;
                     this.state = 'title';
                     Menu.selectedIndex = 0;
                     Audio.playMenuNav();
@@ -784,6 +830,45 @@ const Game = {
                 }
                 break;
 
+            case 'boss_menu': {
+                this._updateMenu(dt, 3);
+                const back = () => { this.state = 'title'; Menu.selectedIndex = 2; Audio.playMenuNav(); };
+                if (Input.isPressed('confirm')) {
+                    const i = Menu.selectedIndex;
+                    if (i === 0 && BossRush.unlocked()) {
+                        Audio.playMenuSelect();
+                        this.state = 'difficulty_select';
+                        this._pendingBossRush = true;
+                        Menu.selectedIndex = 1;
+                    } else if (i === 1 && BossRush.practiceLevels().length) {
+                        Audio.playMenuSelect();
+                        this._openPracticeSetup();
+                    } else if (i === 2) {
+                        back();
+                    } else {
+                        Audio.playMenuNav();   // locked
+                    }
+                }
+                if (Input.isPressed('back')) back();
+                break;
+            }
+
+            case 'practice_setup':
+                this._updatePracticeSetup(dt);
+                break;
+
+            case 'practice_complete':
+                this._updateMenu(dt, 3);
+                if (Input.isPressed('confirm')) {
+                    Audio.playMenuSelect();
+                    switch (Menu.selectedIndex) {
+                        case 0: Transition.start(() => this.startPractice(BossRush.practice)); break;
+                        case 1: Transition.start(() => this._openPracticeSetup()); break;
+                        case 2: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; }); break;
+                    }
+                }
+                break;
+
             case 'rush_intermission':
                 this.briefingTimer += dt;
                 Background.update(dt);
@@ -824,6 +909,44 @@ const Game = {
                 }
                 break;
         }
+    },
+
+    // --- Boss Practice setup: rows of ←/→ choices, then START / BACK ---
+    PRACTICE_ROWS: ['boss', 'phase', 'difficulty', 'weapon', 'weaponLevel', 'drones', 'start', 'back'],
+
+    _openPracticeSetup() {
+        const levels = BossRush.practiceLevels();
+        const p = this._practice || { level: levels[0], phase: 1, difficulty: 'normal', weapon: 'spread', weaponLevel: 3, drones: 2 };
+        if (!levels.includes(p.level)) p.level = levels[0];
+        this._practice = p;
+        this.state = 'practice_setup';
+        Menu.selectedIndex = this.PRACTICE_ROWS.indexOf('start');
+    },
+
+    _updatePracticeSetup(dt) {
+        const rows = this.PRACTICE_ROWS;
+        this._updateMenu(dt, rows.length);
+        const p = this._practice, row = rows[Menu.selectedIndex];
+        const step = Input.isPressed('right') ? 1 : (Input.isPressed('left') ? -1 : 0);
+        const cycle = (list, v) => list[(list.indexOf(v) + step + list.length) % list.length];
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v + step));
+        if (step) {
+            Audio.playMenuNav();
+            switch (row) {
+                case 'boss': p.level = cycle(BossRush.practiceLevels(), p.level); p.phase = 1; break;
+                case 'phase': p.phase = clamp(p.phase, 1, (BossTypes[ALL_LEVELS[p.level].bossType] || BossTypes.architect).phases); break;
+                case 'difficulty': p.difficulty = cycle(['casual', 'normal', 'hardcore'], p.difficulty); break;
+                case 'weapon': p.weapon = cycle(['spread', 'homing', 'laser'], p.weapon); break;
+                case 'weaponLevel': p.weaponLevel = clamp(p.weaponLevel, 1, 5); break;
+                case 'drones': p.drones = clamp(p.drones, 0, 5); break;
+            }
+        }
+        if (Input.isPressed('confirm') && (row === 'start' || row === 'back')) {
+            Audio.playMenuSelect();
+            if (row === 'start') Transition.start(() => this.startPractice(this._practice));
+            else { this.state = 'boss_menu'; Menu.selectedIndex = 1; }
+        }
+        if (Input.isPressed('back')) { this.state = 'boss_menu'; Menu.selectedIndex = 1; Audio.playMenuNav(); }
     },
 
     _updateMenu(dt, itemCount) {
@@ -956,6 +1079,27 @@ const Game = {
                 }
                 HUD.draw(ctx);
                 Menu.drawVictory(ctx);
+                break;
+            }
+
+            case 'boss_menu':
+                Menu.drawBossMenu(ctx);
+                break;
+
+            case 'practice_setup':
+                Menu.drawPracticeSetup(ctx);
+                break;
+
+            case 'practice_complete': {
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(ectx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                HUD.draw(ctx);
+                Menu.drawPracticeComplete(ctx);
                 break;
             }
 

@@ -47,7 +47,7 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 1. **Native Pixi sprites for entities** — Renderer Phase 7 (plan below). First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
 2. ~~**three.js 3D backdrops**~~ — Renderer Phase 8: done, a 3D scene for every level (play-test pending, see below).
-3. **More levels and modes** — ~~Boss Rush~~ done (play-test pending); Boss Practice next (it reuses Boss Rush), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
+3. **More levels and modes** — ~~Boss Rush~~ done (play-test pending); ~~Boss Practice~~ done, then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
 
 If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
 
@@ -136,7 +136,7 @@ Small-to-medium effort items that would improve existing features.
 
 ### Hangar Bonus Content
 These are listed as purchasable items in the Hangar shop but have no implementation behind them:
-- [ ] Boss Practice Mode — fight any previously defeated boss with selectable loadout (can reuse `BossRush`: a one-boss order and the intermission's choices)
+- [x] Boss Practice Mode — title → BOSS MODES → BOSS PRACTICE: any boss beaten in the campaign or Boss Rush (`Campaign.bossesDefeated`, derived for older saves), from a chosen phase, with a chosen difficulty, weapon, weapon level and drones; best time per boss and difficulty (`Campaign.practiceBests`); no credits or high scores (checks `bossPracticeFromChosenPhase`, `bossesDefeatedFromOldSave`). It is a mode rather than a Hangar purchase: the Hangar has no bonus-content category
 - [ ] Enemy Gallery / Bestiary — view all encountered enemies with stats, lore, and kill counts
 - [ ] Music Player — listen to the soundtrack from the menu. Now feasible: `Music.play(id)` plays any track in `MusicTracks`, and the intensity can be stepped 0–3 to hear the layers
 - [ ] Ship Color Designer — custom color picker for ship palette

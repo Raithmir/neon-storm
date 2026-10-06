@@ -225,6 +225,8 @@ const Campaign = {
     levelsUnlocked: 1,
     secretUnlocked: false,
     campaignCleared: false,   // Level 5 beaten on a preset difficulty: unlocks Boss Rush
+    bossesDefeated: [],       // boss types beaten in the campaign or Boss Rush: playable in Boss Practice
+    practiceBests: {},        // Boss Practice best times, by '<difficulty>_<bossType>'
     levelData: ALL_LEVELS,
     levelBests: {},
 
@@ -237,7 +239,31 @@ const Campaign = {
             // Saves from before the flag: the secret level or a Level 5/6 record means a clear
             this.campaignCleared = !!data.campaignCleared || this.secretUnlocked ||
                 Object.keys(this.levelBests).some(k => /_L[45]$/.test(k) && !k.startsWith('custom'));
+            this.practiceBests = data.practiceBests || {};
+            // Saves from before the list: a level is beaten if the next one is unlocked or it has a record
+            const beaten = new Set(data.bossesDefeated || []);
+            ALL_LEVELS.forEach((L, i) => {
+                const record = Object.keys(this.levelBests).some(k => k.endsWith('_L' + i));
+                if (i < this.levelsUnlocked - 1 || record || (i === 4 && this.campaignCleared)) beaten.add(L.bossType);
+            });
+            this.bossesDefeated = [...beaten];
         }
+    },
+
+    recordBoss(bossType) {
+        if (bossType && !this.bossesDefeated.includes(bossType)) {
+            this.bossesDefeated.push(bossType);
+            this.save();
+        }
+    },
+
+    // true when the time is a new best for that boss and difficulty
+    recordPractice(difficulty, bossType, time) {
+        const key = difficulty + '_' + bossType;
+        if (this.practiceBests[key] && this.practiceBests[key] <= time) return false;
+        this.practiceBests[key] = +time.toFixed(1);
+        this.save();
+        return true;
     },
 
     async save() {
@@ -245,6 +271,8 @@ const Campaign = {
             levelsUnlocked: this.levelsUnlocked,
             secretUnlocked: this.secretUnlocked,
             campaignCleared: this.campaignCleared,
+            bossesDefeated: this.bossesDefeated,
+            practiceBests: this.practiceBests,
             levelBests: this.levelBests
         });
     },
@@ -259,6 +287,9 @@ const Campaign = {
             }
         }
         if (levelIndex >= 4 && difficulty !== 'custom') this.campaignCleared = true;
+        if (ALL_LEVELS[levelIndex] && !this.bossesDefeated.includes(ALL_LEVELS[levelIndex].bossType)) {
+            this.bossesDefeated.push(ALL_LEVELS[levelIndex].bossType);
+        }
         this.save();
     },
 
@@ -296,6 +327,10 @@ const Campaign = {
 //  bosses, one upgrade out of three. Each boss is fought in its own level's
 //  backdrop, scaling and music (Game._beginRushStage). Ranked by score, with a
 //  time bonus against PAR_PER_BOSS; the run time is shown alongside.
+//
+//  Boss Practice runs on the same machinery with `practice` set: one boss
+//  (any the player has beaten), a chosen starting phase and loadout, no
+//  intermission, no credits or high scores, a best time per boss.
 // ============================================================
 const BossRush = {
     active: false,
@@ -305,6 +340,7 @@ const BossRush = {
     stageTime: 0,
     splits: [],         // clear time per boss
     choices: [],        // what the intermission offers
+    practice: null,     // Boss Practice setup when this run is a practice
     PAR_PER_BOSS: 90,       // seconds; a perfect-aim bot takes ~40-60 s on Level 1 (sim:boss-ttk)
     START_LEVEL: 2,
     START_DRONES: 1,
@@ -318,6 +354,7 @@ const BossRush = {
 
     begin() {
         this.active = true;
+        this.practice = null;
         this.order = [0, 1, 2, 3, 4];
         if (Campaign.secretUnlocked) this.order.push(5);
         this.stage = 0;
@@ -330,6 +367,22 @@ const BossRush = {
         }));
     },
 
+    beginPractice(setup) {
+        this.active = true;
+        this.practice = setup;
+        this.order = [setup.level];
+        this.stage = 0;
+        this.time = 0;
+        this.stageTime = 0;
+        this.splits = [];
+        this.choices = [];
+    },
+
+    // Levels whose boss can be practised, in campaign order
+    practiceLevels() {
+        return ALL_LEVELS.map((L, i) => i).filter(i => Campaign.bossesDefeated.includes(ALL_LEVELS[i].bossType));
+    },
+
     level() { return ALL_LEVELS[this.order[this.stage]]; },
     bossName() { const l = this.level(); return (BossTypes[l.bossType] || BossTypes.architect).name; },
     isLast() { return this.stage >= this.order.length - 1; },
@@ -337,6 +390,7 @@ const BossRush = {
     // The boss is down: record its split; true when that was the last one
     cleared() {
         this.splits.push(this.stageTime);
+        Campaign.recordBoss(this.level().bossType);
         return this.isLast();
     },
 

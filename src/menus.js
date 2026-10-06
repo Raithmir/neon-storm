@@ -27,14 +27,14 @@ const Menu = {
         UI.ship(ctx, cx, sy, 44);
 
         // Menu
-        this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS RUSH', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
-        const rushLocked = !BossRush.unlocked();
+        this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS MODES', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
+        const rushLocked = !BossRush.unlocked() && !BossRush.practiceLevels().length;
         UI.panel(ctx, cx - 250, 296, 500, 444, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
             UI.item(ctx, this.items[i], cx, 350 + i * 50, i === this.selectedIndex, { w: 440, disabled: i === 2 && rushLocked });
         }
         if (rushLocked && this.selectedIndex === 2) {
-            UI.label(ctx, 'CLEAR THE CAMPAIGN TO UNLOCK BOSS RUSH', cx, 764, '#ffaa00', 15);
+            UI.label(ctx, 'DEFEAT A BOSS TO UNLOCK BOSS PRACTICE', cx, 764, '#ffaa00', 15);
         } else if (SaveData.migrated) {
             UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 764, '#ffdd44', 14);
             UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 786, UI.DIM, 13);
@@ -96,7 +96,9 @@ const Menu = {
         UI.dim(ctx, 0.82);
         const isEndless = Game.currentLevelIndex === -1;
         this._resultsSub = null;
-        if (BossRush.active) {
+        if (BossRush.practice) {
+            this._resultsSub = [['BOSS PRACTICE — ' + BossRush.bossName() + ' — ' + (GameConfig.difficulty || '').toUpperCase(), '#ff2255', 20]];
+        } else if (BossRush.active) {
             this._resultsSub = [
                 ['BOSS RUSH — BOSS ' + (BossRush.stage + 1) + ' / ' + BossRush.order.length + ': ' + BossRush.bossName(), '#ff2255', 20],
                 ['TIME ' + BossRush.formatTime(BossRush.time), UI.TEXT, 16],
@@ -210,6 +212,90 @@ const Menu = {
 
         ctx.globalAlpha = 1;
         UI.hint(ctx, '↑↓ CHOOSE  •  ENTER TO LAUNCH  •  ESC TO QUIT');
+    },
+
+    // --- BOSS MODES: Boss Rush and Boss Practice ---
+    drawBossMenu(ctx) {
+        UI.background(ctx, { dim: 0.5 });
+        UI.title(ctx, 'BOSS MODES', 130);
+        const cx = SCREEN_W / 2;
+        const rush = BossRush.unlocked(), practice = BossRush.practiceLevels().length > 0;
+        this.items = ['BOSS RUSH', 'BOSS PRACTICE', 'BACK'];
+        const descs = [
+            rush ? 'EVERY BOSS BACK TO BACK  •  UPGRADES BETWEEN BOSSES  •  SCORE + TIME' : 'CLEAR THE CAMPAIGN TO UNLOCK',
+            practice ? 'FIGHT ANY BOSS YOU HAVE BEATEN  •  CHOOSE THE PHASE AND LOADOUT' : 'DEFEAT A BOSS TO UNLOCK',
+            '',
+        ];
+        const colors = ['#ff2255', UI.CYAN, UI.DIM];
+        for (let i = 0; i < 3; i++) {
+            const y = 300 + i * 150;
+            const selected = i === this.selectedIndex;
+            const locked = (i === 0 && !rush) || (i === 1 && !practice);
+            if (i < 2) UI.panel(ctx, cx - 380, y - 56, 760, 110, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: 700, color: colors[i], desc: descs[i], size: 30, disabled: locked });
+        }
+        if (practice) UI.label(ctx, BossRush.practiceLevels().length + ' / ' + ALL_LEVELS.length + ' BOSSES BEATEN', cx, 690, UI.DIM, 15);
+        UI.hint(ctx, '↑↓ SELECT  •  ENTER CONFIRM  •  ESC BACK');
+    },
+
+    // --- Boss Practice setup: ←/→ rows, the boss on the right with its best time ---
+    drawPracticeSetup(ctx) {
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'BOSS PRACTICE', 110);
+        const p = Game._practice, L = ALL_LEVELS[p.level];
+        const def = BossTypes[L.bossType] || BossTypes.architect;
+        const W = BossRush.WEAPONS;
+        const rows = [
+            ['BOSS', def.name],
+            ['START AT PHASE', p.phase + ' / ' + def.phases],
+            ['DIFFICULTY', p.difficulty.toUpperCase()],
+            ['WEAPON', W[p.weapon].name],
+            ['WEAPON LEVEL', 'LV' + p.weaponLevel],
+            ['DRONES', p.drones ? 'LV' + p.drones : 'NONE'],
+        ];
+        const lx = 260, lw = 760, top = 200;
+        UI.panel(ctx, lx, top, lw, 660, UI.CYAN, { title: 'SETUP' });
+        this.items = rows.map(r => r[0]).concat(['START', 'BACK']);
+        rows.forEach(([label, value], i) => {
+            const y = top + 80 + i * 70;
+            const sel = i === this.selectedIndex;
+            if (sel) {
+                ctx.fillStyle = UI.CYAN; ctx.globalAlpha = 0.1;
+                ctx.fillRect(lx + 20, y - 30, lw - 40, 46);
+                ctx.globalAlpha = 1;
+            }
+            Neon.text(ctx, label, lx + 50, y, sel ? '#ffffff' : UI.TEXT, 20, { align: 'left', halo: 0, weight: sel ? 'bold' : '' });
+            const vc = i === 3 ? W[p.weapon].color : (sel ? UI.CYAN : UI.TEXT);
+            Neon.text(ctx, (sel ? '◀  ' : '') + value + (sel ? '  ▶' : ''), lx + lw - 50, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
+        });
+        UI.item(ctx, 'START', lx + lw / 2, top + 545, this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88' });
+        UI.item(ctx, 'BACK', lx + lw / 2, top + 610, this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM });
+
+        // The boss, and the best time for this boss on this difficulty
+        this._drawThreat(ctx, L.bossType, UI.time());
+        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+        const best = Campaign.practiceBests[p.difficulty + '_' + L.bossType];
+        UI.label(ctx, best ? 'BEST ' + BossRush.formatTime(best) : 'NO BEST TIME YET', rx, 740, best ? '#00ff88' : UI.DIM, 18);
+        UI.label(ctx, 'NO CREDITS OR HIGH SCORES IN PRACTICE', rx, 776, UI.DIM, 13);
+        UI.hint(ctx, '↑↓ SELECT  •  ←→ CHANGE  •  ENTER START  •  ESC BACK');
+    },
+
+    drawPracticeComplete(ctx) {
+        UI.dim(ctx, 0.78);
+        const cx = SCREEN_W / 2, p = BossRush.practice;
+        const best = Campaign.practiceBests[p.difficulty + '_' + ALL_LEVELS[p.level].bossType];
+        UI.panel(ctx, cx - 360, 220, 720, 520, UI.CYAN);
+        Neon.text(ctx, 'BOSS DOWN', cx, 300, UI.CYAN, 58, { core: 0.45, halo: 0.55 });
+        UI.label(ctx, BossRush.bossName() + ' — ' + p.difficulty.toUpperCase() + (p.phase > 1 ? '  •  FROM PHASE ' + p.phase : ''), cx, 345, UI.TEXT, 17);
+        UI.label(ctx, 'TIME', cx, 400, UI.DIM, 15);
+        Neon.text(ctx, BossRush.formatTime(BossRush.time), cx, 446, '#ffee33', 46, { core: 0.4 });
+        if (Game._practiceNewBest) Neon.text(ctx, 'NEW BEST!', cx, 492, '#00ff88', 24, { halo: 0.4 });
+        else if (best) UI.label(ctx, 'BEST ' + BossRush.formatTime(best), cx, 492, UI.DIM, 17);
+        UI.label(ctx, 'DEATHS ' + Scoring.levelDeaths + '    BOMBS ' + Scoring.levelBombs, cx, 530, UI.TEXT, 16);
+        this.items = ['RETRY', 'CHANGE SETUP', 'MAIN MENU'];
+        for (let i = 0; i < this.items.length; i++) {
+            UI.item(ctx, this.items[i], cx, 590 + i * 48, i === this.selectedIndex, { w: 380, size: 22 });
+        }
     },
 
     // --- Boss Rush results ---
