@@ -8932,6 +8932,10 @@ void main() {
 }`,
 
     col(hex) { return new THREE.Color(hex); },
+
+    // Objects that move every frame (or in their vertex shader) keep stale
+    // bounds, which makes three cull them; these are always drawn instead
+    always(...objs) { for (const o of objs) o.frustumCulled = false; return objs[0]; },
     lerpColor(out, a, b, t) { return out.copy(a).lerp(b, t); },
 };
 
@@ -9251,6 +9255,7 @@ void main() {
     float a = exp(-r * r * 5.0) * (1.0 - smoothstep(300.0, 1400.0, vD));
     gl_FragColor = vec4(mix(uLane, vec3(1.0), 0.35) * a * 0.9, 1.0);
 }`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(pylons, caps);
             scene.add(pylons, caps);
 
             const SPEED = 75;
@@ -9279,6 +9284,325 @@ void main() {
                     }
                     pylons.instanceMatrix.needsUpdate = true;
                     capGeo.attributes.position.needsUpdate = true;
+                },
+            };
+        },
+    },
+
+    // Level 2 — The Gauntlet: low through a foundry canyon at night. A river of
+    // molten metal runs down the middle between riveted decks and conveyors,
+    // factory blocks with glowing vents and long pipes line the walls, truss
+    // gantries sweep overhead, smokestacks smoulder ahead and embers drift up
+    industrial: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(62, PLAY_W / PLAY_H, 1, 3500);
+            camera.position.set(0, 46, 0);
+            camera.rotation.x = -0.3;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uHeat: { value: 0 }, uBoss: { value: 0 },
+                uFog: { value: B3D.col(0x1a0905) }, uGlow: { value: B3D.col(0xff5a10) },
+            };
+            const FOG = `
+vec3 foundryFog(vec3 col, vec3 w, float near, float far) {
+    float d = length(w - cameraPosition);
+    float k = smoothstep(near, far, d);
+    // Smoky air lit orange from the furnaces ahead
+    vec3 f = uFog + uGlow * (0.06 + 0.1 * uHeat) * smoothstep(far * 0.4, far, d);
+    return mix(col, f, k);
+}`;
+            const rnd = B3D.rng(2024);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+
+            // Sky: smoke lit from below by the furnaces
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uHeat; uniform vec3 uGlow;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec2 q = vec2(atan(d.x, -d.z) * 3.0, e * 8.0 - uTime * 0.05);
+    float smoke = fbm3(q * 2.0 + vec2(uTime * 0.03, 0.0));
+    vec3 col = mix(vec3(0.05, 0.02, 0.015), vec3(0.012, 0.008, 0.01), smoothstep(-0.05, 0.5, e));
+    float under = exp(-max(e, 0.0) * 6.0);
+    col += uGlow * (0.18 + 0.2 * uHeat) * under * (0.4 + 0.8 * smoke);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Floor: molten channel, deck plates with rivets, conveyors
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(1400, 6000), B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uTime; uniform float uScroll; uniform float uBoss;
+varying vec3 vW;
+void main() {
+    float ax = abs(vW.x);
+    float z = vW.z - uScroll;
+    vec3 col;
+    if (ax < 16.0) {
+        // Molten metal, kept dark (enemy shots here are orange): a crusted red
+        // flow with thin hot veins, brighter toward the distance
+        float f = fbm3(vec2(vW.x * 0.08, z * 0.03 - uTime * 0.6));
+        float v = fbm3(vec2(vW.x * 0.15 + 5.0, z * 0.06 - uTime * 1.1));
+        float vein = smoothstep(0.62, 0.72, v) * smoothstep(0.82, 0.72, v);
+        vec3 lava = mix(vec3(0.12, 0.015, 0.0), vec3(0.42, 0.07, 0.0), smoothstep(0.4, 0.8, f));
+        lava += vec3(0.75, 0.3, 0.05) * vein * 0.6;
+        lava = mix(lava, lava * vec3(1.3, 0.5, 0.4), uBoss * 0.5);
+        float crust = smoothstep(9.0, 16.0, ax) * (0.6 + 0.4 * vnoise(vec2(z * 0.2, ax)));
+        float far = smoothstep(150.0, 900.0, length(vW - cameraPosition));
+        col = mix(lava * (0.75 + 0.35 * uHeat + 0.6 * far), vec3(0.05, 0.02, 0.012), crust);
+    } else {
+        // Deck plates 24 units square, seams and corner rivets, lit by the channel
+        vec2 pc = vec2(vW.x, z) / 24.0;
+        float seam = max(gridAA(pc.x, 1.2), gridAA(pc.y, 1.2));
+        vec2 f = fract(pc);
+        vec2 rv = min(f, 1.0 - f) * 24.0;
+        float rivet = smoothstep(1.1, 0.5, length(rv - 2.4));
+        float wear = vnoise(floor(pc) * 1.7) * 0.02;
+        vec3 steel = vec3(0.032, 0.038, 0.05) + wear;           // cool steel against the heat
+        col = steel * (1.0 - seam * 0.55) + vec3(0.03, 0.035, 0.045) * rivet;
+        // Conveyor belts with chevrons running faster than the deck
+        float bx = abs(ax - 48.0);
+        if (bx < 9.0) {
+            float chev = step(0.55, fract((z - uTime * 70.0) / 10.0 + bx * 0.06));
+            col = vec3(0.03, 0.025, 0.025) + vec3(0.5, 0.18, 0.02) * chev * 0.22 * smoothstep(9.0, 7.0, bx);
+            col += vec3(0.25, 0.1, 0.03) * gridAA(bx / 9.0, 1.0) * 0.5;
+        }
+        // Firelight from the channel
+        col += uGlow * (0.16 + 0.1 * uHeat) * exp(-(ax - 16.0) / 22.0);
+    }
+    gl_FragColor = vec4(foundryFog(col, vW, 120.0, 2600.0), 1.0);
+}`, U));
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.z = -2700;
+            scene.add(floor);
+
+            // Long pipes along both walls with flanges scrolling past
+            const pipeMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uScroll;
+varying vec3 vW; varying vec3 vN;
+void main() {
+    float z = vW.z - uScroll;
+    float flange = smoothstep(0.92, 0.97, fract(z / 46.0));
+    float lit = max(0.0, dot(vN, normalize(vec3(-sign(vW.x), 0.4, 0.0))));
+    vec3 col = vec3(0.04, 0.035, 0.035) + vec3(0.05, 0.045, 0.04) * pow(max(vN.y, 0.0), 6.0);
+    col += uGlow * 0.25 * lit;
+    col = mix(col, col * 2.2 + vec3(0.04, 0.02, 0.01), flange);
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2400.0), 1.0);
+}`, U);
+            const pipeGeo = new THREE.CylinderGeometry(1, 1, 6000, 16, 1, true);
+            pipeGeo.rotateX(Math.PI / 2);
+            for (const [x, y, r] of [[-76, 5, 4.5], [-86, 15, 3.5], [76, 5, 4.5], [88, 13, 4], [-80, 26, 2.5], [84, 25, 2.5]]) {
+                const p = new THREE.Mesh(pipeGeo, pipeMat);
+                p.scale.set(r, 1, r);
+                p.position.set(x, y, -2700);
+                scene.add(p);
+            }
+
+            // Factory blocks on both sides: panelled walls, glowing vents facing the channel
+            const BLOCKS = 36, BSPAN = 2600;
+            const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+            blockGeo.translate(0, 0.5, 0);
+            const blocks = new THREE.InstancedMesh(blockGeo, B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uTime;
+varying vec3 vW; varying vec3 vN; varying float vSeed;
+void main() {
+    vec3 col = vec3(0.028, 0.032, 0.042);
+    // Horizontal panel lines and vertical ribs
+    col *= 1.0 - 0.35 * gridAA(vW.y / 9.0, 1.0);
+    float side = abs(vN.x);
+    if (side > 0.5 && sign(vN.x) != sign(vW.x)) {
+        // Faces looking at the channel: rows of vents glowing orange
+        vec2 vc = vec2(vW.z / 14.0, vW.y / 22.0);
+        vec2 f = fract(vc);
+        float vent = step(0.15, f.x) * step(f.x, 0.85) * step(0.36, f.y) * step(f.y, 0.64)
+                   * step(0.45, fract(f.y * 22.0));             // louvred slats
+        float on = step(0.35, h21(floor(vc) + vSeed * 50.0));
+        float flick = 0.75 + 0.25 * sin(uTime * (2.0 + vSeed * 3.0) + floor(vc.x) * 1.7);
+        col += uGlow * vent * on * flick * (0.42 + 0.3 * uHeat);
+        col += uGlow * 0.08;                       // firelight on the facing walls
+    }
+    // Hot rim along the roofline
+    col += uGlow * 0.35 * step(0.5, vN.y) * smoothstep(0.0, 1.0, h21(vec2(vSeed, 2.0)));
+    gl_FragColor = vec4(foundryFog(col, vW, 120.0, 2400.0), 1.0);
+}`, U), BLOCKS * 2);
+            const blockDefs = [];
+            for (let i = 0; i < BLOCKS; i++) {
+                for (const side of [-1, 1]) {
+                    blockDefs.push({ x: side * (118 + rnd() * 40), z0: -i * (BSPAN / BLOCKS) - rnd() * 20,
+                        w: 50 + rnd() * 50, h: 40 + rnd() * 120, d: 50 + rnd() * 25 });
+                }
+            }
+
+            // Overhead gantries: two pillars and a truss beam, warning lights on the pillars
+            const GANTRIES = 7, GSPAN = 2100;
+            const trussMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec2 vUv; varying vec3 vN;
+void main() {
+    // Lattice: diagonal braces between chords, see-through gaps
+    vec2 q = vec2(vUv.x * 40.0, vUv.y);
+    float diag = abs(fract(q.x + q.y * 0.9) - 0.5);
+    float chord = step(vUv.y, 0.12) + step(0.88, vUv.y);
+    float web = smoothstep(0.1, 0.05, diag);
+    if (max(chord, web) < 0.5) discard;
+    vec3 col = vec3(0.03, 0.026, 0.026) + uGlow * 0.3 * max(-vN.y, 0.0);   // underside lit by the channel
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2200.0), 1.0);
+}`, U, { side: THREE.DoubleSide });
+            const gantries = [];
+            const beamGeo = new THREE.PlaneGeometry(300, 14);
+            const pillarGeo = new THREE.BoxGeometry(8, 110, 8);
+            pillarGeo.translate(0, 55, 0);
+            const pillarMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec3 vN;
+void main() {
+    vec3 col = vec3(0.04, 0.034, 0.03) + uGlow * 0.18 * max(0.0, -sign(vW.x) * vN.x);
+    col *= 1.0 - 0.3 * gridAA(vW.y / 12.0, 1.0);
+    // Hazard stripes at the foot
+    col = mix(col, vec3(0.35, 0.22, 0.02) * step(0.5, fract((vW.y + vW.x) / 6.0)), step(vW.y, 12.0) * 0.8);
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2200.0), 1.0);
+}`, U);
+            for (let i = 0; i < GANTRIES; i++) {
+                const g = new THREE.Group();
+                const beam = new THREE.Mesh(beamGeo, trussMat);
+                beam.position.y = 104;
+                const beam2 = beam.clone();
+                beam2.rotation.x = Math.PI / 2;      // top chord plane, so it reads as a box truss from below
+                beam2.position.y = 111;
+                g.add(beam, beam2);
+                for (const side of [-1, 1]) {
+                    const p = new THREE.Mesh(pillarGeo, pillarMat);
+                    p.position.x = side * 140;
+                    g.add(p);
+                }
+                g.userData.z0 = -i * (GSPAN / GANTRIES) - 300;
+                scene.add(g);
+                gantries.push(g);
+            }
+            // Warning lamps on the gantries + smokestack rims: additive points
+            const lampCount = GANTRIES * 2;
+            const lampGeo = new THREE.BufferGeometry();
+            lampGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(lampCount * 3), 3));
+            lampGeo.setAttribute('aOn', new THREE.Float32BufferAttribute(new Float32Array(lampCount), 1));
+            const lamps = new THREE.Points(lampGeo, B3D.mat(`
+attribute float aOn;
+varying float vD; varying float vOn;
+void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vD = -mv.z; vOn = aOn;
+    gl_PointSize = clamp(2200.0 / vD, 2.0, 60.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying float vD; varying float vOn;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    float a = exp(-r * r * 6.0) * vOn * (1.0 - smoothstep(400.0, 2000.0, vD));
+    gl_FragColor = vec4(vec3(1.0, 0.12, 0.05) * a, 1.0);
+}`, {}, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(blocks, lamps);
+            scene.add(blocks, lamps);
+
+            // Smokestacks ahead with glowing rims and rising smoke
+            const stackMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec3 vN; varying vec2 vUv;
+void main() {
+    vec3 col = vec3(0.03, 0.024, 0.022);
+    col *= 1.0 - 0.4 * gridAA(vW.y / 30.0, 1.0);
+    col += uGlow * (0.8 + 0.6 * uHeat) * smoothstep(0.96, 1.0, vUv.y);
+    col += uGlow * 0.05 * (1.0 - vUv.y);
+    gl_FragColor = vec4(foundryFog(col, vW, 400.0, 4200.0), 1.0);
+}`, U);
+            const smokeMat = B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uGlow; uniform float uHeat;
+varying vec2 vUv; varying float vSeed;
+void main() {
+    vec2 q = vUv;
+    float n = fbm3(vec2(q.x * 3.0 + vSeed * 10.0, q.y * 2.5 - uTime * 0.35));
+    float shape = smoothstep(0.5, 0.0, abs(q.x - 0.5 - (q.y * q.y) * 0.25)) * smoothstep(0.0, 0.15, q.y) * smoothstep(1.0, 0.4, q.y);
+    float a = smoothstep(0.35, 0.75, n) * shape;
+    vec3 col = mix(uGlow * (0.35 + 0.3 * uHeat), vec3(0.06, 0.04, 0.035), smoothstep(0.0, 0.5, q.y));
+    gl_FragColor = vec4(col, a * 0.75);
+}`, U, { transparent: true, depthWrite: false, side: THREE.DoubleSide });
+            const stackGeo = new THREE.CylinderGeometry(1, 1.25, 1, 20, 1, true);
+            stackGeo.translate(0, 0.5, 0);
+            const smokeGeo = new THREE.PlaneGeometry(1, 1);
+            smokeGeo.translate(0, 0.5, 0);
+            for (let i = 0; i < 9; i++) {
+                const side = i % 2 ? 1 : -1;
+                const x = side * (180 + rnd() * 520), z = -1500 - rnd() * 900, h = 260 + rnd() * 380, r = 18 + rnd() * 16;
+                const st = new THREE.Mesh(stackGeo, stackMat);
+                st.scale.set(r, h, r);
+                st.position.set(x, 0, z);
+                const sm = new THREE.InstancedMesh(smokeGeo, smokeMat, 1);
+                m4.compose(pos.set(x, h - 10, z), quat, scl.set(r * 8, r * 16, 1));
+                sm.setMatrixAt(0, m4);
+                scene.add(st, sm);
+            }
+
+            // Embers: sparks drifting up from the channel
+            const EMBERS = 500;
+            const eGeo = new THREE.BufferGeometry();
+            const ePos = new Float32Array(EMBERS * 3), eSeed = new Float32Array(EMBERS);
+            for (let i = 0; i < EMBERS; i++) {
+                ePos.set([(rnd() - 0.5) * 260, rnd() * 160, -rnd() * 1600], i * 3);
+                eSeed[i] = rnd();
+            }
+            eGeo.setAttribute('position', new THREE.Float32BufferAttribute(ePos, 3));
+            eGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(eSeed, 1));
+            const embers = new THREE.Points(eGeo, B3D.mat(`
+uniform float uTime; uniform float uScroll;
+attribute float aSeed;
+varying float vA;
+void main() {
+    vec3 p = position;
+    float life = fract(uTime * (0.15 + aSeed * 0.2) + aSeed);
+    p.y = mod(position.y + uTime * (12.0 + aSeed * 22.0), 170.0);
+    p.x += sin(uTime * (0.8 + aSeed) + aSeed * 30.0) * 8.0;
+    p.z = mod(position.z + uScroll, 1600.0) - 1580.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = (1.0 - life) * smoothstep(0.0, 20.0, p.y) * (1.0 - smoothstep(600.0, 1500.0, -mv.z));
+    gl_PointSize = clamp(420.0 / -mv.z, 1.5, 6.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uGlow;
+varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(mix(uGlow, vec3(1.0, 0.85, 0.4), 0.4) * vA * smoothstep(1.0, 0.2, r), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(embers);
+            scene.add(embers);
+
+            const SPEED = 80;
+            const glowBase = B3D.col(0xff5a10), glowBoss = B3D.col(0xff2008);
+            return {
+                scene, camera,
+                update(s) {
+                    const scroll = s.t * SPEED;
+                    U.uTime.value = s.t;
+                    U.uScroll.value = scroll;
+                    U.uBoss.value = s.boss;
+                    U.uHeat.value = Math.min(1, s.pulse + s.boss * 0.6);
+                    B3D.lerpColor(U.uGlow.value, glowBase, glowBoss, s.boss * 0.6);
+                    for (let i = 0; i < blockDefs.length; i++) {
+                        const b = blockDefs[i];
+                        const z = ((b.z0 + scroll) % BSPAN + BSPAN) % BSPAN - BSPAN + 60;
+                        m4.compose(pos.set(b.x, 0, z), quat, scl.set(b.w, b.h, b.d));
+                        blocks.setMatrixAt(i, m4);
+                    }
+                    blocks.instanceMatrix.needsUpdate = true;
+                    const lp = lampGeo.attributes.position.array, lo = lampGeo.attributes.aOn.array;
+                    for (let i = 0; i < GANTRIES; i++) {
+                        const g = gantries[i];
+                        g.position.z = ((g.userData.z0 + scroll) % GSPAN + GSPAN) % GSPAN - GSPAN + 80;
+                        const blink = Math.sin(s.t * 4 + i) > 0 ? 1 : 0.15;
+                        for (let side = 0; side < 2; side++) {
+                            lp.set([side ? 140 : -140, 114, g.position.z], (i * 2 + side) * 3);
+                            lo[i * 2 + side] = blink;
+                        }
+                    }
+                    lampGeo.attributes.position.needsUpdate = true;
+                    lampGeo.attributes.aOn.needsUpdate = true;
                 },
             };
         },
