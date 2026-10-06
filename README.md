@@ -99,12 +99,16 @@ Open `http://localhost:8080` — `index.html` loads PixiJS from CDN and source f
 ### Development
 Edit files in `src/`, refresh the browser. No build step needed when using the web server approach. For the single-file build, run `node build.js` after changes.
 
-### Checking gameplay changes
+### Checking changes
 ```bash
 npm install --no-save playwright   # dev-only
+npx playwright install chromium    # once per machine
 node build.js
-npm run sim:checks                 # regression checks (all should pass)
+npm run sim:checks                 # gameplay regression checks
+npm run sim:render                 # every screen and level drawn, fails on any error
+npm run sim:audio                  # every music track and sound effect rendered offline
 ```
+CI runs the same checks on every pull request. What's planned next is in `docs/neon-storm-checklist.md` (start with "Picking Up Where We Left Off").
 See `tools/sim/README.md` for the balance tools (weapon DPS, boss time-to-kill, bot play-throughs, campaign runs).
 
 ## Architecture

@@ -6,6 +6,32 @@
 
 ---
 
+## Picking Up Where We Left Off
+
+**State (Oct 2026):** γ is feature-complete and live on `main` (https://raithmir.github.io/neon-storm/): neon graphics, shader backdrops, procedural soundtrack, upgraded SFX, save versioning, gamepad prompts. `main` and `gamma` are identical. **Next:** play-test γ and fix what turns up (step 2 below), then start δ with Renderer Phase 7.
+
+**Setting up on a new machine:**
+```bash
+git clone https://github.com/Raithmir/neon-storm.git && cd neon-storm
+node build.js                       # Node 20 (as in CI); downloads vendor/ libs if missing
+npx http-server . -p 8080 -c-1      # play the dev build at http://localhost:8080
+npm install --no-save playwright && npx playwright install chromium
+npm run sim:checks && npm run sim:render && npm run sim:audio    # all should pass
+```
+Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-storm-dev-guide.md` has the detail. Claude Code picks up `CLAUDE.md` and the PixiJS skills in `.claude/skills/` automatically.
+
+**How changes flow:** work on a feature branch → PR into `gamma` (later `delta`) → PR from that branch into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For δ, create a `delta` branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-gamma.html`), `package.json`'s version, the title's γ and label in `menus.js`, and this file's title. `grep -rn gamma` finds them.
+
+**Before calling γ done:** change the title screen's "GAMMA BUILD — WORK IN PROGRESS" label (`Menu.drawTitle` in `menus.js`).
+
+**Decisions to revisit if wanted:**
+- The γ save migration resets high scores and level records (old ones are kept in storage as `highscores_v1` / `levelBests_v1`). Showing them as a "β scores" tab instead is a small change.
+- Music and SFX levels were matched by measurement, not by ear — tune them after play-testing (`MusicTracks` in `music.js`, volumes in `audio.js`; `node tools/sim/audio.js --wav` renders previews).
+
+**Tools worth knowing:** Settings → SHOW FPS for performance; the PixiJS DevTools browser extension to inspect the scene graph, textures and draw calls (useful for Phase 7); `tools/sim/` for balance and play-through bots (see its README).
+
+---
+
 ## Roadmap
 
 ### γ Gamma — finish (in progress)
@@ -30,7 +56,7 @@ If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and
 - **Mobile / touch** — needs a portrait layout (the HUD side panels don't fit a phone); only if mobile players are wanted.
 - Platform items (co-op, online leaderboards, replays, modding) — see Platform & Infrastructure.
 
-**One-time setup:** repo Settings → Pages → Source: **GitHub Actions**, so pushes to main publish to https://raithmir.github.io/neon-storm/.
+Hosting: repo Settings → Pages → Source is set to **GitHub Actions**, so pushes to `main` publish to https://raithmir.github.io/neon-storm/.
 
 ---
 
@@ -91,7 +117,7 @@ Small-to-medium effort items that would improve existing features.
 These are listed as purchasable items in the Hangar shop but have no implementation behind them:
 - [ ] Boss Practice Mode — fight any previously defeated boss with selectable loadout
 - [ ] Enemy Gallery / Bestiary — view all encountered enemies with stats, lore, and kill counts
-- [ ] Music Player — listen to soundtrack from the menu (requires music tracks)
+- [ ] Music Player — listen to the soundtrack from the menu. Now feasible: `Music.play(id)` plays any track in `MusicTracks`, and the intensity can be stepped 0–3 to hear the layers
 - [ ] Ship Color Designer — custom color picker for ship palette
 
 ---
