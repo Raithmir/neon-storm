@@ -23,7 +23,7 @@ npm run sim:render     # render smoke test: every screen + every level drawn, fa
 npm run sim:audio      # audio check: every music track + SFX rendered offline; --wav writes previews
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks`, `sim:render` and `sim:audio`. Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
+CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks` in one job and `sim:render` + `sim:audio` in a parallel one (Playwright's Chromium is cached). Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
 
 Settings → SHOW FPS displays an FPS/frame-time readout with the graphics quality and object counts (`FpsMeter` in hud.js).
 

@@ -23,7 +23,7 @@ Environment variables:
 
 | Command | What it does | Time |
 |---|---|---|
-| `npm run sim:checks` | Regression checks for the review's bugs (below). Exit code 1 if any fail | ~5 min |
+| `npm run sim:checks` | Regression checks for the review's bugs (below). Exit code 1 if any fail. Runs up to 4 checks in parallel; `SIM_JOBS=1` runs them one at a time | ~3.5 min |
 | `npm run sim:render` | Render smoke test: draws every screen and plays every level with rendering on (plus Flash Reduction and the Canvas 2D fallback). Exit code 1 on any page or console error | ~2 min |
 | `npm run sim:audio` | Audio check: renders every music track and sound effect offline through the game's mix (fails on errors, silence or clipping, including a bomb's worth of explosions at once) and checks the track chosen for each game state. Add `--wav` (`node tools/sim/audio.js --wav`) to write previews to `tools/sim/out/audio/`: one WAV per track plus `sfx-reel.wav` | ~1 min |
 | `node tools/sim/checks.js dashKeepsBombInvulnerability,laserPierces` | Run selected checks only | |

@@ -396,19 +396,25 @@ const checks = {
 
     async asteroidRateIndependentOfFps(g) {
         const r = await g.ev(() => {
+            // Spawns are random: seed Math.random and sample 10 minutes so the check is deterministic, not flaky
+            const SECS = 600, rand = Math.random;
+            let seed = 12345;
+            Math.random = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
             const perSecond = (fps) => {
                 let spawned = 0;
                 Asteroids.clear(); Asteroids.activate();
-                for (let i = 0; i < fps * 120; i++) {
+                for (let i = 0; i < fps * SECS; i++) {
                     const list = Asteroids.list; const orig = list.push;
                     list.push = function (a) { if (a.y === -40) spawned++; return orig.apply(this, arguments); };
                     Asteroids.update(1 / fps);
                     list.push = orig;
                 }
                 Asteroids.clear();
-                return +(spawned / 120).toFixed(2);
+                return +(spawned / SECS).toFixed(2);
             };
-            return { perSec60Hz: perSecond(60), perSec144Hz: perSecond(144) };
+            try { return { perSec60Hz: perSecond(60), perSec144Hz: perSecond(144) }; }
+            finally { Math.random = rand; }
         });
         const ratio = r.perSec144Hz / r.perSec60Hz;
         return { section: '§6', expect: 'Asteroid spawn rate is the same at 60 Hz and 144 Hz (±25%)',
@@ -543,20 +549,33 @@ const checks = {
 
 (async () => {
     const only = process.argv[2] ? process.argv[2].split(',') : null;
-    const results = [];
-    for (const [name, fn] of Object.entries(checks)) {
-        if (only && !only.includes(name)) continue;
-        const g = await launch();
-        let r;
-        try {
-            r = await fn(g);
-        } catch (e) {
-            r = { expect: '(error)', pass: false, evidence: { error: e.message } };
+    const names = Object.keys(checks).filter(n => !only || only.includes(n));
+    // Each check gets its own browser, so they run in parallel (SIM_JOBS, default one per CPU, max 4)
+    const jobs = Math.max(1, +process.env.SIM_JOBS || Math.min(4, require('os').cpus().length));
+    const results = new Array(names.length);
+    let next = 0, printed = 0;
+    const print = () => {   // report in definition order as results arrive
+        for (; printed < names.length && results[printed]; printed++) {
+            const r = results[printed];
+            console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name} ${r.section || ''} — ${r.expect}\n      ${JSON.stringify(r.evidence)}`);
         }
-        await g.close();
-        results.push({ name, ...r });
-        console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${name} ${r.section || ''} — ${r.expect}\n      ${JSON.stringify(r.evidence)}`);
-    }
+    };
+    const worker = async () => {
+        while (next < names.length) {
+            const i = next++, name = names[i];
+            const g = await launch();
+            let r;
+            try {
+                r = await checks[name](g);
+            } catch (e) {
+                r = { expect: '(error)', pass: false, evidence: { error: e.message } };
+            }
+            await g.close();
+            results[i] = { name, ...r };
+            print();
+        }
+    };
+    await Promise.all(Array.from({ length: jobs }, worker));
     writeResult('checks.json', results);
     const failed = results.filter(r => !r.pass).length;
     console.log(`\n${results.length - failed} passed, ${failed} failed`);
