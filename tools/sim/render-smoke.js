@@ -66,6 +66,17 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
         ['game_over', () => { EndRunBonus.calculate(false, 0, 10, 10, 60, false); Game.state = 'game_over'; }],
         ['victory', () => { EndRunBonus.calculate(true, 2, 10, 10, 60, true); Game.state = 'victory'; }],
         ['campaign_complete', () => { Game.state = 'campaign_complete'; }],
+        ['title (boss rush locked)', () => { Campaign.campaignCleared = false; Game.state = 'title'; Menu.selectedIndex = 2; }],
+        ['rush_intermission (weapon pick)', () => { Campaign.campaignCleared = true; Game.startBossRush('normal'); }],
+        ['rush_intermission (upgrade)', () => {
+            BossRush.apply(BossRush.choices[0]); BossRush.splits = [62.4]; BossRush.time = 62.4; BossRush.stage = 1;
+            BossRush.rollChoices(); Game._showRushIntermission();
+        }],
+        ['rush game_over', () => { Game.state = 'game_over'; }],
+        ['rush_complete', () => {
+            BossRush.splits = [62, 71, 80, 55, 90]; BossRush.time = 358; BossRush.bonuses(true); Game.state = 'rush_complete';
+        }],
+        ['high_scores (boss rush tab)', () => { Game.state = 'high_scores'; Menu.highScoreTab = 4; BossRush.active = false; }],
         ['gamepad prompts', () => {
             Input.lastDevice = 'pad';
             for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }

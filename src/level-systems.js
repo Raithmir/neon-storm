@@ -224,6 +224,7 @@ const Campaign = {
     currentLevel: 0,
     levelsUnlocked: 1,
     secretUnlocked: false,
+    campaignCleared: false,   // Level 5 beaten on a preset difficulty: unlocks Boss Rush
     levelData: ALL_LEVELS,
     levelBests: {},
 
@@ -233,6 +234,9 @@ const Campaign = {
             this.levelsUnlocked = data.levelsUnlocked || 1;
             this.secretUnlocked = data.secretUnlocked || false;
             this.levelBests = data.levelBests || {};
+            // Saves from before the flag: the secret level or a Level 5/6 record means a clear
+            this.campaignCleared = !!data.campaignCleared || this.secretUnlocked ||
+                Object.keys(this.levelBests).some(k => /_L[45]$/.test(k) && !k.startsWith('custom'));
         }
     },
 
@@ -240,6 +244,7 @@ const Campaign = {
         await Storage.set('campaign', {
             levelsUnlocked: this.levelsUnlocked,
             secretUnlocked: this.secretUnlocked,
+            campaignCleared: this.campaignCleared,
             levelBests: this.levelBests
         });
     },
@@ -253,6 +258,7 @@ const Campaign = {
                 this.secretUnlocked = true;
             }
         }
+        if (levelIndex >= 4 && difficulty !== 'custom') this.campaignCleared = true;
         this.save();
     },
 
@@ -280,4 +286,118 @@ const Campaign = {
         if (index === 5) return this.secretUnlocked;
         return index < this.levelsUnlocked;
     }
+};
+
+// ============================================================
+//  BOSS RUSH — the campaign's bosses back to back
+//  Unlocked by clearing the main campaign (Campaign.campaignCleared). The
+//  Echo joins only once the secret level is unlocked. Before the first boss
+//  the player picks a weapon (at START_LEVEL, with START_DRONES); between
+//  bosses, one upgrade out of three. Each boss is fought in its own level's
+//  backdrop, scaling and music (Game._beginRushStage). Ranked by score, with a
+//  time bonus against PAR_PER_BOSS; the run time is shown alongside.
+// ============================================================
+const BossRush = {
+    active: false,
+    order: [],          // level indices, one boss each
+    stage: 0,           // index into order
+    time: 0,            // run time (seconds of play while a boss is up)
+    stageTime: 0,
+    splits: [],         // clear time per boss
+    choices: [],        // what the intermission offers
+    PAR_PER_BOSS: 75,
+    START_LEVEL: 2,
+    START_DRONES: 1,
+    WEAPONS: {
+        spread: { name: 'SPREAD SHOT', color: '#ff8c00', desc: 'A WIDE FAN OF SHOTS' },
+        homing: { name: 'HOMING MISSILES', color: '#00ff88', desc: 'MISSILES THAT SEEK THEIR TARGET' },
+        laser:  { name: 'LASER BEAM', color: '#4488ff', desc: 'A PIERCING BEAM, HIGH DAMAGE' },
+    },
+
+    unlocked() { return Campaign.campaignCleared; },
+
+    begin() {
+        this.active = true;
+        this.order = [0, 1, 2, 3, 4];
+        if (Campaign.secretUnlocked) this.order.push(5);
+        this.stage = 0;
+        this.time = 0;
+        this.stageTime = 0;
+        this.splits = [];
+        this.choices = Object.keys(this.WEAPONS).map(w => ({
+            kind: 'weapon', weapon: w, label: this.WEAPONS[w].name,
+            desc: this.WEAPONS[w].desc + ' — STARTS AT LV' + this.START_LEVEL, color: this.WEAPONS[w].color,
+        }));
+    },
+
+    level() { return ALL_LEVELS[this.order[this.stage]]; },
+    bossName() { const l = this.level(); return (BossTypes[l.bossType] || BossTypes.architect).name; },
+    isLast() { return this.stage >= this.order.length - 1; },
+
+    // The boss is down: record its split; true when that was the last one
+    cleared() {
+        this.splits.push(this.stageTime);
+        return this.isLast();
+    },
+
+    // Three upgrades that would still help: the weapon upgrade whenever it is
+    // possible, plus two of the rest at random
+    rollChoices() {
+        const P = Player, W = this.WEAPONS;
+        const up = P.primaryWeapon !== 'none' && P.primaryLevel < 5 ? {
+            kind: 'upgrade', label: W[P.primaryWeapon].name + ' LV' + (P.primaryLevel + 1),
+            desc: 'WEAPON POWER +1', color: W[P.primaryWeapon].color,
+        } : null;
+        const rest = [];
+        for (const w of Object.keys(W)) {
+            if (w === P.primaryWeapon) continue;
+            rest.push({ kind: 'weapon', weapon: w, label: 'SWITCH TO ' + W[w].name,
+                desc: 'KEEPS YOUR WEAPON LEVEL (LV' + Math.max(1, P.primaryLevel) + ')', color: W[w].color });
+        }
+        if (P.droneLevel < 5) rest.push({ kind: 'drones', label: 'DRONES LV' + (P.droneLevel + 1), desc: 'MORE DRONE FIREPOWER', color: '#cc44ff' });
+        if (P.lives < 9) rest.push({ kind: 'life', label: '+1 LIFE', desc: 'AN EXTRA SHIP', color: '#00ffff' });
+        if (GameConfig.bombs.enabled) rest.push({ kind: 'bombs', label: '+2 BOMBS', desc: 'CLEAR THE SCREEN WHEN IT GETS BAD', color: '#ff8800' });
+        for (let i = rest.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [rest[i], rest[j]] = [rest[j], rest[i]];
+        }
+        this.choices = (up ? [up] : []).concat(rest).slice(0, 3);
+    },
+
+    apply(c) {
+        const P = Player;
+        switch (c.kind) {
+            case 'weapon':
+                P.primaryLevel = this.stage === 0 && this.splits.length === 0 ? this.START_LEVEL : Math.max(1, P.primaryLevel);
+                P.primaryWeapon = c.weapon;
+                break;
+            case 'upgrade': P.primaryLevel = Math.min(5, P.primaryLevel + 1); break;
+            case 'drones': P.droneLevel = Math.min(5, P.droneLevel + 1); break;
+            case 'life': P.lives++; break;
+            case 'bombs': P.bombs += 2; break;
+        }
+    },
+
+    // End-of-run bonuses (into EndRunBonus, so the results screen lists them)
+    bonuses(won) {
+        const k = GameConfig.scoreMultiplier;
+        const list = [];
+        if (won) {
+            const par = this.PAR_PER_BOSS * this.order.length;
+            const timeBonus = Math.floor(Math.max(0, par - this.time) * 250 * k);
+            if (timeBonus > 0) list.push({ label: 'TIME BONUS', value: timeBonus });
+            list.push({ label: 'LIVES BONUS', value: Math.floor(Player.lives * 10000 * k) });
+        }
+        const chain = Math.floor(Scoring.maxChain * 50 * k);
+        if (chain > 0) list.push({ label: 'CHAIN BONUS', value: chain });
+        EndRunBonus.bonuses = list;
+        EndRunBonus.totalBonus = list.reduce((s, b) => s + b.value, 0);
+        return EndRunBonus.totalBonus;
+    },
+
+    // m:ss.t
+    formatTime(t) {
+        const m = Math.floor(t / 60), s = t - m * 60;
+        return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+    },
 };

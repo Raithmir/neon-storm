@@ -154,7 +154,7 @@ const HUD = {
         let y = 40;
         UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
         Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
-        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        const board = HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
         if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
         y += 154;
 
@@ -193,11 +193,15 @@ const HUD = {
         const isEndless = Game.currentLevelIndex === -1;
         const lvlData = ALL_LEVELS[Game.currentLevelIndex];
         const escort = Escort.active && Escort.alive;
-        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
-        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
-            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
-        const mins = Math.floor(WaveSystem.levelTimer / 60);
-        const secs = Math.floor(WaveSystem.levelTimer % 60);
+        const rush = BossRush.active;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN, { title: rush ? 'BOSS RUSH' : (isEndless ? 'ENDLESS' : 'MISSION') });
+        Neon.text(ctx, rush ? 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName()
+            : isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', rush ? 20 : 22, { align: 'left', halo: 0.2 });
+        // Boss Rush shows its run clock instead of the level time
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const mins = Math.floor(clock / 60);
+        const secs = Math.floor(clock % 60);
         const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
         UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
         Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });

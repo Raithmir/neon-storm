@@ -483,6 +483,49 @@ const checks = {
             pass: r.maxEnemies <= r.cap + 5, evidence: r };
     },
 
+    // --- Boss Rush ------------------------------------------------------------
+
+    async bossRushRunsEveryBoss(g) {
+        await g.ev(() => {
+            Campaign.campaignCleared = true; Campaign.secretUnlocked = true;
+            Game.startBossRush('normal');
+            Player.invincible = true; Player.invincibleTimer = 1e9;
+        });
+        const stages = [];
+        for (let k = 0; k < 10; k++) {
+            const st = await g.ev(() => Game.state);
+            if (st !== 'rush_intermission') break;
+            await g.run(600);   // past the input guard
+            const pick = await g.ev(() => {
+                // Take the weapon upgrade when it's offered, so the loadout grows
+                const i = Math.max(0, BossRush.choices.findIndex(c => c.kind === 'upgrade'));
+                Menu.selectedIndex = i;
+                return { kind: BossRush.choices[i].kind, before: Player.primaryWeapon + Player.primaryLevel };
+            });
+            await g.tap('Enter');
+            await g.run(3000);
+            const stage = await g.ev(() => ({ state: Game.state, boss: Boss.bossType, bg: Background.bgType,
+                level: Game.currentLevelIndex, weapon: Player.primaryWeapon + Player.primaryLevel }));
+            // Finish the boss: final phase, armour off, one big hit, then the defeat sequence
+            await g.run(6000);
+            await g.ev(() => {
+                Player.invincible = true; Player.invincibleTimer = 1e9;
+                Boss.phase = Boss.totalPhases; Boss.armor = []; Boss.phaseTransitionTimer = 0; Boss.hit(1e6, true);
+            });
+            await g.run(9000);
+            stages.push({ ...pick, ...stage });
+        }
+        const end = await g.ev(() => ({ state: Game.state, splits: BossRush.splits.length, of: BossRush.order.length,
+            time: +BossRush.time.toFixed(1), score: Scoring.score, initials: HighScores.enteringInitials }));
+        const bosses = stages.map(s => s.boss);
+        const expected = ['architect', 'furnace', 'leviathan', 'interceptor_duo', 'nexus', 'echo'];
+        const pass = end.state === 'rush_complete' && end.splits === 6 && end.of === 6 &&
+            JSON.stringify(bosses) === JSON.stringify(expected) && stages.every(s => s.state === 'playing') &&
+            stages[0].weapon.endsWith(String(2)) && end.time > 0 && end.initials;
+        return { section: 'δ', expect: 'Boss Rush fights every boss in order in its own level, applies the picks, and ends on the results with a score entry',
+            pass, evidence: { stages, end } };
+    },
+
     // --- Save data ------------------------------------------------------------
 
     async saveMigrationKeepsProgress(g) {

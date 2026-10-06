@@ -83,7 +83,7 @@ const SaveData = {
 //  HIGH SCORE SYSTEM
 // ============================================================
 const HighScores = {
-    boards: { casual: [], normal: [], hardcore: [], endless: [] },
+    boards: { casual: [], normal: [], hardcore: [], endless: [], bossrush: [] },
     sessionScores: [],
     loaded: false,
     enteringInitials: false,
@@ -99,7 +99,7 @@ const HighScores = {
             this.boards = data;
         }
         // Ensure arrays exist
-        ['casual', 'normal', 'hardcore', 'endless'].forEach(d => {
+        ['casual', 'normal', 'hardcore', 'endless', 'bossrush'].forEach(d => {
             if (!this.boards[d]) this.boards[d] = [];
         });
         this.loaded = true;
@@ -128,6 +128,9 @@ const HighScores = {
             won: details ? details.won : false,
             date: new Date().toLocaleDateString()
         };
+        if (details && details.mode === 'bossrush') {
+            entry.bosses = details.bosses; entry.of = details.of; entry.time = details.time;
+        }
         if (!this.boards[board]) this.boards[board] = [];
         this.boards[board].push(entry);
         this.boards[board].sort((a, b) => b.score - a.score);

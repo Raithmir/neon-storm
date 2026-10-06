@@ -4655,7 +4655,7 @@ const SaveData = {
 //  HIGH SCORE SYSTEM
 // ============================================================
 const HighScores = {
-    boards: { casual: [], normal: [], hardcore: [], endless: [] },
+    boards: { casual: [], normal: [], hardcore: [], endless: [], bossrush: [] },
     sessionScores: [],
     loaded: false,
     enteringInitials: false,
@@ -4671,7 +4671,7 @@ const HighScores = {
             this.boards = data;
         }
         // Ensure arrays exist
-        ['casual', 'normal', 'hardcore', 'endless'].forEach(d => {
+        ['casual', 'normal', 'hardcore', 'endless', 'bossrush'].forEach(d => {
             if (!this.boards[d]) this.boards[d] = [];
         });
         this.loaded = true;
@@ -4700,6 +4700,9 @@ const HighScores = {
             won: details ? details.won : false,
             date: new Date().toLocaleDateString()
         };
+        if (details && details.mode === 'bossrush') {
+            entry.bosses = details.bosses; entry.of = details.of; entry.time = details.time;
+        }
         if (!this.boards[board]) this.boards[board] = [];
         this.boards[board].push(entry);
         this.boards[board].sort((a, b) => b.score - a.score);
@@ -9666,6 +9669,7 @@ const Campaign = {
     currentLevel: 0,
     levelsUnlocked: 1,
     secretUnlocked: false,
+    campaignCleared: false,   // Level 5 beaten on a preset difficulty: unlocks Boss Rush
     levelData: ALL_LEVELS,
     levelBests: {},
 
@@ -9675,6 +9679,9 @@ const Campaign = {
             this.levelsUnlocked = data.levelsUnlocked || 1;
             this.secretUnlocked = data.secretUnlocked || false;
             this.levelBests = data.levelBests || {};
+            // Saves from before the flag: the secret level or a Level 5/6 record means a clear
+            this.campaignCleared = !!data.campaignCleared || this.secretUnlocked ||
+                Object.keys(this.levelBests).some(k => /_L[45]$/.test(k) && !k.startsWith('custom'));
         }
     },
 
@@ -9682,6 +9689,7 @@ const Campaign = {
         await Storage.set('campaign', {
             levelsUnlocked: this.levelsUnlocked,
             secretUnlocked: this.secretUnlocked,
+            campaignCleared: this.campaignCleared,
             levelBests: this.levelBests
         });
     },
@@ -9695,6 +9703,7 @@ const Campaign = {
                 this.secretUnlocked = true;
             }
         }
+        if (levelIndex >= 4 && difficulty !== 'custom') this.campaignCleared = true;
         this.save();
     },
 
@@ -9722,6 +9731,120 @@ const Campaign = {
         if (index === 5) return this.secretUnlocked;
         return index < this.levelsUnlocked;
     }
+};
+
+// ============================================================
+//  BOSS RUSH — the campaign's bosses back to back
+//  Unlocked by clearing the main campaign (Campaign.campaignCleared). The
+//  Echo joins only once the secret level is unlocked. Before the first boss
+//  the player picks a weapon (at START_LEVEL, with START_DRONES); between
+//  bosses, one upgrade out of three. Each boss is fought in its own level's
+//  backdrop, scaling and music (Game._beginRushStage). Ranked by score, with a
+//  time bonus against PAR_PER_BOSS; the run time is shown alongside.
+// ============================================================
+const BossRush = {
+    active: false,
+    order: [],          // level indices, one boss each
+    stage: 0,           // index into order
+    time: 0,            // run time (seconds of play while a boss is up)
+    stageTime: 0,
+    splits: [],         // clear time per boss
+    choices: [],        // what the intermission offers
+    PAR_PER_BOSS: 75,
+    START_LEVEL: 2,
+    START_DRONES: 1,
+    WEAPONS: {
+        spread: { name: 'SPREAD SHOT', color: '#ff8c00', desc: 'A WIDE FAN OF SHOTS' },
+        homing: { name: 'HOMING MISSILES', color: '#00ff88', desc: 'MISSILES THAT SEEK THEIR TARGET' },
+        laser:  { name: 'LASER BEAM', color: '#4488ff', desc: 'A PIERCING BEAM, HIGH DAMAGE' },
+    },
+
+    unlocked() { return Campaign.campaignCleared; },
+
+    begin() {
+        this.active = true;
+        this.order = [0, 1, 2, 3, 4];
+        if (Campaign.secretUnlocked) this.order.push(5);
+        this.stage = 0;
+        this.time = 0;
+        this.stageTime = 0;
+        this.splits = [];
+        this.choices = Object.keys(this.WEAPONS).map(w => ({
+            kind: 'weapon', weapon: w, label: this.WEAPONS[w].name,
+            desc: this.WEAPONS[w].desc + ' — STARTS AT LV' + this.START_LEVEL, color: this.WEAPONS[w].color,
+        }));
+    },
+
+    level() { return ALL_LEVELS[this.order[this.stage]]; },
+    bossName() { const l = this.level(); return (BossTypes[l.bossType] || BossTypes.architect).name; },
+    isLast() { return this.stage >= this.order.length - 1; },
+
+    // The boss is down: record its split; true when that was the last one
+    cleared() {
+        this.splits.push(this.stageTime);
+        return this.isLast();
+    },
+
+    // Three upgrades that would still help: the weapon upgrade whenever it is
+    // possible, plus two of the rest at random
+    rollChoices() {
+        const P = Player, W = this.WEAPONS;
+        const up = P.primaryWeapon !== 'none' && P.primaryLevel < 5 ? {
+            kind: 'upgrade', label: W[P.primaryWeapon].name + ' LV' + (P.primaryLevel + 1),
+            desc: 'WEAPON POWER +1', color: W[P.primaryWeapon].color,
+        } : null;
+        const rest = [];
+        for (const w of Object.keys(W)) {
+            if (w === P.primaryWeapon) continue;
+            rest.push({ kind: 'weapon', weapon: w, label: 'SWITCH TO ' + W[w].name,
+                desc: 'KEEPS YOUR WEAPON LEVEL (LV' + Math.max(1, P.primaryLevel) + ')', color: W[w].color });
+        }
+        if (P.droneLevel < 5) rest.push({ kind: 'drones', label: 'DRONES LV' + (P.droneLevel + 1), desc: 'MORE DRONE FIREPOWER', color: '#cc44ff' });
+        if (P.lives < 9) rest.push({ kind: 'life', label: '+1 LIFE', desc: 'AN EXTRA SHIP', color: '#00ffff' });
+        if (GameConfig.bombs.enabled) rest.push({ kind: 'bombs', label: '+2 BOMBS', desc: 'CLEAR THE SCREEN WHEN IT GETS BAD', color: '#ff8800' });
+        for (let i = rest.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [rest[i], rest[j]] = [rest[j], rest[i]];
+        }
+        this.choices = (up ? [up] : []).concat(rest).slice(0, 3);
+    },
+
+    apply(c) {
+        const P = Player;
+        switch (c.kind) {
+            case 'weapon':
+                P.primaryLevel = this.stage === 0 && this.splits.length === 0 ? this.START_LEVEL : Math.max(1, P.primaryLevel);
+                P.primaryWeapon = c.weapon;
+                break;
+            case 'upgrade': P.primaryLevel = Math.min(5, P.primaryLevel + 1); break;
+            case 'drones': P.droneLevel = Math.min(5, P.droneLevel + 1); break;
+            case 'life': P.lives++; break;
+            case 'bombs': P.bombs += 2; break;
+        }
+    },
+
+    // End-of-run bonuses (into EndRunBonus, so the results screen lists them)
+    bonuses(won) {
+        const k = GameConfig.scoreMultiplier;
+        const list = [];
+        if (won) {
+            const par = this.PAR_PER_BOSS * this.order.length;
+            const timeBonus = Math.floor(Math.max(0, par - this.time) * 250 * k);
+            if (timeBonus > 0) list.push({ label: 'TIME BONUS', value: timeBonus });
+            list.push({ label: 'LIVES BONUS', value: Math.floor(Player.lives * 10000 * k) });
+        }
+        const chain = Math.floor(Scoring.maxChain * 50 * k);
+        if (chain > 0) list.push({ label: 'CHAIN BONUS', value: chain });
+        EndRunBonus.bonuses = list;
+        EndRunBonus.totalBonus = list.reduce((s, b) => s + b.value, 0);
+        return EndRunBonus.totalBonus;
+    },
+
+    // m:ss.t
+    formatTime(t) {
+        const m = Math.floor(t / 60), s = t - m * 60;
+        return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+    },
 };
 
 
@@ -13106,7 +13229,7 @@ const HUD = {
         let y = 40;
         UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
         Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
-        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        const board = HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
         if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
         y += 154;
 
@@ -13145,11 +13268,15 @@ const HUD = {
         const isEndless = Game.currentLevelIndex === -1;
         const lvlData = ALL_LEVELS[Game.currentLevelIndex];
         const escort = Escort.active && Escort.alive;
-        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
-        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
-            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
-        const mins = Math.floor(WaveSystem.levelTimer / 60);
-        const secs = Math.floor(WaveSystem.levelTimer % 60);
+        const rush = BossRush.active;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN, { title: rush ? 'BOSS RUSH' : (isEndless ? 'ENDLESS' : 'MISSION') });
+        Neon.text(ctx, rush ? 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName()
+            : isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', rush ? 20 : 22, { align: 'left', halo: 0.2 });
+        // Boss Rush shows its run clock instead of the level time
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const mins = Math.floor(clock / 60);
+        const secs = Math.floor(clock % 60);
         const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
         UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
         Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });
@@ -13275,15 +13402,17 @@ const Menu = {
         UI.ship(ctx, cx, sy, 44);
 
         // Menu
-        this.items = ['NEW GAME', 'ENDLESS MODE', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
-        UI.panel(ctx, cx - 250, 300, 500, 415, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
+        this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS RUSH', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
+        const rushLocked = !BossRush.unlocked();
+        UI.panel(ctx, cx - 250, 296, 500, 444, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
-            UI.item(ctx, this.items[i], cx, 358 + i * 54, i === this.selectedIndex, { w: 440 });
+            UI.item(ctx, this.items[i], cx, 350 + i * 50, i === this.selectedIndex, { w: 440, disabled: i === 2 && rushLocked });
         }
-
-        if (SaveData.migrated) {
-            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 752, '#ffdd44', 14);
-            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 774, UI.DIM, 13);
+        if (rushLocked && this.selectedIndex === 2) {
+            UI.label(ctx, 'CLEAR THE CAMPAIGN TO UNLOCK BOSS RUSH', cx, 764, '#ffaa00', 15);
+        } else if (SaveData.migrated) {
+            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 764, '#ffdd44', 14);
+            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 786, UI.DIM, 13);
         }
         UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
         UI.label(ctx, 'DELTA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
@@ -13292,6 +13421,8 @@ const Menu = {
     drawDifficultySelect(ctx) {
         UI.background(ctx, { dim: 0.45 });
         UI.title(ctx, 'SELECT DIFFICULTY', 130);
+        const mode = Game._pendingBossRush ? 'BOSS RUSH' : (Game._pendingEndless ? 'ENDLESS MODE' : '');
+        if (mode) UI.label(ctx, mode, SCREEN_W / 2, 178, UI.MAGENTA, 18);
 
         this.items = ['CASUAL', 'NORMAL', 'HARDCORE', 'CUSTOM', 'BACK'];
         const descs = [
@@ -13341,7 +13472,12 @@ const Menu = {
         UI.dim(ctx, 0.82);
         const isEndless = Game.currentLevelIndex === -1;
         this._resultsSub = null;
-        if (isEndless) {
+        if (BossRush.active) {
+            this._resultsSub = [
+                ['BOSS RUSH — BOSS ' + (BossRush.stage + 1) + ' / ' + BossRush.order.length + ': ' + BossRush.bossName(), '#ff2255', 20],
+                ['TIME ' + BossRush.formatTime(BossRush.time), UI.TEXT, 16],
+            ];
+        } else if (isEndless) {
             const mins = Math.floor(WaveSystem.levelTimer / 60);
             const secs = Math.floor(WaveSystem.levelTimer % 60);
             this._resultsSub = [
@@ -13378,6 +13514,96 @@ const Menu = {
                 UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 48, i === this.selectedIndex, {
                     w: 380, size: 22, color: this.items[i] === 'NEXT LEVEL' ? '#00ff88' : UI.CYAN,
                 });
+            }
+        }
+    },
+
+    // Right-hand THREAT panel: a boss drawn in neon with its name and phase count
+    _drawThreat(ctx, bossType, t) {
+        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+        const def = BossTypes[bossType] || BossTypes.architect;
+        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
+        const fake = Object.create(Boss);
+        fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = bossType;
+        ctx.save();
+        ctx.translate(rx, 470);
+        ctx.scale(1.7, 1.7);
+        const draw = Boss._neon[bossType] || Boss._neon.architect;
+        draw.call(fake, ctx, Boss.radius, def.colors[0], false);
+        ctx.restore();
+        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
+        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+    },
+
+    // --- Boss Rush intermission: the next boss's backdrop, the run so far, a choice ---
+    drawRushIntermission(ctx) {
+        const t = Game.briefingTimer;
+        const inK = Math.min(1, t * 2);
+        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
+        ctx.fillStyle = side;
+        ctx.fillRect(0, 0, PLAY_X, SCREEN_H);
+        ctx.fillRect(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H);
+        ctx.fillStyle = 'rgba(3, 0, 10, 0.5)';
+        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
+
+        ctx.globalAlpha = inK;
+        const cx = SCREEN_W / 2, R = BossRush, n = R.order.length;
+        const first = R.stage === 0 && R.splits.length === 0;
+        UI.label(ctx, 'BOSS RUSH  •  BOSS ' + (R.stage + 1) + ' / ' + n, cx, 250, UI.MAGENTA, 18);
+        Neon.text(ctx, R.bossName(), cx, 312, '#ff2255', 50, { core: 0.45, halo: 0.55 });
+        UI.label(ctx, 'TIME ' + R.formatTime(R.time), cx, 352, UI.TEXT, 17);
+
+        // The choice
+        UI.panel(ctx, cx - 320, 392, 640, 380, UI.CYAN, { title: first ? 'CHOOSE YOUR WEAPON' : 'CHOOSE AN UPGRADE' });
+        this.items = R.choices.map(c => c.label);
+        R.choices.forEach((c, i) => {
+            UI.item(ctx, c.label, cx, 480 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26 });
+        });
+
+        // The run so far (left): bosses with their split times, then the loadout
+        const lx = PLAY_X / 2;
+        UI.panel(ctx, lx - 220, 260, 440, 70 + n * 56, UI.MAGENTA, { title: 'BOSSES' });
+        for (let i = 0; i < n; i++) {
+            const L = ALL_LEVELS[R.order[i]];
+            const def = BossTypes[L.bossType] || BossTypes.architect;
+            const y = 330 + i * 56;
+            const cur = i === R.stage, done = i < R.splits.length;
+            UI.pip(ctx, lx - 180, y - 6, 7, cur ? '#ff2255' : UI.MAGENTA, cur || done);
+            Neon.text(ctx, def.name, lx - 158, y, cur ? '#ffffff' : (done ? UI.TEXT : UI.DIM), cur ? 19 : 16,
+                { align: 'left', halo: cur ? 0.35 : 0, weight: cur ? 'bold' : '' });
+            if (done) UI.label(ctx, R.formatTime(R.splits[i]), lx + 190, y, '#00ff88', 15, 'right');
+        }
+        const ly = 330 + n * 56 + 20;
+        UI.panel(ctx, lx - 220, ly, 440, 150, UI.CYAN, { title: 'LOADOUT' });
+        const P = Player;
+        const wName = P.primaryWeapon === 'none' ? 'BASE SHOT' : R.WEAPONS[P.primaryWeapon].name + ' LV' + P.primaryLevel;
+        UI.label(ctx, first ? 'WEAPON — CHOOSE BELOW' : wName, lx - 190, ly + 62, UI.TEXT, 17, 'left');
+        UI.label(ctx, 'DRONES LV' + P.droneLevel + '    LIVES ' + P.lives + (GameConfig.bombs.enabled ? '    BOMBS ' + P.bombs : ''),
+            lx - 190, ly + 100, UI.DIM, 15, 'left');
+
+        this._drawThreat(ctx, R.level().bossType, t);
+
+        ctx.globalAlpha = 1;
+        UI.hint(ctx, '↑↓ CHOOSE  •  ENTER TO LAUNCH  •  ESC TO QUIT');
+    },
+
+    // --- Boss Rush results ---
+    drawRushComplete(ctx) {
+        UI.dim(ctx, 0.78);
+        const R = BossRush;
+        this._resultsSub = [
+            ['ALL ' + R.order.length + ' BOSSES DOWN — ' + (GameConfig.difficulty || '').toUpperCase(), UI.TEXT, 17],
+            ['TIME ' + R.formatTime(R.time), '#00ff88', 22],
+            [R.splits.map((s, i) => (i + 1) + ': ' + R.formatTime(s)).join('    '), UI.DIM, 14],
+        ];
+        const endY = this._results(ctx, 100, 'RUSH COMPLETE', UI.CYAN, '#ffee33', HighScores.enteringInitials ? 190 : 130);
+        if (HighScores.enteringInitials) {
+            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
+        } else {
+            this.items = ['PLAY AGAIN', 'MAIN MENU'];
+            for (let i = 0; i < this.items.length; i++) {
+                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 50, i === this.selectedIndex, { w: 380, size: 22 });
             }
         }
     },
@@ -13425,19 +13651,7 @@ const Menu = {
         }
 
         // Threat assessment (right): the level's boss in neon
-        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
-        const def = BossTypes[lvl.bossType] || BossTypes.architect;
-        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
-        const fake = Object.create(Boss);
-        fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = lvl.bossType;
-        ctx.save();
-        ctx.translate(rx, 470);
-        ctx.scale(1.7, 1.7);
-        const draw = Boss._neon[lvl.bossType] || Boss._neon.architect;
-        draw.call(fake, ctx, Boss.radius, def.colors[0], false);
-        ctx.restore();
-        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
-        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+        this._drawThreat(ctx, lvl.bossType, t);
 
         // Start prompt with an auto-start countdown
         ctx.globalAlpha = inK * (Renderer.calm() ? 1 : 0.7 + Math.sin(t * 5) * 0.3);
@@ -13554,9 +13768,9 @@ const Menu = {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'HIGH SCORES', 110);
 
-        const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'SESSION'];
-        const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'session'];
-        const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#cc44ff'];
+        const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'BOSS RUSH', 'SESSION'];
+        const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'bossrush', 'session'];
+        const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#ff2255', '#cc44ff'];
         UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
 
         const color = colors[this.highScoreTab];
@@ -13569,10 +13783,10 @@ const Menu = {
         if (rows.length === 0) {
             UI.label(ctx, session ? 'NO SCORES THIS SESSION' : 'NO SCORES YET', SCREEN_W / 2, top + 300, UI.DIM, 20);
         } else {
-            const isEndless = tabKey === 'endless';
+            const isEndless = tabKey === 'endless', isRush = tabKey === 'bossrush';
             const cols = session
                 ? [['#', 40], ['NAME', 100], ['SCORE', 200], ['INFO', 460], ['MODE', 620]]
-                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : 'LEVEL', 560], ['DATE', 680]];
+                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : (isRush ? 'TIME' : 'LEVEL'), 560], ['DATE', 680]];
             for (const [h, x] of cols) UI.label(ctx, h, px + x, top + 48, UI.DIM, 14, 'left');
             rows.forEach((entry, i) => {
                 const ey = top + 90 + i * 50;
@@ -13588,11 +13802,15 @@ const Menu = {
                 cell(entry.initials, 100);
                 cell(entry.score.toLocaleString(), 200);
                 if (session) {
-                    cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?') : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
+                    cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?')
+                        : entry.mode === 'bossrush' ? 'RUSH ' + (entry.won ? BossRush.formatTime(entry.time || 0) : (entry.bosses || 0) + '/' + (entry.of || '?'))
+                        : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
                     cell((entry.difficulty || '').toUpperCase(), 620, UI.DIM, 17);
                 } else {
                     cell((entry.maxChain || 0).toString(), 440);
-                    cell(isEndless ? 'W' + (entry.wave || '?') : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
+                    cell(isEndless ? 'W' + (entry.wave || '?')
+                        : isRush ? (entry.won ? BossRush.formatTime(entry.time || 0) + ' ✓' : (entry.bosses || 0) + '/' + (entry.of || '?'))
+                        : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
                     cell(entry.date || '', 680, UI.DIM, 16);
                 }
             });
@@ -13636,6 +13854,8 @@ const Game = {
     briefingText: '',
     briefingTimer: 0,
     _pendingEndless: false,
+    _pendingBossRush: false,
+    _rushDifficulty: 'normal',
     _gameOverPending: false,
 
     async init() {
@@ -13714,11 +13934,27 @@ const Game = {
         Asteroids.clear();
         Escort.init();
         EndlessMode.active = false; // Ensure endless mode is off for campaign
+        BossRush.active = false;
         Boss.active = false;
         Boss.defeated = false;
         WaveSystem.loadLevel(levelData);
+        this._applyLevelLook(levelData);
+
+        // Activate level-specific systems
+        if (levelData.hasAsteroids) Asteroids.activate();
+        if (levelData.hasEscort) Escort.activate();
+
+        this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this._levelStartWeapon = Player.primaryWeapon;
+        this._levelStartDrones = Player.droneLevel;
+        this.state = 'playing';
+    },
+
+    // A level's backdrop, bloom, colour grade and chroma (campaign levels and Boss Rush stages)
+    _applyLevelLook(lvl) {
         Background.init();
-        Background.bgType = levelData.bgType || 'synthwave';
+        Background.bgType = lvl.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
         // Bloom intensity per level theme
@@ -13747,16 +13983,6 @@ const Game = {
 
         // Level 6 glitch atmosphere — persistent chromatic aberration
         Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
-
-        // Activate level-specific systems
-        if (levelData.hasAsteroids) Asteroids.activate();
-        if (levelData.hasEscort) Escort.activate();
-
-        this.endRunProcessed = false; this._gameOverPending = false;
-        this._lastWaveClearTimer = null;
-        this._levelStartWeapon = Player.primaryWeapon;
-        this._levelStartDrones = Player.droneLevel;
-        this.state = 'playing';
     },
 
     startGame(difficulty) {
@@ -13790,12 +14016,103 @@ const Game = {
         WaveSystem.waveTime = 0;
         WaveSystem.bossActive = false;
         EndlessMode.init();
+        BossRush.active = false;
         Background.init();
         Background.bgType = 'synthwave';
         Background._generateNearLayer();
         this.endRunProcessed = false; this._gameOverPending = false;
         this._lastWaveClearTimer = null;
         this.state = 'playing';
+    },
+
+    // Boss Rush: the weapon pick comes first (an intermission), then the bosses in order
+    startBossRush(difficulty) {
+        SaveData.migrated = null;
+        if (difficulty !== 'custom') {
+            GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
+            GameConfig.difficulty = difficulty;
+        } else {
+            GameConfig = CustomDifficulty.getConfig();
+        }
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity || 1.0;
+        this._rushDifficulty = difficulty;
+        this._retryLoadout = null;
+        EndlessMode.active = false;
+        Player.init();
+        Player.droneLevel = BossRush.START_DRONES;
+        Scoring.reset();
+        BossRush.begin();
+        this._showRushIntermission();
+    },
+
+    // Between bosses: the next boss's backdrop plays behind the upgrade choice
+    _showRushIntermission() {
+        const lvl = BossRush.level();
+        this.currentLevelIndex = BossRush.order[BossRush.stage];
+        this._applyLevelLook(lvl);
+        Scheduler.clear();
+        Enemies.clear();
+        Enemies.enemyBullets.clear();
+        Player.bullets.clear();
+        Particles.clear();
+        PowerUps.clear();
+        Boss.active = false;
+        Boss.defeated = false;
+        this.briefingTimer = 0;
+        Menu.selectedIndex = 0;
+        this.state = 'rush_intermission';
+    },
+
+    _beginRushStage() {
+        const lvl = BossRush.level();
+        this.currentLevelIndex = BossRush.order[BossRush.stage];
+        this.applyLevelScaling(lvl.levelScale || 1.0, GameConfig._baseDensity);
+        Scoring.softReset();
+        Scoring.beginLevel();
+        Scheduler.clear();
+        Enemies.clear();
+        Particles.clear();
+        PowerUps.clear();
+        Asteroids.clear();
+        Escort.init();
+        WaveSystem.waves = [];
+        WaveSystem.currentWaveIndex = 0;
+        WaveSystem.levelTimer = 0;
+        WaveSystem.waveTime = 0;
+        this._applyLevelLook(lvl);
+        Player.x = PLAY_W / 2;
+        Player.y = PLAY_H - 80;
+        Player.bullets.clear();
+        Boss.init(lvl.bossType || 'architect');
+        Audio.playBossWarning();
+        WaveSystem.bossActive = true;
+        BossRush.stageTime = 0;
+        this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this.state = 'playing';
+    },
+
+    // A Boss Rush boss is down: on to the next intermission, or the results
+    _rushBossDown() {
+        if (this.state !== 'playing') return;
+        if (BossRush.cleared()) {
+            this._processEndRun(true);
+            this.state = 'rush_complete';
+            Menu.selectedIndex = 0;
+            return;
+        }
+        BossRush.stage++;
+        BossRush.rollChoices();
+        Transition.start(() => this._showRushIntermission());
+    },
+
+    // Restart whatever mode the current run is in
+    _restartRun() {
+        const diff = GameConfig.difficulty;
+        if (BossRush.active) this.startBossRush(this._rushDifficulty);
+        else if (this.currentLevelIndex === -1) this.startEndless(diff);
+        else this.startLevel(this.currentLevelIndex, diff, false);
     },
 
     showBriefing(levelIndex, continuing = false) {
@@ -13814,6 +14131,20 @@ const Game = {
     _processEndRun(won) {
         if (this.endRunProcessed) return;
         this.endRunProcessed = true;
+
+        if (BossRush.active) {
+            Scoring.score += BossRush.bonuses(won);
+            NeonCredits.earn(Scoring.score, GameConfig.difficulty);
+            const entry = {
+                score: Scoring.score, maxChain: Scoring.maxChain, graze: Scoring.grazeCount, mode: 'bossrush',
+                bosses: BossRush.splits.length, of: BossRush.order.length, time: +BossRush.time.toFixed(1), won,
+            };
+            // Custom difficulty has no leaderboard, as in the campaign
+            if (GameConfig.difficulty !== 'custom' && HighScores.qualifies(Scoring.score, 'bossrush')) {
+                HighScores.startInitialEntry(Scoring.score, 'bossrush', entry);
+            }
+            return;
+        }
 
         const isEndless = this.currentLevelIndex === -1;
 
@@ -13890,8 +14221,12 @@ const Game = {
 
         switch (this.state) {
             case 'title':
-                this._updateMenu(dt, 7);
+                this._updateMenu(dt, 8);
                 if (Input.isPressed('confirm')) {
+                    if (Menu.selectedIndex === 2 && !BossRush.unlocked()) {
+                        Audio.playMenuNav();   // locked: the title explains how to unlock it
+                        break;
+                    }
                     Audio.playMenuSelect();
                     switch (Menu.selectedIndex) {
                         case 0: // New Game
@@ -13903,25 +14238,30 @@ const Game = {
                             this._pendingEndless = true;
                             Menu.selectedIndex = 1;
                             break;
-                        case 2: // Hangar
+                        case 2: // Boss Rush
+                            this.state = 'difficulty_select';
+                            this._pendingBossRush = true;
+                            Menu.selectedIndex = 1;
+                            break;
+                        case 3: // Hangar
                             this.state = 'hangar';
                             Hangar.categoryIndex = 0;
                             Hangar.mode = 'categories';
                             break;
-                        case 3: // High Scores
+                        case 4: // High Scores
                             this.state = 'high_scores';
                             Menu.selectedIndex = 0;
                             Menu.highScoreTab = 1;
                             break;
-                        case 4: // Achievements
+                        case 5: // Achievements
                             this.state = 'achievements';
                             Menu.selectedIndex = 0;
                             break;
-                        case 5: // Settings
+                        case 6: // Settings
                             this.state = 'settings';
                             Settings.selectedIndex = 0;
                             break;
-                        case 6: // How to Play
+                        case 7: // How to Play
                             this.state = 'tutorial';
                             Tutorial.pageIndex = 0;
                             break;
@@ -13938,6 +14278,9 @@ const Game = {
                         if (self._pendingEndless) {
                             self._pendingEndless = false;
                             Transition.start(() => { self.startEndless(diff); });
+                        } else if (self._pendingBossRush) {
+                            self._pendingBossRush = false;
+                            Transition.start(() => { self.startBossRush(diff); });
                         } else {
                             GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[diff]));
                             GameConfig.difficulty = diff;
@@ -13958,6 +14301,7 @@ const Game = {
                             CustomDifficulty.init();
                             break;
                         case 4:
+                            this._pendingEndless = this._pendingBossRush = false;
                             this.state = 'title';
                             Menu.selectedIndex = 0;
                             break;
@@ -13965,6 +14309,7 @@ const Game = {
                 }
                 if (Input.isPressed('back')) {
                     this._pendingEndless = false;
+                    this._pendingBossRush = false;
                     this.state = 'title';
                     Menu.selectedIndex = 0;
                     Audio.playMenuNav();
@@ -13973,7 +14318,10 @@ const Game = {
 
             case 'custom_difficulty': {
                 const cdResult = CustomDifficulty.update();
-                if (cdResult === 'start') {
+                if (cdResult === 'start' && this._pendingBossRush) {
+                    this._pendingBossRush = false;
+                    Transition.start(() => { this.startBossRush('custom'); });
+                } else if (cdResult === 'start') {
                     GameConfig = CustomDifficulty.getConfig();
                     GameConfig.fireMode = Settings.values.fireMode;
                     this.currentLevelIndex = CustomDifficulty.startLevel || 0;
@@ -13990,7 +14338,7 @@ const Game = {
                 const hResult = Hangar.update();
                 if (hResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 2;
+                    Menu.selectedIndex = 3;
                     Audio.playMenuNav();
                 }
                 break;
@@ -14000,7 +14348,7 @@ const Game = {
                 const tResult = Tutorial.update();
                 if (tResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 6;
+                    Menu.selectedIndex = 7;
                     Audio.playMenuNav();
                 }
                 break;
@@ -14030,7 +14378,7 @@ const Game = {
                 const settingsResult = Settings.update();
                 if (settingsResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 5;
+                    Menu.selectedIndex = 6;
                     Audio.playMenuNav();
                 } else if (settingsResult === 'controls') {
                     this.state = 'controls';
@@ -14050,16 +14398,16 @@ const Game = {
 
             case 'high_scores':
                 if (Input.isPressed('left')) {
-                    Menu.highScoreTab = (Menu.highScoreTab - 1 + 5) % 5;
+                    Menu.highScoreTab = (Menu.highScoreTab - 1 + 6) % 6;
                     Audio.playMenuNav();
                 }
                 if (Input.isPressed('right')) {
-                    Menu.highScoreTab = (Menu.highScoreTab + 1) % 5;
+                    Menu.highScoreTab = (Menu.highScoreTab + 1) % 6;
                     Audio.playMenuNav();
                 }
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
-                    Menu.selectedIndex = 3;
+                    Menu.selectedIndex = 4;
                     Audio.playMenuNav();
                 }
                 break;
@@ -14067,7 +14415,7 @@ const Game = {
             case 'achievements':
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
-                    Menu.selectedIndex = 4;
+                    Menu.selectedIndex = 5;
                     Audio.playMenuNav();
                 }
                 break;
@@ -14162,7 +14510,7 @@ const Game = {
 
                 // Boss trigger — campaign only. The boss comes once every wave has spawned and the
                 // field is clear, or after a grace period (stragglers then retreat), so a level can't stall.
-                if (!EndlessMode.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
+                if (!EndlessMode.active && !BossRush.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
                     if (this._lastWaveClearTimer === null) this._lastWaveClearTimer = 0;
                     this._lastWaveClearTimer += dt;
                     if (Enemies.list.length === 0 || this._lastWaveClearTimer >= this.BOSS_GRACE_SECONDS) {
@@ -14176,10 +14524,16 @@ const Game = {
 
                 // Boss update
                 if (Boss.active) {
+                    // Boss Rush clock: runs while a boss is up and fighting
+                    if (BossRush.active && Boss.entered && !Boss.defeated) {
+                        BossRush.time += dt;
+                        BossRush.stageTime += dt;
+                    }
                     Boss.update(dt, Player.x, Player.y);
                     if (!Boss.active && Boss.defeated) {
                         WaveSystem.bossActive = false;
-                        Scheduler.after(1.5, () => this._endLevel(true));
+                        if (BossRush.active) Scheduler.after(1.5, () => this._rushBossDown());
+                        else Scheduler.after(1.5, () => this._endLevel(true));
                     }
                 }
 
@@ -14198,9 +14552,7 @@ const Game = {
                         Audio.playMenuSelect();
                         if (this.pauseConfirm === 'restart') {
                             this.pauseConfirm = null;
-                            const isEndless = this.currentLevelIndex === -1;
-                            const diff = GameConfig.difficulty;
-                            Transition.start(() => { isEndless ? this.startEndless(diff) : this.startLevel(this.currentLevelIndex, diff, false); });
+                            Transition.start(() => this._restartRun());
                         } else if (this.pauseConfirm === 'quit') {
                             this.pauseConfirm = null;
                             Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; });
@@ -14233,11 +14585,8 @@ const Game = {
                     this._updateMenu(dt, 2);
                     if (Input.isPressed('confirm')) {
                         Audio.playMenuSelect();
-                        const lvlIdx = this.currentLevelIndex;
-                        const diff = GameConfig.difficulty;
-                        const isEndless = lvlIdx === -1;
                         switch (Menu.selectedIndex) {
-                            case 0: Transition.start(() => { isEndless ? this.startEndless(diff) : this.startLevel(lvlIdx, diff, false); }); break;
+                            case 0: Transition.start(() => this._restartRun()); break;
                             case 1: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; }); break;
                         }
                     }
@@ -14274,6 +14623,33 @@ const Game = {
                                 case 1: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; }); break;
                             }
                         }
+                    }
+                }
+                break;
+
+            case 'rush_intermission':
+                this.briefingTimer += dt;
+                Background.update(dt);
+                this._updateMenu(dt, BossRush.choices.length);
+                if (Input.isPressed('confirm') && this.briefingTimer > 0.4) {
+                    Audio.playMenuSelect();
+                    BossRush.apply(BossRush.choices[Menu.selectedIndex]);
+                    Transition.start(() => this._beginRushStage());
+                }
+                if (Input.isPressed('back')) {
+                    Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; });
+                }
+                break;
+
+            case 'rush_complete':
+                if (HighScores.enteringInitials) {
+                    HighScores.updateInitialEntry();
+                } else {
+                    this._updateMenu(dt, 2);
+                    if (Input.isPressed('confirm')) {
+                        Audio.playMenuSelect();
+                        if (Menu.selectedIndex === 0) Transition.start(() => this.startBossRush(this._rushDifficulty));
+                        else Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; });
                     }
                 }
                 break;
@@ -14426,6 +14802,30 @@ const Game = {
                 break;
             }
 
+            case 'rush_intermission': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                Menu.drawRushIntermission(ctx);
+                break;
+            }
+
+            case 'rush_complete': {
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(ectx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                HUD.draw(ctx);
+                Menu.drawRushComplete(ctx);
+                break;
+            }
+
             case 'campaign_complete':
                 Menu.drawCampaignComplete(ctx);
                 break;
@@ -14557,6 +14957,7 @@ const Music = {
         const lvl = EndlessMode.active ? 'endless' : (MusicTracks['level_' + (Game.currentLevelIndex + 1)] ? 'level_' + (Game.currentLevelIndex + 1) : 'level_1');
         switch (Game.state) {
             case 'briefing':
+            case 'rush_intermission':
                 return { id: lvl, intensity: 0 };
             case 'playing':
             case 'paused': {
@@ -14572,6 +14973,7 @@ const Music = {
                 return { id: lvl, intensity: surge ? 3 : n, surge };
             }
             case 'victory':
+            case 'rush_complete':
             case 'campaign_complete':
                 return { id: 'results', intensity: 0 };
             case 'game_over':
