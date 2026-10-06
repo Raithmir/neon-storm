@@ -8,7 +8,7 @@
 
 ## Picking Up Where We Left Off
 
-**State (Oct 2026):** γ is done and live on `main` (https://raithmir.github.io/neon-storm/): neon graphics, shader backdrops, procedural soundtrack, upgraded SFX, save versioning, gamepad prompts. **Next:** δ, starting with Renderer Phase 7.
+**State (Oct 2026):** δ is live on `main` (https://raithmir.github.io/neon-storm/) and `main` = `delta`: entities and glow drawn natively in Pixi (Phase 7), three.js 3D backdrops for all six levels (Phase 8), Boss Rush and Boss Practice. **Next:** apply the play-test notes on the 3D backdrops, Boss Rush (starting loadout, upgrade choices, par time) and Boss Practice; then new levels designed around the 3D backdrops.
 
 **Setting up on a new machine:**
 ```bash
