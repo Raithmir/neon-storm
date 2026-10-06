@@ -305,7 +305,7 @@ const BossRush = {
     stageTime: 0,
     splits: [],         // clear time per boss
     choices: [],        // what the intermission offers
-    PAR_PER_BOSS: 75,
+    PAR_PER_BOSS: 90,       // seconds; a perfect-aim bot takes ~40-60 s on Level 1 (sim:boss-ttk)
     START_LEVEL: 2,
     START_DRONES: 1,
     WEAPONS: {
