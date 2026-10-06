@@ -14,6 +14,8 @@
 //    uSurge   0..1 while Neon Surge is active
 //    uDim     0..~0.35, darkens the backdrop under dense bullet patterns
 //    uCalm    1 when Flash Reduction is on: no glitch flicker or strobing
+//    uHaze    boss centre (px), radius (px), strength 0..1: heat haze
+//             behind the boss; every shader starts with p = haze(...)
 //
 //  Readability rule: keep backdrops darker and less saturated than
 //  anything the player can collide with. Pixel coords: p = vUV * uRes,
@@ -45,6 +47,7 @@ uniform float uBoss;
 uniform float uSurge;
 uniform float uDim;
 uniform float uCalm;
+uniform vec4 uHaze;
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -56,6 +59,16 @@ float noise(vec2 p) {
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+// Heat haze: shimmer the backdrop behind the boss (a tall ellipse around it,
+// with the noise drifting upward like rising air)
+vec2 haze(vec2 p) {
+    if (uHaze.w <= 0.0) return p;
+    vec2 d = (p - uHaze.xy) / vec2(uHaze.z, uHaze.z * 1.4);
+    float f = smoothstep(1.0, 0.2, length(d)) * uHaze.w;
+    if (f <= 0.0) return p;
+    vec2 q = p * 0.035 + vec2(0.0, uTime * 1.8);
+    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 9.0 * f;
 }
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
@@ -92,7 +105,7 @@ const BACKDROP_SHADERS = {
     // sun and wireframe mountains on a horizon near the top
     synthwave: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float W = uRes.x;
     float cx = W * 0.5;
     float hy = uRes.y * 0.27;
@@ -159,7 +172,7 @@ void main() {
     // conveyor belts, pipes, and dark girders sweeping past overhead
     industrial: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec2 w = vec2(p.x, p.y - uTime * 70.0);
     float T = 96.0;
     vec2 cell = floor(w / T);
@@ -224,7 +237,7 @@ void main() {
     // Level 3 — deep space: parallax star layers, drifting nebula, a ringed planet
     space: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec3 col = vec3(0.004, 0.006, 0.025);
     // Nebula
     vec2 np = vec2(p.x, p.y - uTime * 6.0) * 0.004;
@@ -274,7 +287,7 @@ void main() {
     // moonlit cloud layers streaming past at two speeds
     sky: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // City lights far below: clusters of lamps in districts, a few winding main roads
     vec2 cp = vec2(p.x, p.y - uTime * 30.0);
     float district = smoothstep(0.45, 0.72, fbm(cp * 0.004));
@@ -313,7 +326,7 @@ void main() {
     digital: `
 vec2 edgeHash(vec2 c) { return vec2(hash(c + 0.5), hash(c + 17.3)); }
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float S = 40.0;
     vec2 w = vec2(p.x, p.y - uTime * 80.0);
     vec2 c = floor(w / S);
@@ -368,7 +381,7 @@ void main() {
     // Level 6 — a collapsing tunnel into the void, with glitch bands and tears
     void: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // Glitch bands: horizontal strips occasionally jump sideways
     float band = floor(p.y / 22.0);
     float gt = floor(uTime * 9.0);

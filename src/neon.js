@@ -25,8 +25,9 @@ const Neon = {
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
-    ATLAS_SIZE: 2048,
-    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    ATLAS_SIZE: 1024,        // each page is a GPU texture re-uploaded whole when a sprite is
+                             // baked into it, so pages stay small (4 MB per upload)
+    ATLAS_MAX_PAGES: 16,     // past this the cache is flushed and rebuilt on demand
     _pages: [],
     _sprites: new Map(),
 
@@ -64,6 +65,7 @@ const Neon = {
         c.scale(this.BAKE_SCALE, this.BAKE_SCALE);
         drawFn(c, a, b, cArg, d);
         c.restore();
+        page.canvas.__gpuDirty = true;   // GpuCtx re-uploads the page on its next use
         this._sprites.set(key, spr);
         return spr;
     },
@@ -82,8 +84,18 @@ const Neon = {
     },
 
     flush() {
+        if (typeof GpuCtx !== 'undefined') for (const p of this._pages) GpuCtx.release(p.canvas);
         this._pages.length = 0;
         this._sprites.clear();
+    },
+
+    // Draw fn() through Pixi filters (e.g. Renderer.shieldGlow()). Only the
+    // GPU path can filter one object; plain Canvas 2D draws it unfiltered.
+    filtered(ctx, filters, fn) {
+        if (!filters || !ctx.beginLayer) { fn(); return; }
+        ctx.beginLayer(filters);
+        fn();
+        ctx.endLayer();
     },
 
     // Wall-clock seconds for idle animation (spins, pulses) that

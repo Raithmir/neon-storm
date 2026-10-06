@@ -11,8 +11,9 @@
 // For each level it simulates ~45 s of play and ~25 s of the boss fight
 // (including its final phase), drawing the gameplay layers every few
 // frames and a full frame (PixiJS render included) now and then. It then
-// repeats one level with Flash Reduction on and one on the Canvas 2D
-// fallback (no WebGL). Takes a few minutes.
+// repeats one level with Flash Reduction on, one on the Canvas 2D
+// fallback (no WebGL) and one with the shader backdrop instead of the 3D
+// scene. A level fails if its 3D scene broke and fell back. Takes a few minutes.
 
 const { launch, writeResult } = require('./harness');
 
@@ -65,6 +66,21 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
         ['game_over', () => { EndRunBonus.calculate(false, 0, 10, 10, 60, false); Game.state = 'game_over'; }],
         ['victory', () => { EndRunBonus.calculate(true, 2, 10, 10, 60, true); Game.state = 'victory'; }],
         ['campaign_complete', () => { Game.state = 'campaign_complete'; }],
+        ['title (boss rush locked)', () => { Campaign.campaignCleared = false; Game.state = 'title'; Menu.selectedIndex = 2; }],
+        ['rush_intermission (weapon pick)', () => { Campaign.campaignCleared = true; Game.startBossRush('normal'); }],
+        ['rush_intermission (upgrade)', () => {
+            BossRush.apply(BossRush.choices[0]); BossRush.splits = [62.4]; BossRush.time = 62.4; BossRush.stage = 1;
+            BossRush.rollChoices(); Game._showRushIntermission();
+        }],
+        ['rush game_over', () => { Game.state = 'game_over'; }],
+        ['rush_complete', () => {
+            BossRush.splits = [62, 71, 80, 55, 90]; BossRush.time = 358; BossRush.bonuses(true); Game.state = 'rush_complete';
+        }],
+        ['high_scores (boss rush tab)', () => { Game.state = 'high_scores'; Menu.highScoreTab = 4; BossRush.active = false; }],
+        ['boss_menu', () => { Campaign.bossesDefeated = ['architect', 'furnace']; Game.state = 'boss_menu'; }],
+        ['practice_setup', () => { Game._openPracticeSetup(); }],
+        ['practice game_over', () => { Game.startPractice(Game._practice); Game.state = 'game_over'; }],
+        ['practice_complete', () => { BossRush.time = 64.2; Game._practiceNewBest = true; Game.state = 'practice_complete'; }],
         ['gamepad prompts', () => {
             Input.lastDevice = 'pad';
             for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }
@@ -85,20 +101,22 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
     const runs = [0, 1, 2, 3, 4, 5].map(l => ({ lvl: l, label: 'level ' + (l + 1) }));
     runs.push({ lvl: 5, label: 'level 6 (flash reduction)', calm: true });
     runs.push({ lvl: 2, label: 'level 3 (Canvas 2D fallback)', fallback: true });
+    runs.push({ lvl: 3, label: 'level 4 (shader backdrop, 3D off)', no3d: true });
     for (const run of runs) {
         const r = await step(run.label, (run) => {
             Settings.values.flashReduction = !!run.calm;
+            Settings.values.backdrop3d = !run.no3d;
             if (run.fallback) Renderer.usePixi = false;
             Game.startLevel(run.lvl, 'normal', false);
             Player.invincible = true; Player.invincibleTimer = 1e9;
             Player.primaryWeapon = ['spread', 'homing', 'laser'][run.lvl % 3];
             Player.primaryLevel = 4; Player.droneLevel = 3;
-            const pctx = Renderer.getPlayCtx();
+            const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
             const layers = () => {
                 Renderer.beginFrame();
-                Background.draw(pctx); Asteroids.draw(pctx); Escort.draw(pctx); PowerUps.draw(pctx);
-                Enemies.draw(pctx); Player.draw(pctx); if (Boss.active) Boss.draw(pctx);
-                Particles.draw(pctx); Scoring.drawPopups(pctx);
+                Background.draw(pctx); Asteroids.draw(ectx); Escort.draw(ectx); PowerUps.draw(ectx);
+                Enemies.draw(ectx); Player.draw(ectx); if (Boss.active) Boss.draw(ectx);
+                Particles.draw(ectx); Scoring.drawPopups(ectx);
             };
             const stats = { maxEnemies: 0, boss: null, bombs: 0 };
             for (let f = 0; f < 60 * 70; f++) {
@@ -120,7 +138,9 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             if (Boss.active) Boss.hit(1e6);
             for (let f = 0; f < 60 * 4; f++) { Game.update(1 / 60); if (f % 10 === 0) Game.draw(); }
             Settings.values.flashReduction = false;
+            Settings.values.backdrop3d = true;
             if (run.fallback) Renderer.usePixi = true;
+            if (Backdrop3D.broken) throw new Error('3D backdrop failed and fell back to the shader');
             return stats;
         }, run);
         results.levels[run.label] = { ok: r.ok, ...(r.out || {}), errors: r.errs };

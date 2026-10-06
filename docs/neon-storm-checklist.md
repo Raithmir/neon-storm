@@ -1,4 +1,4 @@
-# NEON STORM γ — Remaining Work
+# NEON STORM δ — Remaining Work
 
 *All completed items removed. This is the single tracker for what's left to do.*
 
@@ -8,7 +8,7 @@
 
 ## Picking Up Where We Left Off
 
-**State (Oct 2026):** γ is feature-complete and live on `main` (https://raithmir.github.io/neon-storm/): neon graphics, shader backdrops, procedural soundtrack, upgraded SFX, save versioning, gamepad prompts. `main` and `gamma` are identical. **Next:** play-test γ and fix what turns up (step 2 below), then start δ with Renderer Phase 7.
+**State (Oct 2026):** δ is live on `main` (https://raithmir.github.io/neon-storm/) and `main` = `delta`: entities and glow drawn natively in Pixi (Phase 7), three.js 3D backdrops for all six levels (Phase 8), Boss Rush and Boss Practice. **Next:** apply the play-test notes on the 3D backdrops, Boss Rush (starting loadout, upgrade choices, par time) and Boss Practice; then new levels designed around the 3D backdrops.
 
 **Setting up on a new machine:**
 ```bash
@@ -20,9 +20,9 @@ npm run sim:checks && npm run sim:render && npm run sim:audio    # all should pa
 ```
 Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-storm-dev-guide.md` has the detail. Claude Code picks up `CLAUDE.md` and the PixiJS skills in `.claude/skills/` automatically.
 
-**How changes flow:** work on a feature branch → PR into `gamma` (later `delta`) → PR from that branch into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For δ, create a `delta` branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-gamma.html`), `package.json`'s version, the title's γ and label in `menus.js`, and this file's title. `grep -rn gamma` finds them.
+**How changes flow:** work on a feature branch → PR into `delta` → PR from `delta` into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For the next version (ε), create its branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-delta.html`; delete the old `dist/` HTML, since Pages copies `dist/neon-storm-*.html`), `package.json`'s version, the title's δ and label in `menus.js`, the branch list in `.github/workflows/ci.yml`, and this file's title. `grep -rn delta` finds them.
 
-**Before calling γ done:** change the title screen's "GAMMA BUILD — WORK IN PROGRESS" label (`Menu.drawTitle` in `menus.js`).
+**Before calling δ done:** change the title screen's "DELTA BUILD — WORK IN PROGRESS" label (`Menu.drawTitle` in `menus.js`).
 
 **Decisions to revisit if wanted:**
 - The γ save migration resets high scores and level records (old ones are kept in storage as `highscores_v1` / `levelBests_v1`). Showing them as a "β scores" tab instead is a small change.
@@ -34,20 +34,20 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 ## Roadmap
 
-### γ Gamma — finish (in progress)
+### γ Gamma — done
 
 1. ~~**Music and SFX**~~ — done: procedural soundtrack and upgraded SFX (see Audio). Tune by ear after play-testing.
-2. **Play-test fixes** — the gameplay review follow-ups below, plus anything found in γ's visuals and audio. Use Settings → SHOW FPS for performance reports.
+2. ~~**Play-test fixes**~~ — done: γ play-tested and accepted.
 3. ~~**Save-data versioning**~~ — done: `SAVE_VERSION` / `SaveData.migrate()` in `storage.js`; the γ step archives and resets score tables and keeps everything else.
 4. ~~**Gamepad button prompts**~~ — done: menus show [A]/[B]/D-PAD when a controller was used last.
 
-γ is feature-complete once the play-test fixes are in.
+γ shipped as v0.3.0.
 
-### δ Delta — renderer and content (next)
+### δ Delta — renderer and content (in progress)
 
-1. **Native Pixi sprites for entities** — Renderer Phase 7. First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
-2. **three.js 3D backdrops** — Renderer Phase 8. Prototype the sky city, then decide how far to take it.
-3. **More levels and modes** — Boss Rush / Boss Practice first (every boss exists already), then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
+1. **Native Pixi sprites for entities** — Renderer Phase 7 (plan below). First, because it changes how every entity is drawn (new art only gets built once, the new way) and frees the frame time 3D needs.
+2. ~~**three.js 3D backdrops**~~ — Renderer Phase 8: done, a 3D scene for every level (play-test pending, see below).
+3. **More levels and modes** — ~~Boss Rush~~ done (play-test pending); ~~Boss Practice~~ done, then new levels designed around what the 3D backdrops can do; adaptive rank and ship selection are candidates too.
 
 If δ grows too large, ship Pixi sprites + Boss Rush as δ and move three.js and new levels to ε Epsilon.
 
@@ -84,19 +84,40 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 - [x] Phase 4: Weapons & Combat VFX — enemy hit spark bursts with GPU glow flash, enhanced death explosions with white-hot flash particles and glow burst, bomb visual upgrade with centre glow + white-hot core + secondary ring, shield hit ripple shockwave with glow
 - [x] Phase 5: Screen-Space Effects — chromatic aberration on damage/death/bomb (intensity scales with severity), screen flash on death/boss defeat/bomb, Level 6 persistent chromatic aberration, CRT scanline filter (toggleable via Renderer.setCRT)
 - [x] Phase 6: Dynamic Lighting — power-up pulsing glow halos, boss core glow (brightens on hit flash), enemy death glow bursts, shield hit glow pulse (all via existing additive glow layer)
-- [ ] Phase 7: Native Pixi sprites for entities — enemies, mid-bosses, bosses, player, power-ups, asteroids and the escort are still drawn on the offscreen Canvas 2D, which is re-uploaded to the GPU every frame (1440×1920 at high quality), probably the biggest per-frame cost. Turn the `Neon.sprite()` atlas pages into Pixi textures and give each entity a `PIXI.Sprite` (position/rotation/tint/alpha set per frame), keeping only the animated parts (lights, rotors, flames) live or moving them to sprites too. Migrate one module at a time (enemies first); once nothing draws to the offscreen canvas during play, skip its upload. Unlocks per-object filters (heat haze behind bosses, shield outlines, phase-shifter warp) and frees frame time for Phase 8. Keep the Canvas 2D path as the no-WebGL fallback and keep `sim:render` green. Do this before Phase 8.
-- [ ] Phase 8 (idea): 3D backdrops with three.js — real geometry (fly-through cities, tunnels, wireframe terrain, glTF set pieces) instead of 2D fragment shaders. Recommended route: three.js and PixiJS share one WebGL context (PixiJS's "Mixing PixiJS and Three.js" guide); three renders the level into a render target that replaces `Renderer._bgMesh`'s texture, so bloom/shockwave filters, `bgPulse`, bullet-density dimming and Flash Reduction keep working unchanged. Separate layered canvases are fine for a quick prototype but cost a second WebGL context, and Pixi filters can't touch the 3D layer. Watch: three.js ships ES modules only (needs an esbuild step or a shim in `build.js`, which concatenates globals); adds ~600 KB to the single-file build; low-quality mode should drop back to the shader backdrop; keep the shader backdrop as the fallback and cover it in `sim:render`. Prototype one level first (sky city is the best candidate).
+- [ ] Phase 7: Native Pixi sprites for entities — see below
+- [x] Phase 8: 3D backdrops with three.js — see below
 
+### Phase 7: Native Pixi sprites for entities
+
+**Why:** every frame uploads two full canvases to the GPU — the offscreen play canvas (720×960 logical, 1440×1920 at HIGH) and the full-size glow canvas that `Renderer.addGlow()` fills for bloom. Entities (enemies, mid-bosses, bosses, player, power-ups, asteroids, escort) stamp `Neon.sprite()` atlas images onto the play canvas and draw their live parts (mostly `Neon.light`, plus `shape`/`detail`/`squash`, rotors and flames) around them. Moving all of it to Pixi objects removes both uploads, unlocks per-object filters and frees frame time for Phase 8.
+
+**Constraints:** keep the Canvas 2D path as the no-WebGL fallback (each module gets a `Renderer.usePixi` branch, as `Particles.draw` already has, rather than a rewrite); keep `sim:render` green after every step; keep Flash Reduction and the Hangar previews working.
+
+- [x] **0. Baseline.** `tools/sim/perf.js --render` measures texture bytes uploaded per frame and the CPU time of the gameplay/HUD draw calls (headless GPU timing is meaningless, so it isn't measured). Real browser after the migration (Oct 2026): 1440p, HIGH — locked 60 fps, worst frame 16.9 ms. Not yet checked at 4K; no "before" reading was taken (`8412a69` is the last commit before the migration, if one is wanted).
+- [x] **1–6. Entities, particles, popups and glow on the GPU** — done differently from the plan: instead of hand-written Pixi objects per entity, `GpuCtx` (`src/gpu-ctx.js`) implements the Canvas 2D subset the draw code uses and emits pooled Pixi sprites/graphics in call order, so all the art stays single-source and the no-WebGL path is unchanged. Atlas pages and baked text are Pixi textures (re-uploaded only when something new is baked); paths become `Graphics`; `clip()` becomes a mask. Glow halos are particles rendered into `_glowRT`. With a shader backdrop the play canvas is neither cleared nor uploaded. Result (`perf.js --render`, late Endless): **13.2 MB uploaded per frame at HIGH → 0** (5.3 MB → 0 at LOW); CPU draw time unchanged at ~1–2 ms.
+- [x] **HUD cost** (found while measuring): `HUD.draw` took ~6.7 ms of CPU per frame at HIGH, ~4.5 ms of it blitting the static panel background onto the 3840×2160 overlay. The background now lives on its own canvas under the overlay (`HUD._bg`), drawn once per resolution and shown only while the HUD is up: **6.7 → 2.3 ms**.
+- [x] **7. Per-object effects:** heat haze behind bosses (`uHaze` + `haze()` in every backdrop shader, no extra pass); shield outlines (`Neon.filtered(ctx, Renderer.shieldGlow(hit), fn)` draws through a GlowFilter via `GpuCtx.beginLayer`; player shield HP and shielded cruisers); teleport warp (one custom filter, up to 4 pinch/bulge-and-twist points, on `Renderer.worldLayer` — backdrop + entities only, so bullets are never displaced). Flash Reduction softens the haze and warp and keeps shield hits blue. Tune strengths by eye in play.
+- [x] **Fix: hitches when new sprites were baked mid-fight** (play-test): every bake re-uploaded its whole 2048² atlas page, once per bake, so a boss phase change pushed 64–84 MB to the GPU in one frame. Now a dirty page uploads once per frame at `GpuCtx.end()`, pages are 1024² (4 MB), and `Boss._prebake()` bakes every phase colour and hit-flash variant while the WARNING banner is up. Phase changes now upload ≤ 8 MB, and later phases 0.4 MB. Boss hit glow and heat haze toned down after the same play-test.
+
+### Phase 8: 3D backdrops with three.js
+
+**Why:** real geometry (fly-through cities, tunnels, wireframe terrain, glTF set pieces) instead of 2D fragment shaders. Starts after Phase 7 step 6, when the frame-time headroom is known.
+
+- [x] **1. Spike** (`spike/three-backdrop`, deleted): three.js shares Pixi's WebGL context; its render target becomes a Pixi texture by swapping the WebGLTexture inside a `TextureSource` (Pixi internals — Pixi now pinned to 8.18.1). Needs three's colour management off, Pixi's unpack state reset, and a y-flip. Size: ~520 KB for the classes used (whole three.js 725 KB). Play-test: locked 60 fps at 1440p HIGH, switching seamlessly. **Go.**
+- [x] **2. Build integration:** `vendor/three.min.js` is a committed esbuild bundle of the classes in `tools/three/entry.js` (`npm run three:bundle`), inlined by `build.js` like Pixi — no new tools for a normal build or CI. The single-file build grew from 1.58 MB to ~2.2 MB.
+- [x] **3. All six levels have a 3D scene** (`src/backdrop3d.js`): synthwave grid city with a striped sun, foundry canyon with a molten channel, asteroid belt with a ringed gas giant, night flight over moonlit clouds, circuit-board city toward the Core, collapsing tunnel into a singularity. A composite shader applies the shared backdrop uniforms (haze, dimming, pulse, Flash Reduction, Level 6's band glitches). Fallbacks to the shader backdrops: Settings → 3D BACKDROPS off, LOW quality (including auto stepping down), no WebGL2, any error or context loss. `sim:render` runs every level in 3D, one with 3D off, and fails if a scene breaks.
+- [ ] **4. Play-test the six scenes** in a real browser: looks, readability of bullets over each, and SHOW FPS at HIGH (and on a slower machine if possible). Tune by eye in `BACKDROP_SCENES_3D`.
+- [ ] Ideas: Endless could cycle through the scenes as waves pass; bosses could get a set-piece (e.g. the Leviathan surfacing behind the planet); glTF models for hero objects.
 ---
 
 ## Gameplay Review Follow-ups
 
 The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 31 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
 
-- [ ] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
-- [ ] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
-- [ ] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
-- [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS)
+- [x] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
+- [x] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
+- [x] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
+- [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS) — now step 0 of Phase 7
 - [x] Save-data versioning: old saves get their high scores and per-level records archived (`highscores_v1`, `levelBests_v1`) and reset, since both changed meaning; everything else is kept (check `saveMigrationKeepsProgress`)
 
 ---
@@ -115,7 +136,7 @@ Small-to-medium effort items that would improve existing features.
 
 ### Hangar Bonus Content
 These are listed as purchasable items in the Hangar shop but have no implementation behind them:
-- [ ] Boss Practice Mode — fight any previously defeated boss with selectable loadout
+- [x] Boss Practice Mode — title → BOSS MODES → BOSS PRACTICE: any boss beaten in the campaign or Boss Rush (`Campaign.bossesDefeated`, derived for older saves), from a chosen phase, with a chosen difficulty, weapon, weapon level and drones; best time per boss and difficulty (`Campaign.practiceBests`); no credits or high scores (checks `bossPracticeFromChosenPhase`, `bossesDefeatedFromOldSave`). It is a mode rather than a Hangar purchase: the Hangar has no bonus-content category
 - [ ] Enemy Gallery / Bestiary — view all encountered enemies with stats, lore, and kill counts
 - [ ] Music Player — listen to the soundtrack from the menu. Now feasible: `Music.play(id)` plays any track in `MusicTracks`, and the intensity can be stepped 0–3 to hear the layers
 - [ ] Ship Color Designer — custom color picker for ship palette
@@ -144,7 +165,8 @@ Medium-to-large effort features that add new mechanics or depth.
 
 Features that add entirely new ways to play.
 
-- [ ] Boss Rush Mode — consecutive boss fights with brief intermissions and power-up selection between rounds
+- [x] Boss Rush Mode — every campaign boss back to back in its own level (the Echo once the secret level is unlocked), unlocked by clearing Level 5. Weapon pick before boss 1, one upgrade of three between bosses, score + time bonus, split times, BOSS RUSH high-score tab (`BossRush` in `level-systems.js`; check `bossRushRunsEveryBoss`)
+- [ ] Play-test Boss Rush: difficulty with the starting loadout, the upgrade choices, par time (`BossRush.PAR_PER_BOSS`)
 - [ ] Time Attack Mode — fixed 3-minute stage with dense spawns, infinite lives, score-only leaderboard
 - [ ] Daily Challenge Mode — daily seeded run with specific modifiers (requires online infrastructure for shared leaderboard)
 

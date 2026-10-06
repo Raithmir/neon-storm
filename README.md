@@ -9,13 +9,15 @@ A vertical scrolling bullet hell shooter built with HTML5 Canvas, PixiJS, and va
 Neon Storm γ is a full visual overhaul: everything is redrawn in a **neon vector** style (glowing line art, as in Geometry Wars or Tempest 4000), and the whole game renders sharp at your screen's real resolution.
 
 - **Neon line art:** the player, all enemies, mid-bosses (each now with its own design), bosses, power-ups, asteroids and the escort are glowing outlines with animated parts, cached in a sprite atlas (`src/neon.js`).
-- **Shader backgrounds:** each level is a GPU shader (`src/backdrops.js`) that streams toward you: a synthwave grid, a foundry floor, deep space, city lights under clouds, a circuit board and a collapsing void tunnel. They pulse on bombs, shift for bosses and dim under dense bullet patterns.
+- **3D backgrounds:** each level flies through a three.js scene (`src/backdrop3d.js`): a synthwave grid racing toward a striped sun over Neo-Tokyo, a foundry canyon with a molten channel, an asteroid belt by a ringed gas giant, a night flight over moonlit clouds, a circuit-board city toward the Core, and a collapsing tunnel into a singularity. They pulse on bombs, shift for bosses and dim under dense bullet patterns. GPU shader versions (`src/backdrops.js`) are the fallback (Settings → 3D BACKDROPS, LOW quality).
 - **Shots and explosions:** shaped bullets (enemy orbs with dark shadows for readability, needles, player streaks, missiles, a continuous laser), impact sparks, and ships that shatter into their own outline pieces.
 - **New UI:** neon title, menus, briefing (with the level's backdrop and boss preview), results screens, hangar with live previews, and a redesigned HUD (`src/ui-kit.js`).
 - **Cosmetics that look different:** Hangar bullet styles, trails and explosions each have their own shapes, not just colours.
 - **Settings:** GRAPHICS QUALITY (auto/high/medium/low, renders up to 2× on high-DPI screens), and FLASH REDUCTION now covers every flash, glitch and pulse.
 - **Soundtrack:** procedural synthwave generated live (`src/music.js`): a menu theme, a track for each level, boss tracks, Endless, and victory / game-over stings. It builds with the action (drums join after the briefing, a lead comes in for mid-bosses and bosses, fills for the final phase and Neon Surge), muffles on pause and ducks under bombs. MUSIC VOLUME now works.
 - **Sound effects:** reworked to match the visuals: layered explosions with glassy shatter, a heavier bomb, a laser hum, missile launches, a boss WARNING siren, phase-change glitches and an extra-life fanfare.
+- **Boss Rush (δ):** clear the campaign to unlock every boss back to back, each in its own level. Pick a weapon, then one upgrade out of three between bosses; ranked by score with a time bonus, with split times and its own high-score tab.
+- **Boss Practice (δ):** fight any boss you've beaten, from any phase, with your choice of difficulty and loadout; keeps a best time per boss. Both are under BOSS MODES on the title screen.
 - **Gamepad prompts:** menus show controller buttons when you're playing with a gamepad.
 - **Save versioning:** older saves are upgraded automatically. High scores and level records from before the rebalance are archived and reset; unlocks, credits, cosmetics and achievements are kept.
 
@@ -46,12 +48,14 @@ neon-storm/
 │   ├── pixi.min.js          — PixiJS v8 (downloaded on first build)
 │   └── pixi-filters.min.js  — pixi-filters v6: shockwave, god-ray and glitch effects
 ├── dist/                    — Built output (generated)
-│   ├── neon-storm-gamma.html — Playable game (single file, works offline)
+│   ├── neon-storm-delta.html — Playable game (single file, works offline)
 │   └── neon-storm.js        — Combined JS (for debugging)
 ├── src/                     — Source modules
 │   ├── constants.js         — Canvas setup, screen layout, dual-canvas sizing
-│   ├── backdrops.js         — GPU shader backgrounds for each level
-│   ├── renderer.js          — PixiJS pipeline + offscreen Canvas 2D bridge
+│   ├── backdrops.js         — GPU shader backgrounds for each level (fallback)
+│   ├── renderer.js          — PixiJS pipeline (Canvas 2D fallback)
+│   ├── gpu-ctx.js           — Canvas 2D-shaped context that draws with Pixi objects
+│   ├── backdrop3d.js        — three.js 3D level backgrounds on Pixi's GL context
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
 │   ├── audio.js             — Procedural SFX + mix (Web Audio API)
@@ -88,7 +92,7 @@ neon-storm/
 ```bash
 node build.js
 ```
-First build downloads PixiJS (~250KB) and caches it in `vendor/`. Output is `dist/neon-storm-gamma.html` — double-click to play, no server required.
+First build downloads PixiJS (~250KB) and caches it in `vendor/`. Output is `dist/neon-storm-delta.html` — double-click to play, no server required.
 
 ### Play (web server, for development)
 ```bash
@@ -117,13 +121,13 @@ See `tools/sim/README.md` for the balance tools (weapon DPS, boss time-to-kill, 
 
 The game uses a **dual-canvas architecture** introduced in beta:
 
-1. **Offscreen Canvas 2D** (720×960) — All gameplay `.draw(ctx)` methods draw here using standard Canvas 2D API. No draw code was changed from the alpha.
-2. **PixiJS Application** — Takes the offscreen canvas as a texture, renders it as a GPU sprite. This enables GPU filters (bloom, blur, distortion) to be applied to the entire play area.
+1. **Gameplay drawing** — All gameplay `.draw(ctx)` methods use the standard Canvas 2D API. Since δ the context they get in Pixi mode is a `GpuCtx` (`gpu-ctx.js`), which turns those calls into Pixi sprites and graphics, so nothing is re-uploaded each frame. Without WebGL they draw to an offscreen Canvas 2D (720×960) instead.
+2. **PixiJS Application** — Renders the play area on the GPU, with filters (bloom, blur, distortion) over all of it.
 3. **Overlay Canvas 2D** (1920×1080) — Menus, HUD, transitions, and all non-gameplay UI draw here directly.
 
 Since γ, a full-screen shader backdrop sits under the play area, bullets and particles are native Pixi particles, and both canvases render at the display's pixel density (see `CLAUDE.md` for the details).
 
-The `Renderer` module (`renderer.js`) manages this pipeline. During gameplay, `Game.draw()` calls `Renderer.getPlayCtx()` to get the offscreen Canvas 2D context, passes it to all gameplay draw methods, then calls `Renderer.endFrame()` to upload and GPU-render. When PixiJS isn't available, the offscreen canvas is blitted directly onto the overlay canvas instead.
+The `Renderer` module (`renderer.js`) manages this pipeline. During gameplay, `Game.draw()` calls `Renderer.getEntityCtx()`, passes it to all gameplay draw methods, then calls `Renderer.endFrame()` to GPU-render. When PixiJS isn't available, that context is the offscreen canvas, which is blitted onto the overlay canvas instead.
 
 ### Module System
 
@@ -135,7 +139,7 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 
 | Object | File | Purpose |
 |--------|------|---------|
-| `Renderer` | renderer.js | PixiJS pipeline + offscreen canvas bridge |
+| `Renderer` | renderer.js | PixiJS pipeline (+ Canvas 2D fallback) |
 | `GameConfig` | config.js | Current difficulty settings (mutable) |
 | `Input` | input.js | Keyboard/gamepad state |
 | `Audio` | audio.js | Sound effects |

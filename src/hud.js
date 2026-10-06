@@ -5,16 +5,25 @@
 //    right: score, chain, run stats, mission (level, time, escort), controls
 // ============================================================
 const HUD = {
-    _bgCache: null,
+    _bg: null,          // canvas behind the overlay holding the static panel backgrounds
+    _drawn: false,      // HUD.draw ran this frame (Game.draw shows _bg only then)
 
-    // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
+    // Static panel backgrounds (gradient, faint scanlines, edge glow). They live on
+    // their own canvas under the overlay and are drawn only when the resolution
+    // changes: blitting them onto the overlay every frame cost ~4.5 ms at HIGH.
     _bakeBackground() {
         const k = Renderer.uiScale || 1;
-        const c = document.createElement('canvas');
+        let c = this._bg;
+        if (!c) {
+            c = this._bg = document.createElement('canvas');
+            c.id = 'hud-bg';
+            c.style.cssText = 'position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; display: none;';
+            canvas.parentNode.insertBefore(c, canvas.parentNode.firstChild);
+        }
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
         const g = c.getContext('2d');
-        g.scale(k, k);
+        g.setTransform(k, 0, 0, k, 0, 0);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -36,15 +45,24 @@ const HUD = {
             g.fillStyle = '#ff2bd6';
             g.fillRect(x - 1, 0, 2, SCREEN_H);
         }
-        return c;
+    },
+
+    // Called by Game.draw after every frame: the background shows only under the HUD
+    showBackground(on) {
+        const c = this._bg;
+        if (!c) return;
+        if (on) {
+            // Track the overlay's on-screen size (window resizes)
+            if (c.style.width !== canvas.style.width) c.style.width = canvas.style.width;
+            if (c.style.height !== canvas.style.height) c.style.height = canvas.style.height;
+        }
+        const display = on ? 'block' : 'none';
+        if (c.style.display !== display) c.style.display = display;
     },
 
     draw(ctx) {
-        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
-        // Only the side panels: the middle of the overlay stays clear for the play area
-        const k = this._bgCache._scale;
-        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
-        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        if (!this._bg || this._bg._scale !== Renderer.uiScale) this._bakeBackground();
+        this._drawn = true;
         this._drawLeft(ctx);
         this._drawRight(ctx);
         this._drawDanger(ctx);
@@ -136,7 +154,8 @@ const HUD = {
         let y = 40;
         UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
         Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
-        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        const board = BossRush.practice ? null
+            : HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
         if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
         y += 154;
 
@@ -175,11 +194,16 @@ const HUD = {
         const isEndless = Game.currentLevelIndex === -1;
         const lvlData = ALL_LEVELS[Game.currentLevelIndex];
         const escort = Escort.active && Escort.alive;
-        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
-        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
-            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
-        const mins = Math.floor(WaveSystem.levelTimer / 60);
-        const secs = Math.floor(WaveSystem.levelTimer % 60);
+        const rush = BossRush.active;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN,
+            { title: rush ? (BossRush.practice ? 'BOSS PRACTICE' : 'BOSS RUSH') : (isEndless ? 'ENDLESS' : 'MISSION') });
+        Neon.text(ctx, rush ? (BossRush.practice ? BossRush.bossName() : 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName())
+            : isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', rush ? 20 : 22, { align: 'left', halo: 0.2 });
+        // Boss Rush shows its run clock instead of the level time
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const mins = Math.floor(clock / 60);
+        const secs = Math.floor(clock % 60);
         const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
         UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
         Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });

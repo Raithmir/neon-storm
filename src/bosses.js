@@ -107,6 +107,29 @@ const Boss = {
                 this.armor.push({ hp: def.armorHp || 15, angle: (Math.PI * 2 / count) * i, alive: true });
             }
         }
+        this._prebake();
+    },
+
+    // Bake every phase colour and hit-flash variant of the art now, while the
+    // WARNING banner is up. Baked mid-fight, each new sprite re-uploads an atlas
+    // page to the GPU, a visible hitch at phase changes and on the first hit.
+    _prebake() {
+        if (!Neon.BAKE) return;
+        const c = this._scratchCtx || (this._scratchCtx = document.createElement('canvas').getContext('2d'));
+        const draw = this._neon[this.bossType] || this._neon.architect;
+        const phase = this.phase;
+        for (let p = 1; p <= this.totalPhases; p++) {
+            this.phase = p;
+            for (const flash of [false, true]) {
+                c.save();
+                draw.call(this, c, this.radius, this.colors[p - 1] || '#ff4444', flash);
+                c.restore();
+                if (this.armor.length) {
+                    Neon.sprite(c, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
+                }
+            }
+        }
+        this.phase = phase;
     },
 
     update(dt, playerX, playerY) {
@@ -1224,7 +1247,7 @@ const Boss = {
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
         // Dynamic light — boss core glow (brighter during flash)
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 3.6 : 3), flash ? 0.45 : 0.35);
 
         // Type-specific body (unknown types draw as the Architect, matching init())
         const draw = this._neon[this.bossType] || this._neon.architect;

@@ -115,6 +115,7 @@ const Music = {
         const lvl = EndlessMode.active ? 'endless' : (MusicTracks['level_' + (Game.currentLevelIndex + 1)] ? 'level_' + (Game.currentLevelIndex + 1) : 'level_1');
         switch (Game.state) {
             case 'briefing':
+            case 'rush_intermission':
                 return { id: lvl, intensity: 0 };
             case 'playing':
             case 'paused': {
@@ -130,6 +131,8 @@ const Music = {
                 return { id: lvl, intensity: surge ? 3 : n, surge };
             }
             case 'victory':
+            case 'rush_complete':
+            case 'practice_complete':
             case 'campaign_complete':
                 return { id: 'results', intensity: 0 };
             case 'game_over':

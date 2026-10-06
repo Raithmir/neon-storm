@@ -64,6 +64,8 @@ window.addEventListener('resize', resizeCanvas);
 //    uSurge   0..1 while Neon Surge is active
 //    uDim     0..~0.35, darkens the backdrop under dense bullet patterns
 //    uCalm    1 when Flash Reduction is on: no glitch flicker or strobing
+//    uHaze    boss centre (px), radius (px), strength 0..1: heat haze
+//             behind the boss; every shader starts with p = haze(...)
 //
 //  Readability rule: keep backdrops darker and less saturated than
 //  anything the player can collide with. Pixel coords: p = vUV * uRes,
@@ -95,6 +97,7 @@ uniform float uBoss;
 uniform float uSurge;
 uniform float uDim;
 uniform float uCalm;
+uniform vec4 uHaze;
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -106,6 +109,16 @@ float noise(vec2 p) {
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+// Heat haze: shimmer the backdrop behind the boss (a tall ellipse around it,
+// with the noise drifting upward like rising air)
+vec2 haze(vec2 p) {
+    if (uHaze.w <= 0.0) return p;
+    vec2 d = (p - uHaze.xy) / vec2(uHaze.z, uHaze.z * 1.4);
+    float f = smoothstep(1.0, 0.2, length(d)) * uHaze.w;
+    if (f <= 0.0) return p;
+    vec2 q = p * 0.035 + vec2(0.0, uTime * 1.8);
+    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 9.0 * f;
 }
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
@@ -142,7 +155,7 @@ const BACKDROP_SHADERS = {
     // sun and wireframe mountains on a horizon near the top
     synthwave: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float W = uRes.x;
     float cx = W * 0.5;
     float hy = uRes.y * 0.27;
@@ -209,7 +222,7 @@ void main() {
     // conveyor belts, pipes, and dark girders sweeping past overhead
     industrial: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec2 w = vec2(p.x, p.y - uTime * 70.0);
     float T = 96.0;
     vec2 cell = floor(w / T);
@@ -274,7 +287,7 @@ void main() {
     // Level 3 — deep space: parallax star layers, drifting nebula, a ringed planet
     space: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec3 col = vec3(0.004, 0.006, 0.025);
     // Nebula
     vec2 np = vec2(p.x, p.y - uTime * 6.0) * 0.004;
@@ -324,7 +337,7 @@ void main() {
     // moonlit cloud layers streaming past at two speeds
     sky: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // City lights far below: clusters of lamps in districts, a few winding main roads
     vec2 cp = vec2(p.x, p.y - uTime * 30.0);
     float district = smoothstep(0.45, 0.72, fbm(cp * 0.004));
@@ -363,7 +376,7 @@ void main() {
     digital: `
 vec2 edgeHash(vec2 c) { return vec2(hash(c + 0.5), hash(c + 17.3)); }
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float S = 40.0;
     vec2 w = vec2(p.x, p.y - uTime * 80.0);
     vec2 c = floor(w / S);
@@ -418,7 +431,7 @@ void main() {
     // Level 6 — a collapsing tunnel into the void, with glitch bands and tears
     void: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // Glitch bands: horizontal strips occasionally jump sideways
     float band = floor(p.y / 22.0);
     float gt = floor(uTime * 9.0);
@@ -460,21 +473,45 @@ void main() {
 //  RENDERER — Canvas 2D glow + PixiJS GPU pipeline
 //
 //  Pixi path architecture:
-//    1. Gameplay draws to offCanvas (720×960) via Canvas 2D
-//    2. Glow halos draw to glowCanvas via addGlow()
-//    3. offCanvas  → gameSprite  (game content)
+//    1. Entities draw through a GpuCtx (gpu-ctx.js) into entityLayer as
+//       pooled Pixi sprites/graphics; the rest of the gameplay drawing still
+//       goes to offCanvas (720×960) via Canvas 2D → gameSprite
+//    2. Glow halos (addGlow) are particles rendered into _glowRT each frame
+//    3. _glowRT → _glowSprite + BlurFilter = real GPU bloom
 //    4. _starSlowLayer / _starFastLayer: TilingSprite GPU star fields
-//    5. glowCanvas → _glowSprite + BlurFilter = real GPU bloom
-//    6. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
-//    7. _explosionLayer: fireball PIXI.Sprites for big hits
-//    8. _laserBeamMesh: MeshRope for laser beam visual
-//    9. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
-//   10. _flashSprite sits on app.stage (above colour grade + bloom)
-//   11. app.stage carries chroma + CRT + glitch filters (screen-space)
+//    5. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
+//    6. _explosionLayer: fireball PIXI.Sprites for big hits
+//    7. _laserBeamMesh: MeshRope for laser beam visual
+//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray;
+//       the backdrop, gameSprite and entityLayer sit in worldLayer inside it, which
+//       carries the teleport warp (bullets and particles stay undistorted)
+//    9. _flashSprite sits on app.stage (above colour grade + bloom)
+//   10. app.stage carries chroma + CRT + glitch filters (screen-space)
 //
 //  Canvas 2D fallback: glowCanvas composited additively into
 //  compCanvas, then blitted onto overlay — identical to alpha build.
 // ============================================================
+// Standard Pixi v8 filter vertex shader, shared by the custom filters below
+const FILTER_VERTEX = `
+    in vec2 aPosition;
+    out vec2 vTextureCoord;
+    uniform vec4 uInputSize;
+    uniform vec4 uOutputFrame;
+    uniform vec4 uOutputTexture;
+    vec4 filterVertexPosition(void) {
+        vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+        position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+        position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+        return vec4(position, 0.0, 1.0);
+    }
+    vec2 filterTextureCoord(void) {
+        return aPosition * (uOutputFrame.zw * uInputSize.zw);
+    }
+    void main(void) {
+        gl_Position = filterVertexPosition();
+        vTextureCoord = filterTextureCoord();
+    }`;
+
 const Renderer = {
     app: null,
     pixiCanvas: null,
@@ -507,8 +544,7 @@ const Renderer = {
     _starScrollSlow: 0,
     _starScrollFast: 0,
 
-    // Bloom: glowCanvas uploaded with BlurFilter
-    _glowCanvasSource: null,
+    // Bloom: glow halos rendered to _glowRT, shown blurred by _glowSprite
     _glowSprite: null,
     _blurFilter: null,
 
@@ -613,18 +649,23 @@ const Renderer = {
             this.gameTexture = new PIXI.Texture(this._canvasSource);
             this.gameSprite = new PIXI.Sprite(this.gameTexture);
 
-            // --- GPU Bloom: glowCanvas → sprite with BlurFilter + additive blend ---
-            this._glowCanvasSource = new PIXI.CanvasSource({
-                resource: this.glowCanvas,
-                width: PLAY_W,
-                height: PLAY_H,
-            });
-            const glowTex = new PIXI.Texture(this._glowCanvasSource);
-            this._glowSprite = new PIXI.Sprite(glowTex);
+            // --- GPU Bloom: glow halos (_glowRT, see addGlow) → sprite with BlurFilter + additive blend ---
+            this._glowSprite = new PIXI.Sprite();
             this._blurFilter = new PIXI.BlurFilter({ strength: 8, quality: 3 });
             this._glowSprite.filters = [this._blurFilter];
             this._glowSprite.blendMode = 'add';
             this._glowSprite.alpha = 1.3;
+
+            // Glow halos are particles rendered into a texture each frame (no canvas upload)
+            this._glowParticles = new PIXI.ParticleContainer({
+                texture: PIXI.Texture.from(this._glowImg),
+                dynamicProperties: { vertex: true, position: true, rotation: false, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+            });
+            this._glowRT = PIXI.RenderTexture.create({ width: PLAY_W, height: PLAY_H, resolution: 1 });
+            this._glowSprite.texture = this._glowRT;
+            this._glowPool = [];
+            this._glowCount = 0;
 
             // --- Shared FX sheet for native Pixi particles (see _createFxTextures) ---
             this.fx = this._createFxTextures();
@@ -664,8 +705,16 @@ const Renderer = {
             // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
             this.gameLayer = new PIXI.Container();
             this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
+            // World layer: backdrop + entities, without bullets/particles (the warp bends only this)
+            this.worldLayer = new PIXI.Container();
+            this.worldLayer.filterArea = this.gameLayer.filterArea;
+            this.gameLayer.addChild(this.worldLayer);
             this._initBackdrop();                           // 0. GPU shader background
-            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (all Canvas 2D drawing)
+            this.worldLayer.addChild(this.gameSprite);      // 1. Game canvas (only the painted background now)
+            this.entityLayer = new PIXI.Container();         // 1b. Entities drawn through GpuCtx
+            this.worldLayer.addChild(this.entityLayer);
+            Backdrop3D.init();                              // 0b. three.js scene over the shader backdrop
+            this.gpu = new GpuCtx(this.entityLayer);
             this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
             this.gameLayer.addChild(this.bulletShadowLayer); // 5. Enemy bullet shadows
@@ -687,6 +736,7 @@ const Renderer = {
                 e.preventDefault();
                 console.warn('[Renderer] WebGL context lost');
                 this.usePixi = false;
+                Backdrop3D.lose();
             });
             this.pixiCanvas.addEventListener('webglcontextrestored', () => {
                 console.log('[Renderer] WebGL context restored');
@@ -700,11 +750,14 @@ const Renderer = {
             this._initShockwaveFilter();
             this._initGodrayFilter();
             this._initGlitchFilter();
+            this._initShieldGlow();
+            this._initWarpFilter();
 
             // --- Laser beam MeshRope ---
             this._initLaserBeam();
 
-            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter]) {
+            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter,
+                this._warpFilter, ...(this._shieldGlow || [])]) {
                 if (f) f.resolution = 'inherit';
             }
 
@@ -820,13 +873,14 @@ const Renderer = {
                 uSurge: { value: 0, type: 'f32' },
                 uDim:   { value: 0, type: 'f32' },
                 uCalm:  { value: 0, type: 'f32' },
+                uHaze:  { value: new Float32Array(4), type: 'vec4<f32>' },
             });
             this._bgShaders = {};
             this._bgGeometry = geometry;
             this.backdropTheme = null;
             this.bgPulse = 0;
             this.setBackdrop('synthwave');
-            this.gameLayer.addChild(this._bgMesh);
+            this.worldLayer.addChild(this._bgMesh);
             this.backdropActive = true;
         } catch (e) {
             console.warn('[Renderer] Shader backdrop unavailable — using Canvas 2D background:', e);
@@ -867,6 +921,12 @@ const Renderer = {
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
         u.uCalm = this.calm() ? 1 : 0;
+        // A 3D scene replaces the shader backdrop where the level has one
+        this._bgMesh.visible = !Backdrop3D.frame(this.backdropTheme, dt, u);
+        // Heat haze behind the boss, centred a little above it (heat rises)
+        const h = u.uHaze;
+        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.2; }
+        h[3] = approach(h[3], bossOn * (this.calm() ? 0.5 : 1), 1.5);
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
@@ -1050,31 +1110,101 @@ const Renderer = {
         if (this._shockwaveFilter && this._shockwaveActive) filters.push(this._shockwaveFilter);
         if (this._godrayFilter && this._godrayTimer > 0) filters.push(this._godrayFilter);
         this.gameLayer.filters = filters;
+        // The warp bends the world but not bullets, so their positions stay readable
+        this.worldLayer.filters = this._warpFilter && this._warpOn ? [this._warpFilter] : null;
+    },
+
+    // Shield outline: a soft glow hugging a shielded object's silhouette, drawn
+    // through Neon.filtered(). [0] normal, [1] on a shield hit.
+    _initShieldGlow() {
+        const F = this._filtersLib();
+        if (!F || !F.GlowFilter) return;
+        try {
+            this._shieldGlow = [
+                new F.GlowFilter({ distance: 10, outerStrength: 2.2, innerStrength: 0, color: 0x4488ff, quality: 0.2 }),
+                new F.GlowFilter({ distance: 12, outerStrength: 3.5, innerStrength: 0.4, color: 0xffffff, quality: 0.2 }),
+            ];
+        } catch (e) {
+            console.warn('[Renderer] GlowFilter unavailable:', e);
+        }
+    },
+
+    // Filters list for Neon.filtered(), or null where per-object filters aren't available
+    shieldGlow(hit) {
+        if (!this._shieldGlow) return null;
+        return hit && !this.calm() ? this._shieldGlowHit || (this._shieldGlowHit = [this._shieldGlow[1]])
+            : this._shieldGlowIdle || (this._shieldGlowIdle = [this._shieldGlow[0]]);
+    },
+
+    // Space warp for teleports: up to WARP_MAX points in play-area pixels, each
+    // pinching (+) or bulging (-) and twisting the world layer within its radius
+    WARP_MAX: 4,
+    _initWarpFilter() {
+        try {
+            this._warpFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: FILTER_VERTEX,
+                    fragment: `
+                        precision highp float;
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uInputClamp;
+                        uniform vec4 uWarp[4];
+                        void main(void) {
+                            vec2 p = vTextureCoord * uInputSize.xy + uOutputFrame.xy;
+                            vec2 q = p;
+                            for (int i = 0; i < 4; i++) {
+                                vec4 w = uWarp[i];
+                                if (w.z <= 0.0) continue;
+                                vec2 d = q - w.xy;
+                                float r = length(d) / w.z;
+                                if (r >= 1.0) continue;
+                                float k = (1.0 - r) * (1.0 - r) * w.w;
+                                float a = k * 2.5, c = cos(a), s = sin(a);
+                                q = w.xy + mat2(c, s, -s, c) * d * (1.0 + k);
+                            }
+                            vec2 uv = clamp((q - uOutputFrame.xy) * uInputSize.zw, uInputClamp.xy, uInputClamp.zw);
+                            gl_FragColor = texture(uTexture, uv);
+                        }`,
+                },
+                resources: {
+                    warpUniforms: { uWarp: { value: new Float32Array(16), type: 'vec4<f32>', size: 4 } },
+                },
+            });
+            this._warpOn = false;
+        } catch (e) {
+            console.warn('[Renderer] Warp filter unavailable:', e);
+            this._warpFilter = null;
+        }
+    },
+
+    // Per frame: warp points from enemies mid-teleport (phase shifters, teleporting mid-bosses)
+    _updateWarp() {
+        if (!this._warpFilter) return;
+        const w = this._warpFilter.resources.warpUniforms.uniforms.uWarp;
+        w.fill(0);
+        let n = 0;
+        const k = this.calm() ? 0.4 : 1;
+        if (typeof Enemies !== 'undefined') {
+            for (const e of Enemies.list) {
+                if (!(e.warpTimer > 0) || !e.warpTo || n > this.WARP_MAX - 2) continue;
+                const t = Math.max(0, Math.min(1, 1 - e.warpTimer / (e.midboss ? 0.5 : 0.45)));
+                const r = e.radius * 2.8;
+                w.set([e.x, e.y, r, 0.55 * t * k], n * 4); n++;                    // departing: pinch in
+                w.set([e.warpTo.x, e.warpTo.y, r, -0.35 * t * k], n * 4); n++;      // arriving: bulge out
+            }
+        }
+        const on = n > 0;
+        if (on !== this._warpOn) { this._warpOn = on; this._rebuildGameLayerFilters(); }
     },
 
     _initChromaFilter() {
         try {
             this._chromaFilter = PIXI.Filter.from({
                 gl: {
-                    vertex: `
-                        in vec2 aPosition;
-                        out vec2 vTextureCoord;
-                        uniform vec4 uInputSize;
-                        uniform vec4 uOutputFrame;
-                        uniform vec4 uOutputTexture;
-                        vec4 filterVertexPosition(void) {
-                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-                            return vec4(position, 0.0, 1.0);
-                        }
-                        vec2 filterTextureCoord(void) {
-                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
-                        }
-                        void main(void) {
-                            gl_Position = filterVertexPosition();
-                            vTextureCoord = filterTextureCoord();
-                        }`,
+                    vertex: FILTER_VERTEX,
                     fragment: `
                         in vec2 vTextureCoord;
                         uniform sampler2D uTexture;
@@ -1221,12 +1351,22 @@ const Renderer = {
 
     getPlayCtx() { return this.offCtx; },
 
+    // Entity drawing: a GpuCtx (Pixi objects) in Pixi mode, the offscreen canvas otherwise
+    getEntityCtx() { return this.usePixi && this.gpu ? this.gpu : this.offCtx; },
+
     beginFrame() {
-        const k = this.playScale;
-        this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
-        this.offCtx.clearRect(0, 0, this.offCanvas.width, this.offCanvas.height);
-        this.offCtx.setTransform(k, 0, 0, k, 0, 0);
-        this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        // With a shader backdrop nothing draws to the play canvas in Pixi mode
+        // (Background.draw is the only user), so skip clearing and uploading it
+        this._playCanvasUsed = !(this.usePixi && this.backdropActive);
+        if (this._playCanvasUsed) {
+            const k = this.playScale;
+            this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
+            this.offCtx.clearRect(0, 0, this.offCanvas.width, this.offCanvas.height);
+            this.offCtx.setTransform(k, 0, 0, k, 0, 0);
+        }
+        if (this._glowParticles) this._glowCount = 0;
+        else this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        if (this.gpu) this.gpu.begin();
     },
 
     updateEffects(dt) {
@@ -1332,10 +1472,13 @@ const Renderer = {
             const now = performance.now();
             const frameMs = now - (this._lastFrameTime || now);
             this._updateBackdrop(Math.min(0.1, frameMs / 1000));
+            this._updateWarp();
             if (frameMs > 0) this._autoTune(frameMs);
             this._lastFrameTime = now;
-            this._canvasSource.update();
-            this._glowCanvasSource.update();
+            if (this.gpu) this.gpu.end();
+            this.gameSprite.visible = this._playCanvasUsed;
+            if (this._playCanvasUsed) this._canvasSource.update();
+            this._renderGlow();
             this.app.renderer.render(this.app.stage);
         } else {
             const c = this.compCtx;
@@ -1387,11 +1530,33 @@ const Renderer = {
 
     addGlow(x, y, color, size, alpha) {
         const hex = typeof color === 'number' ? color : this.colorToHex(color);
+        if (this._glowParticles) {
+            let p = this._glowPool[this._glowCount];
+            if (!p) {
+                p = new PIXI.Particle({ texture: this._glowParticles.texture, anchorX: 0.5, anchorY: 0.5 });
+                this._glowPool.push(p);
+            }
+            this._glowCount++;
+            p.x = x; p.y = y;
+            p.scaleX = p.scaleY = size * 2 / this._glowImg.width;
+            p.tint = hex;
+            p.alpha = alpha || 0.4;
+            return;
+        }
         const img = this._getTintedGlow(hex);
         const g = this.glowCtx;
         g.globalAlpha = alpha || 0.4;
         g.drawImage(img, x - size, y - size, size * 2, size * 2);
         g.globalAlpha = 1;
+    },
+
+    // This frame's glow halos → the texture the blurred bloom sprite shows
+    _renderGlow() {
+        const list = this._glowParticles.particleChildren;
+        list.length = 0;
+        for (let i = 0; i < this._glowCount; i++) list.push(this._glowPool[i]);
+        this._glowParticles.update();
+        this.app.renderer.render({ container: this._glowParticles, target: this._glowRT, clear: true });
     },
 
     colorToHex(cssColor) {
@@ -1542,6 +1707,2112 @@ function _rendererHslToRgb(h, s, l) {
     else { r = c; g = 0; b = x; }
     return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
 }
+
+
+// === gpu-ctx.js ===
+// ============================================================
+//  GPU CTX — a Canvas 2D-shaped drawing context backed by PixiJS
+//
+//  Entity art is written once against the Canvas 2D API (Enemies._neon,
+//  Boss._neon, Player._drawShipNeon, ...). In Pixi mode the play area hands
+//  that code a GpuCtx instead of the offscreen canvas: every call is turned
+//  into pooled Pixi objects in call order, so nothing has to be drawn on the
+//  CPU and re-uploaded each frame (Renderer Phase 7).
+//
+//    drawImage            → PIXI.Sprite on a texture of the source canvas
+//                           (Neon atlas pages, baked text); a canvas flagged
+//                           __gpuDirty is re-uploaded once, at end()
+//    paths, fill, stroke  → PIXI.Graphics; paths are flattened to polylines
+//                           in play coordinates, so any transform works
+//    fillText/strokeText  → white text baked once per string/font, tinted
+//    clip()               → a container masked by the clip path
+//    'lighter'            → additive blend
+//    beginLayer(filters)  → (not Canvas 2D) the drawing up to endLayer() goes
+//      / endLayer()          into a container with those Pixi filters; use
+//                            Neon.filtered(), which plain Canvas 2D skips
+//
+//  Only the subset of Canvas 2D that the play-area draw code uses is here.
+//  Gradients, patterns, shadows, filters and getImageData are not supported.
+// ============================================================
+class GpuCtx {
+    constructor(root) {
+        this.root = root;
+        this._sprites = [];  this._nSprites = 0;
+        this._graphics = []; this._nGraphics = 0;
+        this._clips = [];    this._nClips = 0;
+        this._layers = [];   this._nLayers = 0;
+        this._layerStack = [];
+        this._parent = root;
+        this._g = null;           // Graphics currently being filled (consecutive vector ops)
+        this._gBlend = 'normal';
+        this._release = [];
+        this._resetState();
+    }
+
+    _resetState() {
+        this._m = [1, 0, 0, 1, 0, 0];
+        this._stack = [];
+        this._path = [];          // subpaths: { pts: [x0, y0, ...] in play coords, closed }
+        this._sub = null;
+        this._dash = null;
+        this.globalAlpha = 1;
+        this.globalCompositeOperation = 'source-over';
+        this.fillStyle = '#000000';
+        this.strokeStyle = '#000000';
+        this.lineWidth = 1;
+        this.lineCap = 'butt';
+        this.lineJoin = 'miter';
+        this.miterLimit = 10;
+        this.font = '10px sans-serif';
+        this.textAlign = 'start';
+        this.textBaseline = 'alphabetic';
+    }
+
+    // --- Frame lifecycle (Renderer.beginFrame / endFrame) ---
+
+    begin() {
+        for (const src of this._release) src.destroy();
+        this._release.length = 0;
+        this.root.removeChildren();
+        for (let i = 0; i < this._nClips; i++) this._clips[i].box.removeChildren();
+        for (let i = 0; i < this._nLayers; i++) this._layers[i].removeChildren();
+        this._nSprites = this._nGraphics = this._nClips = this._nLayers = 0;
+        this._layerStack.length = 0;
+        this._parent = this.root;
+        this._g = null;
+        this._resetState();
+    }
+
+    end() {
+        this._g = null;
+        // Canvases baked into this frame upload once, however many sprites were added
+        for (const src of GpuCtx._dirty) src.update();
+        GpuCtx._dirty.clear();
+    }
+
+    // Free a canvas's GPU texture once this frame has been rendered
+    static release(canvas) {
+        const gpu = canvas.__gpu;
+        if (!gpu) return;
+        canvas.__gpu = null;
+        if (Renderer.gpu) Renderer.gpu._release.push(gpu.source);
+        else gpu.source.destroy();
+    }
+
+    // --- State and transform ---
+
+    save() {
+        this._stack.push({
+            m: this._m.slice(), parent: this._parent, dash: this._dash,
+            globalAlpha: this.globalAlpha, globalCompositeOperation: this.globalCompositeOperation,
+            fillStyle: this.fillStyle, strokeStyle: this.strokeStyle,
+            lineWidth: this.lineWidth, lineCap: this.lineCap, lineJoin: this.lineJoin, miterLimit: this.miterLimit,
+            font: this.font, textAlign: this.textAlign, textBaseline: this.textBaseline,
+        });
+    }
+
+    restore() {
+        const s = this._stack.pop();
+        if (!s) return;
+        this._m = s.m;
+        if (s.parent !== this._parent) { this._parent = s.parent; this._g = null; }
+        this._dash = s.dash;
+        this.globalAlpha = s.globalAlpha; this.globalCompositeOperation = s.globalCompositeOperation;
+        this.fillStyle = s.fillStyle; this.strokeStyle = s.strokeStyle;
+        this.lineWidth = s.lineWidth; this.lineCap = s.lineCap; this.lineJoin = s.lineJoin; this.miterLimit = s.miterLimit;
+        this.font = s.font; this.textAlign = s.textAlign; this.textBaseline = s.textBaseline;
+    }
+
+    translate(x, y) {
+        const m = this._m;
+        m[4] += m[0] * x + m[2] * y;
+        m[5] += m[1] * x + m[3] * y;
+    }
+
+    rotate(t) {
+        const m = this._m, c = Math.cos(t), s = Math.sin(t);
+        const a = m[0], b = m[1];
+        m[0] = a * c + m[2] * s;  m[1] = b * c + m[3] * s;
+        m[2] = m[2] * c - a * s;  m[3] = m[3] * c - b * s;
+    }
+
+    scale(x, y) {
+        const m = this._m;
+        m[0] *= x; m[1] *= x; m[2] *= y; m[3] *= y;
+    }
+
+    transform(a, b, c, d, e, f) {
+        const m = this._m;
+        this._m = [
+            m[0] * a + m[2] * b, m[1] * a + m[3] * b,
+            m[0] * c + m[2] * d, m[1] * c + m[3] * d,
+            m[0] * e + m[2] * f + m[4], m[1] * e + m[3] * f + m[5],
+        ];
+    }
+
+    setTransform(a, b, c, d, e, f) { this._m = [a, b, c, d, e, f]; }
+    resetTransform() { this._m = [1, 0, 0, 1, 0, 0]; }
+
+    setLineDash(segs) { this._dash = segs && segs.length ? segs.slice() : null; }
+    getLineDash() { return this._dash ? this._dash.slice() : []; }
+
+    // --- Paths (stored in play coordinates) ---
+
+    beginPath() { this._path = []; this._sub = null; }
+
+    _pt(x, y) {
+        const m = this._m;
+        if (!this._sub) { this._sub = { pts: [], closed: false }; this._path.push(this._sub); }
+        this._sub.pts.push(m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]);
+    }
+
+    moveTo(x, y) {
+        this._sub = { pts: [], closed: false };
+        this._path.push(this._sub);
+        this._pt(x, y);
+    }
+
+    lineTo(x, y) { this._pt(x, y); }
+
+    closePath() {
+        const sub = this._sub;
+        if (!sub || sub.pts.length < 2) return;
+        sub.closed = true;
+        // Canvas continues from the subpath's start point
+        this._sub = { pts: [sub.pts[0], sub.pts[1]], closed: false };
+        this._path.push(this._sub);
+    }
+
+    rect(x, y, w, h) {
+        this.moveTo(x, y); this._pt(x + w, y); this._pt(x + w, y + h); this._pt(x, y + h);
+        this.closePath();
+    }
+
+    arc(x, y, r, a0, a1, ccw) { this.ellipse(x, y, r, r, 0, a0, a1, ccw); }
+
+    ellipse(x, y, rx, ry, rot, a0, a1, ccw) {
+        const TAU = Math.PI * 2;
+        let sweep = a1 - a0;
+        if (!ccw) {
+            if (sweep >= TAU) sweep = TAU;
+            else { sweep %= TAU; if (sweep < 0) sweep += TAU; }
+        } else {
+            if (-sweep >= TAU) sweep = -TAU;
+            else { sweep %= TAU; if (sweep > 0) sweep -= TAU; }
+        }
+        // Segments from the on-screen radius: smooth circles, cheap small lights
+        const m = this._m;
+        const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
+        const rr = Math.max(rx, ry) * k;
+        const n = Math.max(3, Math.ceil(Math.abs(sweep) / TAU * Math.min(96, Math.max(10, rr * 1.2))));
+        const cr = Math.cos(rot || 0), sr = Math.sin(rot || 0);
+        for (let i = 0; i <= n; i++) {
+            const a = a0 + sweep * i / n;
+            const ex = Math.cos(a) * rx, ey = Math.sin(a) * ry;
+            this._pt(x + ex * cr - ey * sr, y + ex * sr + ey * cr);
+        }
+    }
+
+    quadraticCurveTo(cx, cy, x, y) {
+        const sub = this._sub;
+        if (!sub || !sub.pts.length) { this.moveTo(cx, cy); }
+        const m = this._m, p = this._sub.pts;
+        const x0 = p[p.length - 2], y0 = p[p.length - 1];
+        const qx = m[0] * cx + m[2] * cy + m[4], qy = m[1] * cx + m[3] * cy + m[5];
+        const x1 = m[0] * x + m[2] * y + m[4], y1 = m[1] * x + m[3] * y + m[5];
+        const N = 12;
+        for (let i = 1; i <= N; i++) {
+            const t = i / N, u = 1 - t;
+            p.push(u * u * x0 + 2 * u * t * qx + t * t * x1, u * u * y0 + 2 * u * t * qy + t * t * y1);
+        }
+    }
+
+    // --- Painting ---
+
+    _graphic() {
+        const blend = this.globalCompositeOperation === 'lighter' ? 'add' : 'normal';
+        if (this._g && this._gBlend === blend) return this._g;
+        let g = this._graphics[this._nGraphics];
+        if (!g) { g = new PIXI.Graphics(); this._graphics.push(g); }
+        this._nGraphics++;
+        g.clear();
+        g.blendMode = blend;
+        this._parent.addChild(g);
+        this._g = g;
+        this._gBlend = blend;
+        return g;
+    }
+
+    _addPath(g, closeAll) {
+        let n = 0;
+        for (const sub of this._path) {
+            const p = sub.pts;
+            if (p.length < 4) continue;
+            g.poly(p, closeAll || sub.closed);
+            n++;
+        }
+        return n;
+    }
+
+    fill() {
+        const col = GpuCtx.color(this.fillStyle);
+        const alpha = col.a * this.globalAlpha;
+        if (alpha <= 0) return;
+        const g = this._graphic();
+        g.beginPath();
+        if (this._addPath(g, true)) g.fill({ color: col.rgb, alpha });
+    }
+
+    stroke() {
+        const col = GpuCtx.color(this.strokeStyle);
+        const alpha = col.a * this.globalAlpha;
+        if (alpha <= 0) return;
+        const m = this._m;
+        const width = this.lineWidth * Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
+        const g = this._graphic();
+        g.beginPath();
+        let n = 0;
+        if (this._dash) {
+            for (const sub of this._path) n += this._addDashed(g, sub, Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])));
+        } else {
+            n = this._addPath(g, false);
+        }
+        if (n) g.stroke({ width, color: col.rgb, alpha, cap: this.lineCap, join: this.lineJoin, miterLimit: this.miterLimit });
+    }
+
+    _addDashed(g, sub, k) {
+        const p = sub.pts.slice();
+        if (sub.closed) p.push(p[0], p[1]);
+        const dash = this._dash.map(d => d * k);
+        let di = 0, left = dash[0], on = true, n = 0;
+        let cur = on ? [p[0], p[1]] : null;
+        for (let i = 2; i < p.length; i += 2) {
+            let x0 = p[i - 2], y0 = p[i - 1];
+            const x1 = p[i], y1 = p[i + 1];
+            let seg = Math.hypot(x1 - x0, y1 - y0);
+            while (seg > left) {
+                const t = left / seg;
+                x0 += (x1 - x0) * t; y0 += (y1 - y0) * t;
+                seg -= left;
+                if (on) { cur.push(x0, y0); g.poly(cur, false); n++; cur = null; }
+                else cur = [x0, y0];
+                on = !on;
+                di = (di + 1) % dash.length;
+                left = dash[di];
+            }
+            left -= seg;
+            if (on) cur.push(x1, y1);
+        }
+        if (on && cur && cur.length >= 4) { g.poly(cur, false); n++; }
+        return n;
+    }
+
+    fillRect(x, y, w, h) {
+        const path = this._path, sub = this._sub;
+        this._path = []; this._sub = null;
+        this.rect(x, y, w, h);
+        this.fill();
+        this._path = path; this._sub = sub;
+    }
+
+    strokeRect(x, y, w, h) {
+        const path = this._path, sub = this._sub;
+        this._path = []; this._sub = null;
+        this.rect(x, y, w, h);
+        this.stroke();
+        this._path = path; this._sub = sub;
+    }
+
+    clearRect() {}
+
+    clip() {
+        let c = this._clips[this._nClips];
+        if (!c) {
+            c = { box: new PIXI.Container(), mask: new PIXI.Graphics() };
+            this._clips.push(c);
+        }
+        this._nClips++;
+        c.mask.clear();
+        c.mask.beginPath();
+        if (this._addPath(c.mask, true)) c.mask.fill({ color: 0xffffff });
+        c.box.addChild(c.mask);
+        c.box.mask = c.mask;
+        this._parent.addChild(c.box);
+        this._parent = c.box;
+        this._g = null;
+    }
+
+    // --- Filter layers (GpuCtx only) ---
+
+    beginLayer(filters) {
+        let c = this._layers[this._nLayers];
+        if (!c) { c = new PIXI.Container(); this._layers.push(c); }
+        this._nLayers++;
+        c.filters = filters;
+        this._parent.addChild(c);
+        this._layerStack.push(this._parent);
+        this._parent = c;
+        this._g = null;
+    }
+
+    endLayer() {
+        this._parent = this._layerStack.pop() || this.root;
+        this._g = null;
+    }
+
+    // --- Images ---
+
+    drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh) {
+        if (dx === undefined) {
+            if (sw === undefined) { dx = sx; dy = sy; dw = img.width; dh = img.height; }
+            else { dx = sx; dy = sy; dw = sw; dh = sh; }
+            sx = 0; sy = 0; sw = img.width; sh = img.height;
+        }
+        if (this.globalAlpha <= 0 || sw <= 0 || sh <= 0) return;
+        this._sprite(GpuCtx.texture(img, sx, sy, sw, sh), dx, dy, dw / sw, dh / sh, 0xffffff);
+    }
+
+    _sprite(tex, dx, dy, kx, ky, tint) {
+        let s = this._sprites[this._nSprites];
+        if (!s) { s = new PIXI.Sprite(); this._sprites.push(s); }
+        this._nSprites++;
+        s.texture = tex;
+        const m = this._m;
+        GpuCtx._mat.set(m[0] * kx, m[1] * kx, m[2] * ky, m[3] * ky, m[0] * dx + m[2] * dy + m[4], m[1] * dx + m[3] * dy + m[5]);
+        s.setFromMatrix(GpuCtx._mat);
+        s.alpha = this.globalAlpha;
+        s.tint = tint;
+        s.blendMode = this.globalCompositeOperation === 'lighter' ? 'add' : 'normal';
+        this._parent.addChild(s);
+        this._g = null;
+        return s;
+    }
+
+    // --- Text: baked white once per string and font, tinted per use ---
+
+    fillText(str, x, y) { this._text(str, x, y, this.fillStyle, 0); }
+    strokeText(str, x, y) { this._text(str, x, y, this.strokeStyle, this.lineWidth); }
+
+    measureText(str) {
+        const c = GpuCtx._measureCtx();
+        c.font = this.font;
+        return c.measureText(str);
+    }
+
+    _text(str, x, y, style, strokeW) {
+        str = String(str);
+        const col = GpuCtx.color(style);
+        if (col.a * this.globalAlpha <= 0 || !str) return;
+        const t = GpuCtx.textTexture(str, this.font, this.textAlign, this.textBaseline, strokeW, this.lineJoin);
+        const prev = this.globalAlpha;
+        this.globalAlpha *= col.a;
+        const R = GpuCtx.TEXT_RES;
+        this._sprite(t.tex, x - t.ox / R, y - t.oy / R, 1 / R, 1 / R, col.rgb);
+        this.globalAlpha = prev;
+    }
+}
+
+GpuCtx._mat = typeof PIXI !== 'undefined' ? new PIXI.Matrix() : null;
+GpuCtx.TEXT_RES = 2;            // text canvas pixels per play pixel
+GpuCtx.TEXT_CACHE_MAX = 400;
+GpuCtx._textCache = new Map();
+GpuCtx._colors = new Map();
+GpuCtx._dirty = new Set();      // texture sources to re-upload at end()
+
+// CSS colour → { rgb, a }, cached. Unparsed forms go through a canvas once.
+GpuCtx.color = function (style) {
+    let c = this._colors.get(style);
+    if (c) return c;
+    let s = typeof style === 'string' ? style.trim() : '#000000';
+    if (!/^(#|rgb|hsl)/i.test(s)) {
+        const mc = this._measureCtx();
+        mc.fillStyle = '#000000';
+        mc.fillStyle = s;
+        s = mc.fillStyle;   // normalised to '#rrggbb' or 'rgba(...)'
+    }
+    let rgb = 0, a = 1;
+    if (s[0] === '#') {
+        let h = s.slice(1);
+        if (h.length === 3 || h.length === 4) h = h.split('').map(ch => ch + ch).join('');
+        rgb = parseInt(h.slice(0, 6), 16);
+        if (h.length === 8) a = parseInt(h.slice(6, 8), 16) / 255;
+    } else {
+        const n = s.match(/[\d.]+%?/g) || [];
+        const v = (i) => parseFloat(n[i]);
+        if (s[0] === 'h' || s[0] === 'H') {
+            const [r, g, b] = _rendererHslToRgb(v(0), v(1), v(2));
+            rgb = (r << 16) | (g << 8) | b;
+        } else {
+            rgb = (Math.round(v(0)) << 16) | (Math.round(v(1)) << 8) | Math.round(v(2));
+        }
+        if (n.length > 3) a = n[3].endsWith('%') ? v(3) / 100 : v(3);
+    }
+    c = { rgb, a: isNaN(a) ? 1 : a };
+    if (this._colors.size > 2000) this._colors.clear();
+    this._colors.set(style, c);
+    return c;
+};
+
+GpuCtx._measureCtx = function () {
+    if (!this._mc) this._mc = document.createElement('canvas').getContext('2d');
+    return this._mc;
+};
+
+// Texture for a rectangle of a canvas; one GPU source per canvas
+GpuCtx.texture = function (img, sx, sy, sw, sh) {
+    let gpu = img.__gpu;
+    if (!gpu) {
+        gpu = img.__gpu = { source: new PIXI.CanvasSource({ resource: img }), frames: new Map() };
+        img.__gpuDirty = false;
+    } else if (img.__gpuDirty) {
+        this._dirty.add(gpu.source);
+        img.__gpuDirty = false;
+    }
+    const key = sx + ',' + sy + ',' + sw + ',' + sh;
+    let tex = gpu.frames.get(key);
+    if (!tex) {
+        tex = new PIXI.Texture({ source: gpu.source, frame: new PIXI.Rectangle(sx, sy, sw, sh) });
+        gpu.frames.set(key, tex);
+    }
+    return tex;
+};
+
+GpuCtx.textTexture = function (str, font, align, baseline, strokeW, join) {
+    const key = font + '|' + align + '|' + baseline + '|' + strokeW + '|' + join + '|' + str;
+    const cache = this._textCache;
+    let t = cache.get(key);
+    if (t) { cache.delete(key); cache.set(key, t); return t; }   // keep LRU order
+    const R = this.TEXT_RES;
+    const mc = this._measureCtx();
+    mc.font = font;
+    const size = parseFloat((font.match(/(\d+(\.\d+)?)px/) || [0, 10])[1]);
+    const w = mc.measureText(str).width;
+    const pad = Math.ceil(strokeW + 2);
+    const cw = Math.ceil((w + pad * 2) * R), ch = Math.ceil((size * 2.6 + pad * 2) * R);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, cw); canvas.height = Math.max(1, ch);
+    const c = canvas.getContext('2d');
+    const ox = (pad + (align === 'center' ? w / 2 : (align === 'right' || align === 'end') ? w : 0)) * R;
+    const oy = (pad + size * 1.3) * R;
+    c.scale(R, R);
+    c.font = font;
+    c.textAlign = align;
+    c.textBaseline = baseline;
+    if (strokeW > 0) {
+        c.strokeStyle = '#ffffff'; c.lineWidth = strokeW; c.lineJoin = join;
+        c.strokeText(str, ox / R, oy / R);
+    } else {
+        c.fillStyle = '#ffffff';
+        c.fillText(str, ox / R, oy / R);
+    }
+    t = { tex: this.texture(canvas, 0, 0, canvas.width, canvas.height), ox, oy };
+    cache.set(key, t);
+    if (cache.size > this.TEXT_CACHE_MAX) {
+        const [oldKey] = cache.keys();
+        GpuCtx.release(cache.get(oldKey).tex.source.resource);
+        cache.delete(oldKey);
+    }
+    return t;
+};
+
+// Text baked before the web font arrived would keep the fallback font
+if (typeof document !== 'undefined' && document.fonts) {
+    document.fonts.addEventListener('loadingdone', () => {
+        for (const t of GpuCtx._textCache.values()) GpuCtx.release(t.tex.source.resource);
+        GpuCtx._textCache.clear();
+    });
+}
+
+
+// === backdrop3d.js ===
+// ============================================================
+//  BACKDROP 3D — three.js level backgrounds on PixiJS's GL context
+//
+//  Each level can have a 3D scene (BACKDROP_SCENES_3D[bgType]) that replaces
+//  its shader backdrop (backdrops.js). three.js (vendor/three.min.js, the
+//  global THREE) shares Pixi's WebGL context, renders the scene into its own
+//  render target, and that texture is handed to Pixi, where a mesh at the
+//  bottom of Renderer.worldLayer draws it through the backdrop uniforms: heat
+//  haze, dimming under dense bullets and Flash Reduction work as they do for
+//  the shader backdrops, and all of Pixi's filters apply on top.
+//
+//  The shader backdrop is used instead when 3D BACKDROPS is off, at LOW
+//  graphics quality, without WebGL2, or after any error or context loss.
+//
+//  Scenes: BACKDROP_SCENES_3D[theme] = { build() } returning
+//    { scene, camera, update(s), glitch? }, where s = { t, dt, pulse, boss, surge, calm };
+//  glitch (0..1, read after update) turns on the composite's sideways band glitches
+//  (t pauses with the game; pulse/boss/surge are the 0..1 backdrop uniforms).
+//  Readability rule as for the shader backdrops: keep everything darker and
+//  less saturated than what the player can collide with. Scenes write their
+//  own fog (shader materials), so all materials here are ShaderMaterials or
+//  basic materials with fog off.
+//
+//  The texture handoff swaps the WebGLTexture inside a Pixi TextureSource
+//  (Pixi internals: renderer.texture.getGlSource), so Pixi is pinned
+//  (vendor/pixi.min.js, 8.18.1); re-check this file when upgrading it.
+// ============================================================
+
+// GLSL helpers shared by the scenes' shaders
+const B3D_GLSL = `
+float h11(float p) { p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float h21(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), u.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float fbm3(vec2 p) {
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) { v += a * vnoise(p); p = mat2(0.8, 0.6, -0.6, 0.8) * p * 2.03 + 11.0; a *= 0.5; }
+    return v;
+}
+// Anti-aliased grid line strength for a coordinate in cell units
+float gridAA(float c, float widthPx) {
+    float d = abs(fract(c - 0.5) - 0.5) / max(fwidth(c), 1e-4);
+    return 1.0 - smoothstep(widthPx * 0.5, widthPx * 0.5 + 1.0, d);
+}
+`;
+
+// Small JS helpers for building scenes
+const B3D = {
+    rng(seed) {
+        let s = seed % 2147483647;
+        if (s <= 0) s += 2147483646;
+        return () => (s = (s * 16807) % 2147483647) / 2147483647;
+    },
+
+    // Value noise in JS (terrain heights), matching vnoise's shape
+    noise2(x, y) {
+        const h = (a, b) => {
+            const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453;
+            return s - Math.floor(s);
+        };
+        const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+        const ux = fx * fx * (3 - 2 * fx), uy = fy * fy * (3 - 2 * fy);
+        const a = h(ix, iy), b = h(ix + 1, iy), c = h(ix, iy + 1), d = h(ix + 1, iy + 1);
+        return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy;
+    },
+
+    fbm2(x, y, oct) {
+        let v = 0, a = 0.5;
+        for (let i = 0; i < (oct || 4); i++) { v += a * this.noise2(x, y); x = x * 2.03 + 17; y = y * 2.03 + 9; a *= 0.5; }
+        return v;
+    },
+
+    // ShaderMaterial with the shared GLSL prepended to the fragment shader
+    mat(vertexShader, fragmentShader, uniforms, opts) {
+        return new THREE.ShaderMaterial(Object.assign({
+            vertexShader,
+            fragmentShader: B3D_GLSL + fragmentShader,
+            uniforms: uniforms || {},
+        }, opts || {}));
+    },
+
+    // World-position varying, with instancing when the mesh is instanced
+    VS_WORLD: `
+varying vec3 vW;
+varying vec2 vUv;
+varying vec3 vN;
+varying float vSeed;
+void main() {
+    vUv = uv;
+    #ifdef USE_INSTANCING
+        mat4 m = modelMatrix * instanceMatrix;
+        vSeed = fract(sin(dot(instanceMatrix[3].xyz, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
+    #else
+        mat4 m = modelMatrix;
+        vSeed = 0.0;
+    #endif
+    vec4 w = m * vec4(position, 1.0);
+    vW = w.xyz;
+    vN = normalize(mat3(m) * normal);
+    gl_Position = projectionMatrix * viewMatrix * w;
+}`,
+
+    col(hex) { return new THREE.Color(hex); },
+
+    // Objects that move every frame (or in their vertex shader) keep stale
+    // bounds, which makes three cull them; these are always drawn instead
+    always(...objs) { for (const o of objs) o.frustumCulled = false; return objs[0]; },
+    lerpColor(out, a, b, t) { return out.copy(a).lerp(b, t); },
+};
+
+const Backdrop3D = {
+    ok: false,           // three is running on Pixi's context
+    broken: false,       // an error or context loss: shader backdrops from now on
+    _scenes: {},         // built scenes, by theme
+    _state: { t: 0, dt: 0, pulse: 0, boss: 0, surge: 0, calm: 0 },
+
+    // From Renderer.init, once the shader backdrop exists
+    init() {
+        if (typeof THREE === 'undefined' || !Renderer.app || !Renderer._bgGeometry) return;
+        try {
+            const pixi = Renderer.app.renderer;
+            const gl = pixi.gl;
+            if (typeof WebGL2RenderingContext === 'undefined' || !(gl instanceof WebGL2RenderingContext)) return;
+            this._pixi = pixi;
+            // Pixi isn't colour-managed (sRGB values straight through), so neither is three
+            THREE.ColorManagement.enabled = false;
+            this._resetUnpack(gl);
+            this.three = new THREE.WebGLRenderer({ canvas: pixi.canvas, context: gl, antialias: false });
+            this.three.outputColorSpace = THREE.LinearSRGBColorSpace;
+            this.three.autoClear = false;
+            this._initComposite();
+            this.ok = true;
+            console.log('[Backdrop3D] three r' + THREE.REVISION + ' on the Pixi context');
+        } catch (e) {
+            console.warn('[Backdrop3D] unavailable — shader backdrops only:', e);
+            this.broken = true;
+        }
+    },
+
+    // The mesh in worldLayer that shows the 3D scene through the backdrop uniforms
+    _initComposite() {
+        this._source = new PIXI.TextureSource({ width: 1, height: 1 });
+        this._u = new PIXI.UniformGroup({ uGlitch: { value: 0, type: 'f32' } });
+        this._shader = PIXI.Shader.from({
+            gl: {
+                vertex: BACKDROP_VERTEX,
+                fragment: BACKDROP_COMMON + `
+uniform sampler2D uScene;
+uniform float uGlitch;
+void main() {
+    vec2 p = haze(vUV * uRes);
+    // Band glitches (scenes that ask for them): strips jump sideways and tint cyan
+    float band = floor(p.y / 22.0), gt = floor(uTime * 9.0);
+    float g = step(0.94 - uPulse * 0.2 - uBoss * 0.04, hash(vec2(band, gt))) * (1.0 - uCalm) * uGlitch;
+    p.x += g * (hash(vec2(band, gt + 3.0)) - 0.5) * 70.0;
+    // GL render targets are stored bottom-up
+    vec3 col = texture(uScene, clamp(vec2(p.x / uRes.x, 1.0 - p.y / uRes.y), 0.001, 0.999)).rgb;
+    col = mix(col, col.gbr * 1.6 + vec3(0.0, 0.08, 0.08), g * 0.8);
+    col += col * uPulse * (1.0 - uCalm * 0.7) * 0.5;
+    gl_FragColor = vec4(finish(col), 1.0);
+}`,
+            },
+            resources: { bgUniforms: Renderer._bgUniforms, b3dUniforms: this._u, uScene: this._source },
+        });
+        this.mesh = new PIXI.Mesh({ geometry: Renderer._bgGeometry, shader: this._shader });
+        this.mesh.visible = false;
+        Renderer.worldLayer.addChildAt(this.mesh, Renderer.worldLayer.getChildIndex(Renderer._bgMesh) + 1);
+    },
+
+    wants(theme) {
+        return this.ok && !this.broken && !!BACKDROP_SCENES_3D[theme] && Renderer.usePixi
+            && Settings.values.backdrop3d !== false && Renderer.quality !== 'low';
+    },
+
+    // Every frame from Renderer._updateBackdrop. Renders the theme's scene and
+    // shows it; returns false when the shader backdrop should show instead.
+    frame(theme, dt, u) {
+        if (!this.wants(theme)) {
+            if (this.mesh) this.mesh.visible = false;
+            return false;
+        }
+        try {
+            const sc = this._scenes[theme] || (this._scenes[theme] = BACKDROP_SCENES_3D[theme].build());
+            this._target();
+            const s = this._state;
+            s.t = u.uTime; s.dt = dt; s.pulse = u.uPulse; s.boss = u.uBoss; s.surge = u.uSurge; s.calm = u.uCalm;
+            sc.update(s);
+            this._u.uniforms.uGlitch = sc.glitch || 0;
+            this._render(sc.scene, sc.camera);
+            this.mesh.visible = true;
+            return true;
+        } catch (e) {
+            console.warn('[Backdrop3D] scene "' + theme + '" failed — using the shader backdrop:', e);
+            this.broken = true;
+            this.mesh.visible = false;
+            return false;
+        }
+    },
+
+    // Render target at the play area's resolution; its texture becomes uScene
+    _target() {
+        const k = Renderer.playScale || 1;
+        const w = Math.round(PLAY_W * k), h = Math.round(PLAY_H * k);
+        if (this.rt && this.rt.width === w && this.rt.height === h) return;
+        if (this.rt) this.rt.dispose();
+        this.rt = new THREE.WebGLRenderTarget(w, h, { depthBuffer: true, samples: 4 });
+        // Render once so three creates the GL texture, then put it inside a Pixi source
+        this._render(new THREE.Scene(), new THREE.PerspectiveCamera());
+        const glTex = this.three.properties.get(this.rt.texture).__webglTexture;
+        const source = new PIXI.TextureSource({ width: PLAY_W, height: PLAY_H, resolution: k });
+        const glSource = this._pixi.texture.getGlSource(source);
+        this._pixi.gl.deleteTexture(glSource.texture);
+        glSource.texture = glTex;
+        this._shader.resources.uScene = source;
+        if (this._source) this._source.destroy();
+        this._source = source;
+    },
+
+    _render(scene, camera) {
+        const three = this.three;
+        this._resetUnpack(this._pixi.gl);
+        three.resetState();
+        three.setRenderTarget(this.rt);
+        three.clear();
+        three.render(scene, camera);
+        three.setRenderTarget(null);
+        three.resetState();
+        this._pixi.resetState();
+    },
+
+    // Pixi leaves its texture-upload state set; three expects GL defaults
+    _resetUnpack(gl) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    },
+
+    // Context lost: three's GL objects are gone, so stay on the shader backdrops
+    lose() {
+        this.broken = true;
+        if (this.mesh) this.mesh.visible = false;
+    },
+};
+
+// ============================================================
+//  SCENES
+// ============================================================
+const BACKDROP_SCENES_3D = {
+
+    // Level 1 — First Contact: a neon grid racing toward a striped sun that
+    // sets behind Neo-Tokyo, wireframe mountains either side, light pylons
+    // streaming past along the grid
+    synthwave: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 4000);
+            camera.position.set(0, 24, 0);
+            camera.rotation.x = -0.26;          // horizon ~27% from the top, like the shader version
+
+            const U = {
+                uScroll: { value: 0 }, uTime: { value: 0 }, uBright: { value: 0.5 },
+                uGrid: { value: B3D.col(0xff2bd6) }, uLane: { value: B3D.col(0x19f2ff) },
+                uFog: { value: B3D.col(0x3a0a52) }, uSunTop: { value: B3D.col(0xffcc33) },
+                uBoss: { value: 0 },
+            };
+            const red = B3D.col(0xff1a40), cyan = B3D.col(0x4dffff);
+
+            // Sky dome: deep violet to a magenta horizon, with stars
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uBoss;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec3 col = mix(vec3(0.42, 0.07, 0.48), vec3(0.03, 0.006, 0.1), smoothstep(-0.02, 0.38, e));
+    col += vec3(0.9, 0.12, 0.6) * 0.35 * exp(-max(e, 0.0) * 28.0);     // glow along the horizon
+    col = mix(col, vec3(0.45, 0.04, 0.12), uBoss * 0.35 * (1.0 - smoothstep(0.0, 0.3, e)));
+    vec2 sp = vec2(atan(d.x, -d.z), e) * 160.0;
+    vec2 c = floor(sp);
+    float h = h21(c);
+    float star = step(0.93, h) * smoothstep(0.35, 0.0, length(fract(sp) - 0.5)) * smoothstep(0.08, 0.3, e);
+    col += vec3(0.9, 0.85, 1.0) * star * (0.5 + 0.5 * sin(uTime * (1.0 + h * 4.0) + h * 30.0));
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Sun: gradient disc with scrolling stripes across its lower half, and a halo
+            const sun = new THREE.Mesh(new THREE.PlaneGeometry(1500, 1500), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uSunTop; uniform float uBoss;
+varying vec2 vUv;
+void main() {
+    vec2 q = vUv * 2.0 - 1.0;
+    float r = length(q);
+    float R = 0.34;
+    float y = q.y / R;                       // -1 bottom .. 1 top of the disc
+    vec3 sunCol = mix(vec3(1.0, 0.08, 0.5), uSunTop, smoothstep(-0.8, 0.8, y));
+    // Horizontal gaps across the lower part, wider toward the bottom, drifting down
+    float band = smoothstep(0.25, -1.0, y);
+    float stripe = step(fract(y * 7.0 + uTime * 0.3), band * 0.55) * step(y, 0.25);
+    float disc = smoothstep(R, R - 0.004, r) * (1.0 - stripe);
+    float halo = exp(-max(r - R, 0.0) * 7.0) * 0.6 * (1.0 - disc);
+    // Dimmer during the boss fight, so its bullets stay readable over the sun
+    vec3 col = (sunCol * disc + mix(vec3(1.0, 0.2, 0.6), vec3(1.0, 0.15, 0.2), uBoss) * halo) * (1.0 - 0.35 * uBoss);
+    gl_FragColor = vec4(col, max(disc, halo));
+}`, U, { transparent: true, depthWrite: false }));
+            sun.position.set(0, 300, -2400);
+            sun.renderOrder = -9;
+            scene.add(sun);
+
+            // Distant mountains: a wireframe heightfield, low in the middle so the sun shows
+            const mGeo = new THREE.PlaneGeometry(5200, 900, 160, 30);
+            mGeo.rotateX(-Math.PI / 2);
+            const mp = mGeo.attributes.position;
+            for (let i = 0; i < mp.count; i++) {
+                const x = mp.getX(i), z = mp.getZ(i);
+                const edge = Math.min(1, Math.abs(x) / 2000);
+                const mask = 0.12 + 0.88 * edge * edge * (3 - 2 * edge);
+                const back = 1 - Math.abs(z) / 450;   // peaks in the middle of the strip
+                mp.setY(i, Math.max(0, (B3D.fbm2(x * 0.004, z * 0.004) * 1.4 - 0.25)) * 760 * mask * Math.max(0, back));
+            }
+            mGeo.computeVertexNormals();
+            const mountains = new THREE.Mesh(mGeo, B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uGrid; uniform vec3 uFog;
+varying vec3 vW; varying vec3 vN;
+void main() {
+    float gx = gridAA(vW.x / 40.0, 1.2), gz = gridAA(vW.z / 40.0, 1.2);
+    float h = clamp(vW.y / 420.0, 0.0, 1.0);
+    vec3 body = vec3(0.025, 0.004, 0.07) + vec3(0.06, 0.0, 0.08) * h;
+    vec3 col = body + uGrid * max(gx, gz) * (0.25 + 0.55 * h);
+    // Fade into the horizon haze at the foot
+    col = mix(uFog * 0.9, col, smoothstep(0.0, 40.0, vW.y));
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            mountains.position.set(0, -2, -2050);
+            scene.add(mountains);
+
+            // Neo-Tokyo skyline in front of the sun: towers with scattered lit windows
+            const rnd = B3D.rng(1987);
+            const towerGeo = new THREE.BoxGeometry(1, 1, 1);
+            towerGeo.translate(0, 0.5, 0);
+            const towerCount = 90;
+            const towers = new THREE.InstancedMesh(towerGeo, B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uFog; uniform float uBoss;
+varying vec3 vW; varying vec3 vN; varying float vSeed;
+void main() {
+    vec3 body = vec3(0.02, 0.003, 0.05);
+    // Window grid on the side faces
+    vec2 wc = vec2(abs(vN.x) > 0.5 ? vW.z : vW.x, vW.y) / vec2(5.0, 6.0);
+    vec2 cell = floor(wc);
+    float lit = step(0.72, h21(cell + vSeed * 91.0)) * step(abs(vN.y), 0.5);
+    float win = lit * step(0.25, fract(wc.x)) * step(fract(wc.x), 0.75) * step(0.3, fract(wc.y)) * step(fract(wc.y), 0.7);
+    vec3 wcol = mix(vec3(1.0, 0.75, 0.35), vec3(0.3, 0.95, 1.0), step(0.6, h21(cell * 1.7 + vSeed)));
+    wcol = mix(wcol, vec3(1.0, 0.3, 0.6), step(0.85, h21(cell + 3.3)));
+    float flicker = 0.75 + 0.25 * sin(uTime * 3.0 + h21(cell) * 40.0);
+    vec3 col = body + wcol * win * 0.55 * flicker;
+    // Rooftop rim light
+    col += vec3(1.0, 0.25, 0.7) * 0.6 * step(0.5, vN.y);
+    col = mix(col, uFog, 0.35);
+    gl_FragColor = vec4(col, 1.0);
+}`, U), towerCount);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+            for (let i = 0; i < towerCount; i++) {
+                const x = (rnd() - 0.5) * 2000;
+                const side = Math.min(1, Math.abs(x) / 1000);
+                const h = 18 + rnd() * 40 + side * side * rnd() * 170 + (rnd() < 0.06 ? 90 : 0);
+                pos.set(x, 0, -1500 - rnd() * 250);
+                scl.set(18 + rnd() * 34, h, 18 + rnd() * 30);
+                m4.compose(pos, quat, scl);
+                towers.setMatrixAt(i, m4);
+            }
+            scene.add(towers);
+
+            // Ground: infinite anti-aliased grid, cyan every fourth lane, the sun's reflection ahead
+            const ground = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000), B3D.mat(B3D.VS_WORLD, `
+uniform float uScroll; uniform float uBright; uniform vec3 uGrid; uniform vec3 uLane; uniform vec3 uFog;
+varying vec3 vW;
+void main() {
+    vec2 c = vec2(vW.x, vW.z - uScroll) / 14.0;
+    float dist = length(vW.xz - cameraPosition.xz);
+    float lx = gridAA(c.x, 1.3), lz = gridAA(c.y, 1.3);
+    // Soft glow around each line close to the camera
+    float gw = exp(-abs(fract(c.x - 0.5) - 0.5) * 12.0 * 1.6) + exp(-abs(fract(c.y - 0.5) - 0.5) * 12.0 * 1.6);
+    float nearK = 1.0 - smoothstep(30.0, 500.0, dist);
+    float lane = step(mod(floor(c.x + 0.5), 4.0), 0.5);
+    vec3 lc = mix(uGrid, uLane, lane * 0.8);
+    float fogK = smoothstep(150.0, 2300.0, dist);
+    vec3 col = vec3(0.012, 0.003, 0.04);
+    col += (lc * lx + uGrid * lz) * uBright * (1.0 - fogK * 0.85);
+    col += uGrid * gw * 0.1 * nearK * uBright;
+    // Faint ground glow toward the horizon
+    col += vec3(0.25, 0.03, 0.3) * 0.25 * smoothstep(300.0, 2200.0, dist);
+    // Sun reflection: a warm streak down the middle, strongest far away
+    col += vec3(1.0, 0.3, 0.55) * 0.22 * exp(-abs(vW.x) / 70.0) * smoothstep(80.0, 1800.0, dist);
+    col = mix(col, uFog, fogK * 0.92);
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            ground.rotation.x = -Math.PI / 2;
+            scene.add(ground);
+
+            // Light pylons along both sides of the grid, streaming past
+            const PYLONS = 24, SPAN = 1440;
+            const pGeo = new THREE.BoxGeometry(1.6, 1, 1.6);
+            pGeo.translate(0, 0.5, 0);
+            const pylons = new THREE.InstancedMesh(pGeo, B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uGrid; uniform vec3 uLane; uniform vec3 uFog;
+varying vec3 vW; varying float vSeed;
+void main() {
+    float h = clamp(vW.y / 34.0, 0.0, 1.0);
+    vec3 c = mix(uLane, uGrid, step(0.5, vSeed));
+    vec3 col = vec3(0.02, 0.0, 0.05) + c * (0.1 + 0.6 * pow(h, 3.0));
+    float dist = length(vW.xz - cameraPosition.xz);
+    col = mix(col, uFog, smoothstep(200.0, 1400.0, dist) * 0.9);
+    gl_FragColor = vec4(col, 1.0);
+}`, U), PYLONS * 2);
+            const pylonZ = [];
+            for (let i = 0; i < PYLONS; i++) pylonZ.push(-i * (SPAN / PYLONS));
+            // Glowing caps: additive points on the pylon tops
+            const capGeo = new THREE.BufferGeometry();
+            capGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(PYLONS * 2 * 3), 3));
+            const caps = new THREE.Points(capGeo, B3D.mat(`
+varying float vD;
+void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vD = -mv.z;
+    gl_PointSize = clamp(2600.0 / vD, 2.0, 90.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uLane; uniform vec3 uGrid;
+varying float vD;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    float a = exp(-r * r * 5.0) * (1.0 - smoothstep(300.0, 1400.0, vD));
+    gl_FragColor = vec4(mix(uLane, vec3(1.0), 0.35) * a * 0.9, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(pylons, caps);
+            scene.add(pylons, caps);
+
+            const SPEED = 75;
+            const gridBase = B3D.col(0xff2bd6), tmp = new THREE.Color();
+            return {
+                scene, camera,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uBoss.value = s.boss;
+                    U.uScroll.value = s.t * SPEED;
+                    U.uBright.value = 0.55 + s.pulse * 0.7 + s.surge * 0.3;
+                    B3D.lerpColor(tmp, gridBase, red, s.boss * 0.7);
+                    U.uGrid.value.copy(tmp).lerp(cyan, s.surge * 0.5);
+                    U.uSunTop.value.setRGB(1.0, 0.8 - 0.5 * s.boss, 0.2 - 0.05 * s.boss);
+                    // Pylons: rows at x = ±64, moving toward the camera and wrapping
+                    const off = (s.t * SPEED) % (SPAN / PYLONS);
+                    const cp = capGeo.attributes.position.array;
+                    for (let i = 0; i < PYLONS; i++) {
+                        const z = pylonZ[i] + off;
+                        for (let side = 0; side < 2; side++) {
+                            const x = side ? 64 : -64, h = 34;
+                            m4.makeScale(1, h, 1).setPosition(x, 0, z);
+                            pylons.setMatrixAt(i * 2 + side, m4);
+                            cp.set([x, h + 1.5, z], (i * 2 + side) * 3);
+                        }
+                    }
+                    pylons.instanceMatrix.needsUpdate = true;
+                    capGeo.attributes.position.needsUpdate = true;
+                },
+            };
+        },
+    },
+
+    // Level 2 — The Gauntlet: low through a foundry canyon at night. A river of
+    // molten metal runs down the middle between riveted decks and conveyors,
+    // factory blocks with glowing vents and long pipes line the walls, truss
+    // gantries sweep overhead, smokestacks smoulder ahead and embers drift up
+    industrial: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(62, PLAY_W / PLAY_H, 1, 3500);
+            camera.position.set(0, 46, 0);
+            camera.rotation.x = -0.3;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uHeat: { value: 0 }, uBoss: { value: 0 },
+                uFog: { value: B3D.col(0x1a0905) }, uGlow: { value: B3D.col(0xff5a10) },
+            };
+            const FOG = `
+vec3 foundryFog(vec3 col, vec3 w, float near, float far) {
+    float d = length(w - cameraPosition);
+    float k = smoothstep(near, far, d);
+    // Smoky air lit orange from the furnaces ahead
+    vec3 f = uFog + uGlow * (0.06 + 0.1 * uHeat) * smoothstep(far * 0.4, far, d);
+    return mix(col, f, k);
+}`;
+            const rnd = B3D.rng(2024);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+
+            // Sky: smoke lit from below by the furnaces
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(3000, 32, 16), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uHeat; uniform vec3 uGlow;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec2 q = vec2(atan(d.x, -d.z) * 3.0, e * 8.0 - uTime * 0.05);
+    float smoke = fbm3(q * 2.0 + vec2(uTime * 0.03, 0.0));
+    vec3 col = mix(vec3(0.05, 0.02, 0.015), vec3(0.012, 0.008, 0.01), smoothstep(-0.05, 0.5, e));
+    float under = exp(-max(e, 0.0) * 6.0);
+    col += uGlow * (0.18 + 0.2 * uHeat) * under * (0.4 + 0.8 * smoke);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Floor: molten channel, deck plates with rivets, conveyors
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(1400, 6000), B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uTime; uniform float uScroll; uniform float uBoss;
+varying vec3 vW;
+void main() {
+    float ax = abs(vW.x);
+    float z = vW.z - uScroll;
+    vec3 col;
+    if (ax < 16.0) {
+        // Molten metal, kept dark (enemy shots here are orange): a crusted red
+        // flow with thin hot veins, brighter toward the distance
+        float f = fbm3(vec2(vW.x * 0.08, z * 0.03 - uTime * 0.6));
+        float v = fbm3(vec2(vW.x * 0.15 + 5.0, z * 0.06 - uTime * 1.1));
+        float vein = smoothstep(0.62, 0.72, v) * smoothstep(0.82, 0.72, v);
+        vec3 lava = mix(vec3(0.12, 0.015, 0.0), vec3(0.42, 0.07, 0.0), smoothstep(0.4, 0.8, f));
+        lava += vec3(0.75, 0.3, 0.05) * vein * 0.6;
+        lava = mix(lava, lava * vec3(1.3, 0.5, 0.4), uBoss * 0.5);
+        float crust = smoothstep(9.0, 16.0, ax) * (0.6 + 0.4 * vnoise(vec2(z * 0.2, ax)));
+        float far = smoothstep(150.0, 900.0, length(vW - cameraPosition));
+        col = mix(lava * (0.75 + 0.35 * uHeat + 0.6 * far), vec3(0.05, 0.02, 0.012), crust);
+    } else {
+        // Deck plates 24 units square, seams and corner rivets, lit by the channel
+        vec2 pc = vec2(vW.x, z) / 24.0;
+        float seam = max(gridAA(pc.x, 1.2), gridAA(pc.y, 1.2));
+        vec2 f = fract(pc);
+        vec2 rv = min(f, 1.0 - f) * 24.0;
+        float rivet = smoothstep(1.1, 0.5, length(rv - 2.4));
+        float wear = vnoise(floor(pc) * 1.7) * 0.02;
+        vec3 steel = vec3(0.032, 0.038, 0.05) + wear;           // cool steel against the heat
+        col = steel * (1.0 - seam * 0.55) + vec3(0.03, 0.035, 0.045) * rivet;
+        // Conveyor belts with chevrons running faster than the deck
+        float bx = abs(ax - 48.0);
+        if (bx < 9.0) {
+            float chev = step(0.55, fract((z - uTime * 70.0) / 10.0 + bx * 0.06));
+            col = vec3(0.03, 0.025, 0.025) + vec3(0.5, 0.18, 0.02) * chev * 0.22 * smoothstep(9.0, 7.0, bx);
+            col += vec3(0.25, 0.1, 0.03) * gridAA(bx / 9.0, 1.0) * 0.5;
+        }
+        // Firelight from the channel
+        col += uGlow * (0.16 + 0.1 * uHeat) * exp(-(ax - 16.0) / 22.0);
+    }
+    gl_FragColor = vec4(foundryFog(col, vW, 120.0, 2600.0), 1.0);
+}`, U));
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.z = -2700;
+            scene.add(floor);
+
+            // Long pipes along both walls with flanges scrolling past
+            const pipeMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uScroll;
+varying vec3 vW; varying vec3 vN;
+void main() {
+    float z = vW.z - uScroll;
+    float flange = smoothstep(0.92, 0.97, fract(z / 46.0));
+    float lit = max(0.0, dot(vN, normalize(vec3(-sign(vW.x), 0.4, 0.0))));
+    vec3 col = vec3(0.04, 0.035, 0.035) + vec3(0.05, 0.045, 0.04) * pow(max(vN.y, 0.0), 6.0);
+    col += uGlow * 0.25 * lit;
+    col = mix(col, col * 2.2 + vec3(0.04, 0.02, 0.01), flange);
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2400.0), 1.0);
+}`, U);
+            const pipeGeo = new THREE.CylinderGeometry(1, 1, 6000, 16, 1, true);
+            pipeGeo.rotateX(Math.PI / 2);
+            for (const [x, y, r] of [[-76, 5, 4.5], [-86, 15, 3.5], [76, 5, 4.5], [88, 13, 4], [-80, 26, 2.5], [84, 25, 2.5]]) {
+                const p = new THREE.Mesh(pipeGeo, pipeMat);
+                p.scale.set(r, 1, r);
+                p.position.set(x, y, -2700);
+                scene.add(p);
+            }
+
+            // Factory blocks on both sides: panelled walls, glowing vents facing the channel
+            const BLOCKS = 36, BSPAN = 2600;
+            const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+            blockGeo.translate(0, 0.5, 0);
+            const blocks = new THREE.InstancedMesh(blockGeo, B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+uniform float uTime;
+varying vec3 vW; varying vec3 vN; varying float vSeed;
+void main() {
+    vec3 col = vec3(0.028, 0.032, 0.042);
+    // Horizontal panel lines and vertical ribs
+    col *= 1.0 - 0.35 * gridAA(vW.y / 9.0, 1.0);
+    float side = abs(vN.x);
+    if (side > 0.5 && sign(vN.x) != sign(vW.x)) {
+        // Faces looking at the channel: rows of vents glowing orange
+        vec2 vc = vec2(vW.z / 14.0, vW.y / 22.0);
+        vec2 f = fract(vc);
+        float vent = step(0.15, f.x) * step(f.x, 0.85) * step(0.36, f.y) * step(f.y, 0.64)
+                   * step(0.45, fract(f.y * 22.0));             // louvred slats
+        float on = step(0.35, h21(floor(vc) + vSeed * 50.0));
+        float flick = 0.75 + 0.25 * sin(uTime * (2.0 + vSeed * 3.0) + floor(vc.x) * 1.7);
+        col += uGlow * vent * on * flick * (0.42 + 0.3 * uHeat);
+        col += uGlow * 0.08;                       // firelight on the facing walls
+    }
+    // Hot rim along the roofline
+    col += uGlow * 0.35 * step(0.5, vN.y) * smoothstep(0.0, 1.0, h21(vec2(vSeed, 2.0)));
+    gl_FragColor = vec4(foundryFog(col, vW, 120.0, 2400.0), 1.0);
+}`, U), BLOCKS * 2);
+            const blockDefs = [];
+            for (let i = 0; i < BLOCKS; i++) {
+                for (const side of [-1, 1]) {
+                    blockDefs.push({ x: side * (118 + rnd() * 40), z0: -i * (BSPAN / BLOCKS) - rnd() * 20,
+                        w: 50 + rnd() * 50, h: 40 + rnd() * 120, d: 50 + rnd() * 25 });
+                }
+            }
+
+            // Overhead gantries: two pillars and a truss beam, warning lights on the pillars
+            const GANTRIES = 7, GSPAN = 2100;
+            const trussMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec2 vUv; varying vec3 vN;
+void main() {
+    // Lattice: diagonal braces between chords, see-through gaps
+    vec2 q = vec2(vUv.x * 40.0, vUv.y);
+    float diag = abs(fract(q.x + q.y * 0.9) - 0.5);
+    float chord = step(vUv.y, 0.12) + step(0.88, vUv.y);
+    float web = smoothstep(0.1, 0.05, diag);
+    if (max(chord, web) < 0.5) discard;
+    vec3 col = vec3(0.03, 0.026, 0.026) + uGlow * 0.3 * max(-vN.y, 0.0);   // underside lit by the channel
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2200.0), 1.0);
+}`, U, { side: THREE.DoubleSide });
+            const gantries = [];
+            const beamGeo = new THREE.PlaneGeometry(300, 14);
+            const pillarGeo = new THREE.BoxGeometry(8, 110, 8);
+            pillarGeo.translate(0, 55, 0);
+            const pillarMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec3 vN;
+void main() {
+    vec3 col = vec3(0.04, 0.034, 0.03) + uGlow * 0.18 * max(0.0, -sign(vW.x) * vN.x);
+    col *= 1.0 - 0.3 * gridAA(vW.y / 12.0, 1.0);
+    // Hazard stripes at the foot
+    col = mix(col, vec3(0.35, 0.22, 0.02) * step(0.5, fract((vW.y + vW.x) / 6.0)), step(vW.y, 12.0) * 0.8);
+    gl_FragColor = vec4(foundryFog(col, vW, 100.0, 2200.0), 1.0);
+}`, U);
+            for (let i = 0; i < GANTRIES; i++) {
+                const g = new THREE.Group();
+                const beam = new THREE.Mesh(beamGeo, trussMat);
+                beam.position.y = 104;
+                const beam2 = beam.clone();
+                beam2.rotation.x = Math.PI / 2;      // top chord plane, so it reads as a box truss from below
+                beam2.position.y = 111;
+                g.add(beam, beam2);
+                for (const side of [-1, 1]) {
+                    const p = new THREE.Mesh(pillarGeo, pillarMat);
+                    p.position.x = side * 140;
+                    g.add(p);
+                }
+                g.userData.z0 = -i * (GSPAN / GANTRIES) - 300;
+                scene.add(g);
+                gantries.push(g);
+            }
+            // Warning lamps on the gantries + smokestack rims: additive points
+            const lampCount = GANTRIES * 2;
+            const lampGeo = new THREE.BufferGeometry();
+            lampGeo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(lampCount * 3), 3));
+            lampGeo.setAttribute('aOn', new THREE.Float32BufferAttribute(new Float32Array(lampCount), 1));
+            const lamps = new THREE.Points(lampGeo, B3D.mat(`
+attribute float aOn;
+varying float vD; varying float vOn;
+void main() {
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vD = -mv.z; vOn = aOn;
+    gl_PointSize = clamp(2200.0 / vD, 2.0, 60.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying float vD; varying float vOn;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    float a = exp(-r * r * 6.0) * vOn * (1.0 - smoothstep(400.0, 2000.0, vD));
+    gl_FragColor = vec4(vec3(1.0, 0.12, 0.05) * a, 1.0);
+}`, {}, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(blocks, lamps);
+            scene.add(blocks, lamps);
+
+            // Smokestacks ahead with glowing rims and rising smoke
+            const stackMat = B3D.mat(B3D.VS_WORLD, FOG.replace('vec3 foundryFog', 'uniform vec3 uFog; uniform vec3 uGlow; uniform float uHeat;\nvec3 foundryFog') + `
+varying vec3 vW; varying vec3 vN; varying vec2 vUv;
+void main() {
+    vec3 col = vec3(0.03, 0.024, 0.022);
+    col *= 1.0 - 0.4 * gridAA(vW.y / 30.0, 1.0);
+    col += uGlow * (0.8 + 0.6 * uHeat) * smoothstep(0.96, 1.0, vUv.y);
+    col += uGlow * 0.05 * (1.0 - vUv.y);
+    gl_FragColor = vec4(foundryFog(col, vW, 400.0, 4200.0), 1.0);
+}`, U);
+            const smokeMat = B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uGlow; uniform float uHeat;
+varying vec2 vUv; varying float vSeed;
+void main() {
+    vec2 q = vUv;
+    float n = fbm3(vec2(q.x * 3.0 + vSeed * 10.0, q.y * 2.5 - uTime * 0.35));
+    float shape = smoothstep(0.5, 0.0, abs(q.x - 0.5 - (q.y * q.y) * 0.25)) * smoothstep(0.0, 0.15, q.y) * smoothstep(1.0, 0.4, q.y);
+    float a = smoothstep(0.35, 0.75, n) * shape;
+    vec3 col = mix(uGlow * (0.35 + 0.3 * uHeat), vec3(0.06, 0.04, 0.035), smoothstep(0.0, 0.5, q.y));
+    gl_FragColor = vec4(col, a * 0.75);
+}`, U, { transparent: true, depthWrite: false, side: THREE.DoubleSide });
+            const stackGeo = new THREE.CylinderGeometry(1, 1.25, 1, 20, 1, true);
+            stackGeo.translate(0, 0.5, 0);
+            const smokeGeo = new THREE.PlaneGeometry(1, 1);
+            smokeGeo.translate(0, 0.5, 0);
+            for (let i = 0; i < 9; i++) {
+                const side = i % 2 ? 1 : -1;
+                const x = side * (180 + rnd() * 520), z = -1500 - rnd() * 900, h = 260 + rnd() * 380, r = 18 + rnd() * 16;
+                const st = new THREE.Mesh(stackGeo, stackMat);
+                st.scale.set(r, h, r);
+                st.position.set(x, 0, z);
+                const sm = new THREE.InstancedMesh(smokeGeo, smokeMat, 1);
+                m4.compose(pos.set(x, h - 10, z), quat, scl.set(r * 8, r * 16, 1));
+                sm.setMatrixAt(0, m4);
+                scene.add(st, sm);
+            }
+
+            // Embers: sparks drifting up from the channel
+            const EMBERS = 500;
+            const eGeo = new THREE.BufferGeometry();
+            const ePos = new Float32Array(EMBERS * 3), eSeed = new Float32Array(EMBERS);
+            for (let i = 0; i < EMBERS; i++) {
+                ePos.set([(rnd() - 0.5) * 260, rnd() * 160, -rnd() * 1600], i * 3);
+                eSeed[i] = rnd();
+            }
+            eGeo.setAttribute('position', new THREE.Float32BufferAttribute(ePos, 3));
+            eGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(eSeed, 1));
+            const embers = new THREE.Points(eGeo, B3D.mat(`
+uniform float uTime; uniform float uScroll;
+attribute float aSeed;
+varying float vA;
+void main() {
+    vec3 p = position;
+    float life = fract(uTime * (0.15 + aSeed * 0.2) + aSeed);
+    p.y = mod(position.y + uTime * (12.0 + aSeed * 22.0), 170.0);
+    p.x += sin(uTime * (0.8 + aSeed) + aSeed * 30.0) * 8.0;
+    p.z = mod(position.z + uScroll, 1600.0) - 1580.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = (1.0 - life) * smoothstep(0.0, 20.0, p.y) * (1.0 - smoothstep(600.0, 1500.0, -mv.z));
+    gl_PointSize = clamp(420.0 / -mv.z, 1.5, 6.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uGlow;
+varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(mix(uGlow, vec3(1.0, 0.85, 0.4), 0.4) * vA * smoothstep(1.0, 0.2, r), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(embers);
+            scene.add(embers);
+
+            const SPEED = 80;
+            const glowBase = B3D.col(0xff5a10), glowBoss = B3D.col(0xff2008);
+            return {
+                scene, camera,
+                update(s) {
+                    const scroll = s.t * SPEED;
+                    U.uTime.value = s.t;
+                    U.uScroll.value = scroll;
+                    U.uBoss.value = s.boss;
+                    U.uHeat.value = Math.min(1, s.pulse + s.boss * 0.6);
+                    B3D.lerpColor(U.uGlow.value, glowBase, glowBoss, s.boss * 0.6);
+                    for (let i = 0; i < blockDefs.length; i++) {
+                        const b = blockDefs[i];
+                        const z = ((b.z0 + scroll) % BSPAN + BSPAN) % BSPAN - BSPAN + 60;
+                        m4.compose(pos.set(b.x, 0, z), quat, scl.set(b.w, b.h, b.d));
+                        blocks.setMatrixAt(i, m4);
+                    }
+                    blocks.instanceMatrix.needsUpdate = true;
+                    const lp = lampGeo.attributes.position.array, lo = lampGeo.attributes.aOn.array;
+                    for (let i = 0; i < GANTRIES; i++) {
+                        const g = gantries[i];
+                        g.position.z = ((g.userData.z0 + scroll) % GSPAN + GSPAN) % GSPAN - GSPAN + 80;
+                        const blink = Math.sin(s.t * 4 + i) > 0 ? 1 : 0.15;
+                        for (let side = 0; side < 2; side++) {
+                            lp.set([side ? 140 : -140, 114, g.position.z], (i * 2 + side) * 3);
+                            lo[i * 2 + side] = blink;
+                        }
+                    }
+                    lampGeo.attributes.position.needsUpdate = true;
+                    lampGeo.attributes.aOn.needsUpdate = true;
+                },
+            };
+        },
+    },
+
+    // Level 3 — Debris Field: flying through an asteroid belt. A nebula with
+    // dust lanes and a galactic band behind, a ringed gas giant low on the
+    // right, dark tumbling rocks and glinting debris streaming past. The rocks
+    // stay dim and fogged so they never read as the level's neon asteroids.
+    space: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 6000);
+            camera.rotation.x = -0.22;
+
+            const U = {
+                uTime: { value: 0 }, uBoss: { value: 0 }, uStar: { value: 1 },
+                uSun: { value: new THREE.Vector3(-0.55, 0.5, 0.65).normalize() },
+            };
+            const rnd = B3D.rng(4242);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3(), eul = new THREE.Euler();
+
+            // Nebula sky: coloured gas, dark dust lanes, a galactic band, stars
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uBoss; uniform float uStar;
+varying vec3 vW;
+float starLayer(vec3 d, float scale, float density) {
+    vec2 sp = vec2(atan(d.x, -d.z), asin(clamp(d.y, -1.0, 1.0))) * scale;
+    vec2 c = floor(sp);
+    float h = h21(c);
+    vec2 o = vec2(h21(c + 3.1), h21(c + 7.7)) * 0.6 + 0.2;
+    float s = smoothstep(0.22, 0.0, length(fract(sp) - o)) * step(1.0 - density, h);
+    return s * (0.6 + 0.4 * sin(uTime * (1.0 + h * 5.0) + h * 40.0));
+}
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    vec2 q = vec2(atan(d.x, -d.z), d.y) * vec2(1.6, 2.4);
+    float n1 = fbm3(q * 1.6 + vec2(uTime * 0.004, 0.0));
+    float n2 = fbm3(q * 3.1 + 7.0);
+    float dust = smoothstep(0.45, 0.7, fbm3(q * 2.3 + 21.0));
+    vec3 col = vec3(0.006, 0.008, 0.025);
+    vec3 teal = vec3(0.03, 0.17, 0.24), mag = vec3(0.2, 0.035, 0.22);
+    mag = mix(mag, vec3(0.28, 0.02, 0.04), uBoss * 0.6);
+    col += teal * smoothstep(0.35, 0.85, n1) * 1.2;
+    col += mag * smoothstep(0.4, 0.9, n2) * smoothstep(0.3, 0.7, n1);
+    // Galactic band across the sky
+    float band = exp(-pow((d.y - 0.18 * sin(atan(d.x, -d.z))) * 4.5, 2.0));
+    col += vec3(0.09, 0.08, 0.13) * band * (0.4 + 0.6 * n2);
+    col *= 1.0 - dust * 0.75;
+    float st = starLayer(d, 90.0, 0.3) * 0.5 + starLayer(d, 220.0, 0.4) * 0.35 + band * starLayer(d, 400.0, 0.5) * 0.4;
+    vec3 sc = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.85, 0.7), step(0.5, h21(floor(d.xy * 300.0))));
+    col += sc * st * (1.0 - dust * 0.6) * uStar;
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Gas giant: banded, lit from the upper left, with an atmospheric rim
+            const planetU = Object.assign({}, U);
+            const planet = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), B3D.mat(`
+varying vec3 vP; varying vec3 vN; varying vec3 vW;
+void main() {
+    vP = position;
+    vN = normalize(mat3(modelMatrix) * normal);
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+}`, `
+uniform float uTime; uniform vec3 uSun;
+varying vec3 vP; varying vec3 vN; varying vec3 vW;
+void main() {
+    float lat = vP.y;
+    float lon = atan(vP.x, vP.z);
+    float turb = fbm3(vec2(lon * 3.0 + uTime * 0.01, lat * 9.0)) - 0.5;
+    float b = lat * 7.0 + turb * 1.6 + fbm3(vec2(lon * 1.0, lat * 30.0)) * 0.5;
+    vec3 c1 = vec3(0.16, 0.2, 0.38), c2 = vec3(0.32, 0.5, 0.62), c3 = vec3(0.45, 0.32, 0.55);
+    vec3 alb = mix(c1, c2, 0.5 + 0.5 * sin(b * 3.1));
+    alb = mix(alb, c3, smoothstep(0.6, 0.95, sin(b * 1.7 + 1.0)) * 0.6);
+    // A storm vortex in the southern bands
+    float storm = smoothstep(0.16, 0.0, length(vec2(lon - 0.6, (lat + 0.35) * 2.2)));
+    alb = mix(alb, vec3(0.6, 0.38, 0.5), storm * 0.8);
+    float ndl = dot(vN, uSun);
+    float lit = smoothstep(-0.15, 0.6, ndl);
+    vec3 V = normalize(cameraPosition - vW);
+    float rim = pow(1.0 - max(dot(vN, V), 0.0), 3.0);
+    vec3 col = alb * lit * 0.45 + vec3(0.25, 0.55, 0.9) * rim * (0.15 + 0.6 * smoothstep(-0.3, 0.4, ndl));
+    gl_FragColor = vec4(col, 1.0);
+}`, planetU));
+            const R = 820;
+            planet.scale.setScalar(R);
+            planet.position.set(1250, -1050, -3300);
+            planet.rotation.z = 0.35;
+            planet.renderOrder = -8;
+            scene.add(planet);
+
+            // Rings: banded, translucent, darkened where the planet's shadow falls
+            const ringGeo = new THREE.RingGeometry(1.35, 2.35, 160, 1);
+            const ring = new THREE.Mesh(ringGeo, B3D.mat(`
+varying vec3 vP; varying vec3 vW;
+void main() {
+    vP = position;
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+}`, `
+uniform vec3 uSun; uniform vec3 uCentre; uniform float uR;
+varying vec3 vP; varying vec3 vW;
+void main() {
+    float r = length(vP.xy);
+    float bands = 0.5 + 0.5 * sin(r * 60.0) * sin(r * 23.0 + 1.0);
+    float gap = smoothstep(0.02, 0.05, abs(r - 1.85)) * smoothstep(0.01, 0.03, abs(r - 2.1));
+    float a = (0.25 + 0.5 * bands) * gap * smoothstep(1.35, 1.45, r) * smoothstep(2.35, 2.2, r);
+    // Shadow: is the planet between this point and the sun?
+    vec3 toC = uCentre - vW;
+    float along = dot(toC, uSun);
+    float perp = length(toC - uSun * along);
+    float shadow = step(0.0, along) * smoothstep(uR * 0.95, uR * 1.02, perp);
+    shadow = 1.0 - step(0.0, along) * (1.0 - smoothstep(uR * 0.95, uR * 1.02, perp));
+    vec3 col = vec3(0.4, 0.42, 0.55) * (0.3 + 0.7 * shadow) * 0.6;
+    gl_FragColor = vec4(col, a * 0.8);
+}`, Object.assign({ uCentre: { value: planet.position }, uR: { value: R } }, U), { transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+            ring.scale.setScalar(R);
+            ring.position.copy(planet.position);
+            ring.rotation.set(-1.25, 0.25, 0.35);
+            ring.renderOrder = -7;
+            scene.add(ring);
+
+            // Asteroids: one jagged rock shape, scaled and spun per instance, flat-shaded
+            const rockGeo = new THREE.IcosahedronGeometry(1, 2);
+            const rp = rockGeo.attributes.position, v = new THREE.Vector3();
+            for (let i = 0; i < rp.count; i++) {
+                v.fromBufferAttribute(rp, i);
+                const n = B3D.fbm2(v.x * 1.7 + v.z * 0.9 + 3, v.y * 1.7 - v.z * 0.6 + 7, 3);
+                v.multiplyScalar(0.7 + n * 0.75);
+                rp.setXYZ(i, v.x, v.y, v.z);
+            }
+            rockGeo.computeVertexNormals();
+            const ROCKS = 120, RZ = 2400;
+            const rocks = new THREE.InstancedMesh(rockGeo, B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uSun;
+varying vec3 vW; varying vec3 vN; varying float vSeed;
+void main() {
+    vec3 N = normalize(vN);
+    vec3 V = normalize(cameraPosition - vW);
+    vec3 alb = mix(vec3(0.07, 0.065, 0.075), vec3(0.1, 0.085, 0.07), vSeed);
+    float key = max(dot(N, uSun), 0.0);
+    float rim = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    vec3 col = alb * (0.25 + 1.6 * key) * vec3(1.0, 0.92, 0.85);
+    col += vec3(0.1, 0.32, 0.45) * rim * 0.35;               // nebula light from behind
+    float d = length(vW - cameraPosition);
+    col = mix(col, vec3(0.01, 0.015, 0.035), smoothstep(250.0, 2300.0, d));
+    gl_FragColor = vec4(col, 1.0);
+}`, U), ROCKS);
+            const rockDefs = [];
+            for (let i = 0; i < ROCKS; i++) {
+                // Keep the middle of the view clear: rocks below and to the sides of the flight path
+                const big = rnd() < 0.07;
+                const ang = rnd() * Math.PI * 2;
+                const rad = (big ? 620 : 230) + Math.pow(rnd(), 0.8) * 650;
+                let x = Math.cos(ang) * rad * 1.25, y = Math.sin(ang) * rad * 0.8;
+                if (y > -60 && Math.abs(x) < 260) y -= 220;      // keep the flight path clear
+                rockDefs.push({
+                    x, y: y - 120, z0: -rnd() * RZ,
+                    s: big ? 45 + rnd() * 50 : 3 + Math.pow(rnd(), 2.2) * 18,
+                    sx: 0.7 + rnd() * 0.6, sy: 0.6 + rnd() * 0.5,
+                    rx: rnd() * 6, ry: rnd() * 6, wx: (rnd() - 0.5) * 0.8, wy: (rnd() - 0.5) * 0.8,
+                });
+            }
+            B3D.always(rocks);
+            scene.add(rocks);
+
+            // Glinting debris and dust streaming past
+            const DUST = 700;
+            const dGeo = new THREE.BufferGeometry();
+            const dPos = new Float32Array(DUST * 3), dSeed = new Float32Array(DUST);
+            for (let i = 0; i < DUST; i++) {
+                dPos.set([(rnd() - 0.5) * 900, (rnd() - 0.65) * 700, -rnd() * 2000], i * 3);
+                dSeed[i] = rnd();
+            }
+            dGeo.setAttribute('position', new THREE.Float32BufferAttribute(dPos, 3));
+            dGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(dSeed, 1));
+            const dust = new THREE.Points(dGeo, B3D.mat(`
+uniform float uTime;
+attribute float aSeed;
+varying float vA; varying float vGlint;
+void main() {
+    vec3 p = position;
+    p.z = mod(position.z + uTime * 140.0, 2000.0) - 1980.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    float d = -mv.z;
+    vGlint = step(0.93, aSeed) * pow(max(sin(uTime * (2.0 + aSeed * 6.0) + aSeed * 50.0), 0.0), 12.0);
+    vA = (1.0 - smoothstep(900.0, 1900.0, d)) * smoothstep(5.0, 60.0, d);
+    gl_PointSize = clamp(300.0 / d, 1.0, 3.5) * (1.0 + vGlint * 2.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying float vA; varying float vGlint;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    vec3 c = mix(vec3(0.35, 0.4, 0.5) * 0.5, vec3(1.0, 0.95, 0.85), vGlint);
+    gl_FragColor = vec4(c * vA * smoothstep(1.0, 0.3, r), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(dust);
+            scene.add(dust);
+
+            const SPEED = 140;
+            return {
+                scene, camera,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uBoss.value = s.boss;
+                    U.uStar.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    const adv = s.t * SPEED;
+                    for (let i = 0; i < ROCKS; i++) {
+                        const r = rockDefs[i];
+                        const z = ((r.z0 + adv) % RZ + RZ) % RZ - RZ + 60;
+                        eul.set(r.rx + s.t * r.wx, r.ry + s.t * r.wy, 0);
+                        quat.setFromEuler(eul);
+                        m4.compose(pos.set(r.x, r.y, z), quat, scl.set(r.s * r.sx, r.s * r.sy, r.s));
+                        rocks.setMatrixAt(i, m4);
+                    }
+                    rocks.instanceMatrix.needsUpdate = true;
+                },
+            };
+        },
+    },
+
+    // Level 4 — The Convoy: a night flight above the clouds. Two moonlit cloud
+    // decks stream past at different speeds; through the gaps a city glows far
+    // below, highways full of moving lights. A moon hangs ahead under a faint
+    // aurora, and the convoy's navigation lights blink in the distance.
+    sky: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 7000);
+            camera.position.set(0, 0, 0);
+            camera.rotation.x = -0.27;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uBoss: { value: 0 }, uSurge: { value: 0 },
+                uMoon: { value: new THREE.Vector3(0.12, 0.085, -1).normalize() },
+                uHaze: { value: B3D.col(0x0b1530) },
+            };
+            const rnd = B3D.rng(777);
+
+            // Sky: navy gradient, stars, aurora curtains, the moon with craters and halo
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(6000, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uMoon; uniform float uBoss; uniform vec3 uHaze;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec3 col = mix(uHaze, vec3(0.006, 0.01, 0.03), smoothstep(-0.05, 0.45, e));
+    col = mix(col, vec3(0.1, 0.02, 0.06), uBoss * 0.4 * smoothstep(0.4, 0.0, e));
+    // Stars
+    vec2 sp = vec2(atan(d.x, -d.z), e) * 180.0;
+    float h = h21(floor(sp));
+    col += vec3(0.8, 0.85, 1.0) * step(0.94, h) * smoothstep(0.3, 0.0, length(fract(sp) - 0.5))
+         * smoothstep(0.05, 0.35, e) * (0.5 + 0.5 * sin(uTime * (1.0 + h * 4.0) + h * 20.0));
+    // Aurora: soft folded curtains low in the sky
+    float az = atan(d.x, -d.z);
+    float curtain = sin(az * 5.0 + fbm3(vec2(az * 2.0, uTime * 0.05)) * 4.0 + uTime * 0.1);
+    float ribbon = smoothstep(0.6, 1.0, curtain) * smoothstep(0.06, 0.16, e) * smoothstep(0.42, 0.2, e);
+    col += mix(vec3(0.05, 0.35, 0.25), vec3(0.15, 0.1, 0.4), smoothstep(0.1, 0.35, e)) * ribbon * 0.26
+         * (0.6 + 0.4 * fbm3(vec2(az * 20.0, e * 10.0 - uTime * 0.2)));
+    // Moon: disc with darker maria, a cool halo
+    float md = acos(clamp(dot(d, uMoon), -1.0, 1.0));
+    float R = 0.055;
+    vec2 mq = vec2(az - atan(uMoon.x, -uMoon.z), e - uMoon.y) / R;
+    float maria = fbm3(mq * 2.2 + 4.0);
+    float disc = smoothstep(R, R * 0.97, md);
+    vec3 moon = vec3(0.78, 0.82, 0.9) * (0.72 - 0.16 * smoothstep(0.4, 0.75, maria));
+    moon = mix(moon, vec3(0.9, 0.55, 0.5), uBoss * 0.4);
+    col = mix(col, moon * 0.8, disc);
+    col += vec3(0.35, 0.45, 0.7) * 0.4 * exp(-max(md - R, 0.0) * 16.0) * (1.0 - disc);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // City far below: districts of lights, highways with traffic
+            const city = new THREE.Mesh(new THREE.PlaneGeometry(16000, 16000), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uScroll; uniform vec3 uHaze;
+varying vec3 vW;
+void main() {
+    vec2 p = vec2(vW.x, vW.z - uScroll * 0.35);
+    float dist = length(vW - cameraPosition);
+    float district = smoothstep(0.42, 0.68, fbm3(p * 0.0011));
+    vec2 cell = floor(p / 18.0);
+    float h = h21(cell);
+    vec2 o = vec2(h21(cell + 1.7), h21(cell + 4.1)) * 0.6 + 0.2;
+    float lamp = step(1.0 - district * 0.55, h) * smoothstep(0.24, 0.0, length(fract(p / 18.0) - o));
+    vec3 lc = mix(vec3(1.0, 0.62, 0.28), vec3(0.75, 0.85, 1.0), step(0.7, h21(cell + 9.0)));
+    vec3 col = vec3(0.01, 0.012, 0.025) + vec3(0.06, 0.04, 0.03) * district;
+    col += lc * lamp * 0.55 * (0.7 + 0.3 * sin(uTime * 2.0 + h * 30.0));
+    // Highways: two winding roads with moving car lights
+    for (int i = 0; i < 2; i++) {
+        float fi = float(i);
+        float rx = sin(p.y * 0.0009 + fi * 2.1) * 900.0 + (fi - 0.5) * 1400.0;
+        float dx = abs(p.x - rx);
+        float road = smoothstep(9.0, 3.0, dx);
+        float cars = step(0.6, fract((p.y + uTime * (220.0 + fi * 80.0) * (fi > 0.5 ? -1.0 : 1.0)) / 40.0)) * smoothstep(5.0, 1.0, dx);
+        col += vec3(1.0, 0.55, 0.2) * road * 0.35 + vec3(1.0, 0.92, 0.8) * cars * 0.7;
+    }
+    col = mix(col, uHaze * 0.8, smoothstep(2500.0, 9000.0, dist));
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            city.rotation.x = -Math.PI / 2;
+            city.position.set(0, -1600, -4000);
+            scene.add(city);
+
+            // Cloud decks: fbm coverage, moonlit where the cloud thins toward the moon
+            const cloud = (y, scale, speed, cover, alpha) => {
+                const m = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uScroll; uniform vec3 uMoon; uniform vec3 uHaze; uniform float uSurge;
+varying vec3 vW;
+void main() {
+    vec2 p = vec2(vW.x, vW.z - uScroll * ${speed.toFixed(2)}) * ${scale.toFixed(5)} + vec2(uTime * 0.01, 0.0);
+    // Billows plus finer detail, so the edges stay crisp at grazing angles
+    float d = fbm3(p) * 0.72 + fbm3(p * 3.7 + 9.0) * 0.28;
+    float d2 = fbm3(p + normalize(uMoon.xz) * 0.06) * 0.72 + fbm3((p + normalize(uMoon.xz) * 0.06) * 3.7 + 9.0) * 0.28;
+    float cov = smoothstep(${cover.toFixed(2)}, ${(cover + 0.14).toFixed(2)}, d);
+    float lit = clamp((d - d2) * 9.0 + 0.45, 0.0, 1.0);
+    float dist = length(vW - cameraPosition);
+    vec3 shadow = vec3(0.025, 0.035, 0.07), light = vec3(0.32, 0.38, 0.52);
+    vec3 col = mix(shadow, light, lit * lit) * (0.6 + 0.4 * cov);
+    col += vec3(0.1, 0.5, 0.6) * uSurge * 0.08;
+    float fade = smoothstep(7000.0, 2500.0, dist);
+    col = mix(uHaze * 1.2, col, fade);
+    gl_FragColor = vec4(col, cov * ${alpha.toFixed(2)} * mix(1.0, 0.85, 1.0 - fade));
+}`, U, { transparent: true, depthWrite: false }));
+                m.rotation.x = -Math.PI / 2;
+                m.position.set(0, y, -5000);
+                return m;
+            };
+            const low = cloud(-520, 0.0015, 0.6, 0.46, 0.94);
+            const high = cloud(-170, 0.0021, 1.0, 0.54, 0.75);
+            low.renderOrder = 1; high.renderOrder = 2;
+            scene.add(low, high);
+
+            // The convoy: aircraft navigation lights blinking far ahead
+            const NAV = 18;
+            const nGeo = new THREE.BufferGeometry();
+            const nPos = new Float32Array(NAV * 3), nSeed = new Float32Array(NAV);
+            for (let i = 0; i < NAV; i++) {
+                const grp = Math.floor(i / 3);
+                nPos.set([(grp - 2.5) * 160 + (i % 3 - 1) * 26, -80 + rnd() * 60, -1800 - grp * 220 - rnd() * 60], i * 3);
+                nSeed[i] = i % 3 === 1 ? 2 : i % 3;   // 0 red (port), 1 green, 2 white strobe
+            }
+            nGeo.setAttribute('position', new THREE.Float32BufferAttribute(nPos, 3));
+            nGeo.setAttribute('aKind', new THREE.Float32BufferAttribute(nSeed, 1));
+            const nav = new THREE.Points(nGeo, B3D.mat(`
+uniform float uTime;
+attribute float aKind;
+varying vec3 vC; varying float vA;
+void main() {
+    vec3 p = position;
+    p.z += sin(uTime * 0.3 + position.x) * 40.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vC = aKind < 0.5 ? vec3(1.0, 0.15, 0.1) : (aKind < 1.5 ? vec3(0.2, 1.0, 0.4) : vec3(1.0));
+    float strobe = aKind > 1.5 ? step(0.92, fract(uTime * 0.9 + position.x * 0.01)) : 0.6 + 0.4 * sin(uTime * 3.0 + position.x);
+    vA = strobe;
+    gl_PointSize = 5.0;
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying vec3 vC; varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(vC * vA * exp(-r * r * 4.0) * 0.8, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(nav);
+            scene.add(nav);
+
+            const SPEED = 160;
+            return {
+                scene, camera,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uScroll.value = s.t * SPEED;
+                    U.uBoss.value = s.boss;
+                    U.uSurge.value = s.surge;
+                },
+            };
+        },
+    },
+
+    // Level 5 — The Core: skimming a circuit-board city toward the machine's
+    // heart. Routed traces carry data pulses toward the player between chips,
+    // capacitors and data towers streaming light; on the horizon the Core, a
+    // pulsing sphere in counter-rotating rings, sends beams up into a hex sky
+    digital: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 5000);
+            camera.position.set(0, 60, 0);
+            camera.rotation.x = -0.3;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uBoss: { value: 0 }, uBright: { value: 1 },
+                uA: { value: B3D.col(0xa633ff) }, uB: { value: B3D.col(0x00ffcc) },
+                uFog: { value: B3D.col(0x0c0322) }, uCore: { value: B3D.col(0x33ffdd) },
+            };
+            const FOG = `
+uniform vec3 uFog;
+vec3 coreFog(vec3 col, vec3 w, float far) {
+    return mix(col, uFog, smoothstep(far * 0.08, far, length(w - cameraPosition)));
+}`;
+            const rnd = B3D.rng(5150);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+
+            // Sky: deep indigo with a faint hex lattice and the Core's glow at the horizon
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(4500, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore; uniform float uBoss;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec3 col = mix(vec3(0.06, 0.015, 0.14), vec3(0.008, 0.004, 0.025), smoothstep(-0.02, 0.5, e));
+    // Hex lattice
+    vec2 q = vec2(atan(d.x, -d.z) * 14.0, e * 18.0 - uTime * 0.05);
+    vec2 r = vec2(1.0, 1.732);
+    vec2 a = mod(q, r) - r * 0.5, b = mod(q - r * 0.5, r) - r * 0.5;
+    vec2 g = dot(a, a) < dot(b, b) ? a : b;
+    vec2 ag = abs(g);
+    float hex = max(dot(ag, vec2(0.5, 0.866)), ag.x);
+    col += vec3(0.25, 0.1, 0.5) * smoothstep(0.035, 0.0, abs(hex - 0.5)) * 0.2 * smoothstep(0.02, 0.25, e);
+    // The Core's light, low and ahead
+    col += uCore * 0.22 * exp(-length(vec2(atan(d.x, -d.z), e * 1.6)) * 4.0);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Board: routed traces with pads, data pulses running toward the camera
+            const board = new THREE.Mesh(new THREE.PlaneGeometry(5000, 7000), B3D.mat(B3D.VS_WORLD, FOG + `
+uniform float uTime; uniform float uScroll; uniform vec3 uA; uniform vec3 uB; uniform float uBright;
+varying vec3 vW;
+vec2 eh(vec2 c) { return vec2(h21(c + 0.5), h21(c + 17.3)); }
+void main() {
+    float S = 22.0;
+    vec2 w = vec2(vW.x, vW.z - uScroll);
+    vec2 c = floor(w / S);
+    vec2 f = fract(w / S) * S - S * 0.5;
+    // Traces about 1.5 px wide at any distance, no thinner than 0.35 units up close
+    float px = max(fwidth(w.x), fwidth(w.y));
+    float tw = max(0.35, px * 0.9);
+    float right = step(0.55, eh(c).x), down = step(0.45, eh(c).y);
+    float left = step(0.55, eh(c - vec2(1.0, 0.0)).x), up = step(0.45, eh(c - vec2(0.0, 1.0)).y);
+    float tr = 0.0;
+    tr = max(tr, right * smoothstep(tw, tw * 0.4, abs(f.y)) * step(0.0, f.x));
+    tr = max(tr, left  * smoothstep(tw, tw * 0.4, abs(f.y)) * step(f.x, 0.0));
+    tr = max(tr, down  * smoothstep(tw, tw * 0.4, abs(f.x)) * step(0.0, f.y));
+    tr = max(tr, up    * smoothstep(tw, tw * 0.4, abs(f.x)) * step(f.y, 0.0));
+    float links = right + down + left + up;
+    float pad = step(0.5, links) * smoothstep(tw * 1.1, tw * 0.3, abs(length(f) - 1.8));
+    vec3 tc = mix(uA, uB, step(0.5, h21(vec2(c.x, 7.0))));
+    float dist = length(vW - cameraPosition);
+    float detail = 1.0 - smoothstep(250.0, 1000.0, dist);     // traces would alias far away
+    vec3 col = vec3(0.012, 0.006, 0.035);
+    col += tc * (tr * 0.3 + pad * 0.4) * detail * uBright;
+    // Data pulses along the traces running toward the camera
+    float seed = h21(vec2(c.x, 91.0));
+    float py = fract(w.y / (S * 7.0) + uTime * (0.35 + seed * 0.5) + seed * 5.0);
+    float pulse = smoothstep(0.05, 0.0, abs(py - 0.5)) * (down * step(0.0, f.y) + up * step(f.y, 0.0))
+                * smoothstep(tw * 2.5, tw * 0.5, abs(f.x));
+    col += vec3(0.7, 1.0, 1.0) * pulse * 0.6 * detail;
+    // A faint glow on the board toward the Core
+    col += uB * 0.05 * smoothstep(400.0, 3000.0, dist) * exp(-abs(vW.x) / 600.0);
+    gl_FragColor = vec4(coreFog(col, vW, 3800.0), 1.0);
+}`, U));
+            board.rotation.x = -Math.PI / 2;
+            board.position.z = -3300;
+            scene.add(board);
+
+            // Components: chips (wide, low, with pins and a lit die), capacitors, data towers
+            const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+            boxGeo.translate(0, 0.5, 0);
+            const compMat = B3D.mat(B3D.VS_WORLD, FOG + `
+uniform float uTime; uniform vec3 uA; uniform vec3 uB; uniform float uBright;
+varying vec3 vW; varying vec3 vN; varying vec2 vUv; varying float vSeed;
+void main() {
+    vec3 tc = mix(uA, uB, step(0.5, vSeed));
+    vec3 col = vec3(0.02, 0.012, 0.045);
+    float top = step(0.5, vN.y);
+    if (vSeed > 0.72) {
+        // Data tower: vertical light strips with packets streaming up
+        vec2 q = vec2((abs(vN.x) > 0.5 ? vW.z : vW.x) / 6.0, vW.y / 40.0);
+        float strip = smoothstep(0.12, 0.0, abs(fract(q.x) - 0.5)) * (1.0 - top);
+        float flow = smoothstep(0.85, 1.0, fract(q.y * 0.6 - uTime * (0.8 + vSeed) + h21(vec2(floor(q.x), vSeed))));
+        col += tc * strip * (0.3 + 1.0 * flow) * uBright;
+        col += tc * top * 0.35;
+    } else {
+        // Chip: pin rows along the sides, a glowing die mark on top
+        float pins = step(0.5, fract((abs(vN.x) > 0.5 ? vW.z : vW.x) / 3.0)) * step(vW.y, 2.2) * (1.0 - top);
+        col += vec3(0.45, 0.45, 0.55) * pins * 0.35;
+        vec2 uvp = vUv - 0.5;
+        float die = top * smoothstep(0.02, 0.0, abs(max(abs(uvp.x), abs(uvp.y)) - 0.3));
+        float blink = 0.6 + 0.4 * sin(uTime * (1.0 + vSeed * 4.0) + vSeed * 20.0);
+        col += tc * die * blink * 0.8 * uBright;
+        col += tc * top * 0.05;
+    }
+    gl_FragColor = vec4(coreFog(col, vW, 3800.0), 1.0);
+}`, U);
+            const COMPS = 70, CSPAN = 2800;
+            const comps = new THREE.InstancedMesh(boxGeo, compMat, COMPS);
+            const compDefs = [];
+            for (let i = 0; i < COMPS; i++) {
+                const side = rnd() < 0.5 ? -1 : 1;
+                const tower = rnd() < 0.35;
+                compDefs.push({
+                    x: side * (90 + rnd() * 500), z0: -rnd() * CSPAN,
+                    w: tower ? 14 + rnd() * 16 : 40 + rnd() * 60, d: tower ? 14 + rnd() * 16 : 30 + rnd() * 50,
+                    h: tower ? 80 + rnd() * 260 : 4 + rnd() * 5,
+                });
+            }
+            B3D.always(comps);
+            scene.add(comps);
+
+            // The Core on the horizon: glowing sphere, three wireframe rings, light beams
+            const core = new THREE.Group();
+            core.position.set(0, 260, -3200);
+            const coreBall = new THREE.Mesh(new THREE.SphereGeometry(150, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore; uniform float uBoss;
+varying vec3 vW; varying vec3 vN;
+void main() {
+    vec3 V = normalize(cameraPosition - vW);
+    float f = pow(1.0 - max(dot(normalize(vN), V), 0.0), 2.0);
+    float beat = 0.7 + 0.3 * sin(uTime * (2.0 + uBoss * 4.0));
+    vec3 col = uCore * (0.35 + 1.0 * f) * beat;
+    col += uCore * 0.25 * smoothstep(0.55, 0.9, fbm3(vec2(atan(vN.x, vN.z) * 3.0, vN.y * 3.0 - uTime * 0.4)));
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            core.add(coreBall);
+            // Halo behind the sphere
+            const halo = new THREE.Mesh(new THREE.PlaneGeometry(900, 900), B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uCore; uniform float uTime;
+varying vec2 vUv;
+void main() {
+    float r = length(vUv - 0.5) * 2.0;
+    float a = exp(-r * 3.2) * (0.85 + 0.15 * sin(uTime * 2.0));
+    gl_FragColor = vec4(uCore * a * 0.5, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            halo.position.z = -160;
+            core.add(halo);
+            const ringMat = new THREE.LineBasicMaterial({ color: 0x33ffdd, transparent: true, opacity: 0.55, fog: false });
+            const rings = [];
+            for (let i = 0; i < 3; i++) {
+                const ringG = new THREE.EdgesGeometry(new THREE.TorusGeometry(240 + i * 70, 4 + i, 4, 48 + i * 16));
+                const r = new THREE.LineSegments(ringG, ringMat);
+                r.rotation.set(Math.PI / 2 + (i - 1) * 0.5, i * 0.7, 0);
+                core.add(r);
+                rings.push(r);
+            }
+            // Beams rising from the Core
+            const beamMat = B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uCore;
+varying vec2 vUv;
+void main() {
+    float a = smoothstep(0.5, 0.0, abs(vUv.x - 0.5)) * (1.0 - vUv.y) * (0.6 + 0.4 * sin(uTime * 3.0 + vUv.y * 10.0));
+    gl_FragColor = vec4(uCore * a * 0.35, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+            for (let i = 0; i < 5; i++) {
+                const b = new THREE.Mesh(new THREE.PlaneGeometry(30, 2200), beamMat);
+                b.position.set((i - 2) * 140, 1100, -60);
+                b.rotation.z = (i - 2) * 0.08;
+                core.add(b);
+            }
+            scene.add(core);
+
+            // Data motes rising: small glowing squares
+            const MOTES = 400;
+            const mGeo = new THREE.BufferGeometry();
+            const mPos = new Float32Array(MOTES * 3), mSeed = new Float32Array(MOTES);
+            for (let i = 0; i < MOTES; i++) {
+                mPos.set([(rnd() - 0.5) * 1400, rnd() * 300, -rnd() * 1800], i * 3);
+                mSeed[i] = rnd();
+            }
+            mGeo.setAttribute('position', new THREE.Float32BufferAttribute(mPos, 3));
+            mGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(mSeed, 1));
+            const motes = new THREE.Points(mGeo, B3D.mat(`
+uniform float uTime; uniform float uScroll;
+attribute float aSeed;
+varying float vA; varying float vS;
+void main() {
+    vec3 p = position;
+    p.y = mod(position.y + uTime * (8.0 + aSeed * 20.0), 300.0);
+    p.z = mod(position.z + uScroll, 1800.0) - 1780.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = smoothstep(0.0, 40.0, p.y) * (1.0 - smoothstep(800.0, 1700.0, -mv.z)) * (0.5 + 0.5 * sin(uTime * 4.0 + aSeed * 30.0));
+    vS = aSeed;
+    gl_PointSize = clamp(500.0 / -mv.z, 1.0, 5.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uA; uniform vec3 uB;
+varying float vA; varying float vS;
+void main() {
+    vec2 q = abs(gl_PointCoord - 0.5);
+    float sq = step(max(q.x, q.y), 0.4);
+    gl_FragColor = vec4(mix(uA, uB, step(0.5, vS)) * vA * sq * 0.6, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(motes);
+            scene.add(motes);
+
+            const SPEED = 110;
+            const coreBase = B3D.col(0x33ffdd), coreBoss = B3D.col(0xff2255);
+            const aBase = B3D.col(0xa633ff), bBase = B3D.col(0x00ffcc), bossCol = B3D.col(0xff2659);
+            return {
+                scene, camera,
+                update(s) {
+                    const adv = s.t * SPEED;
+                    U.uTime.value = s.t;
+                    U.uScroll.value = adv;
+                    U.uBoss.value = s.boss;
+                    U.uBright.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    B3D.lerpColor(U.uCore.value, coreBase, coreBoss, s.boss * 0.85);
+                    ringMat.color.copy(U.uCore.value);
+                    B3D.lerpColor(U.uA.value, aBase, bossCol, s.boss * 0.5);
+                    B3D.lerpColor(U.uB.value, bBase, bossCol, s.boss * 0.5);
+                    for (let i = 0; i < rings.length; i++) rings[i].rotation.z = s.t * (0.15 + i * 0.1) * (i % 2 ? -1 : 1) * (1 + s.boss * 2);
+                    for (let i = 0; i < COMPS; i++) {
+                        const c = compDefs[i];
+                        const z = ((c.z0 + adv) % CSPAN + CSPAN) % CSPAN - CSPAN + 80;
+                        m4.compose(pos.set(c.x, 0, z), quat, scl.set(c.w, c.h, c.d));
+                        comps.setMatrixAt(i, m4);
+                    }
+                    comps.instanceMatrix.needsUpdate = true;
+                },
+            };
+        },
+    },
+
+    // Level 6 — SIGNAL LOST: falling down a collapsing tunnel into the void.
+    // Rings of glowing wall panels curve away ahead; panels are missing, and
+    // more break loose and tumble outward as they pass. At the end a black
+    // singularity spins in a red accretion disc, specks spiralling into it.
+    // The composite's band glitches are on (not under Flash Reduction).
+    void: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(64, PLAY_W / PLAY_H, 1, 4000);
+            camera.rotation.x = -0.24;
+
+            const U = {
+                uTime: { value: 0 }, uBoss: { value: 0 }, uBright: { value: 1 }, uCalm: { value: 0 },
+                uRed: { value: B3D.col(0xe60d40) }, uMag: { value: B3D.col(0xff00b3) },
+            };
+            const rnd = B3D.rng(6666);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3(), eul = new THREE.Euler();
+
+            // Black, with a faint red mist toward the singularity
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(3500, 32, 16), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uRed;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float a = acos(clamp(dot(d, normalize(vec3(0.0, 0.0, -1.0))), -1.0, 1.0));
+    vec3 col = vec3(0.004, 0.0, 0.004) + uRed * 0.06 * exp(-a * 3.0) * (0.6 + 0.4 * fbm3(d.xy * 6.0 + uTime * 0.05));
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // The tunnel: RINGS rings of SIDES panels along a path that bends away ahead
+            const RINGS = 44, SIDES = 14, STEP = 42, RAD = 130;
+            const panelGeo = new THREE.BoxGeometry(1, 1, 1);
+            const panels = new THREE.InstancedMesh(panelGeo, B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uRed; uniform vec3 uMag; uniform float uBright; uniform float uCalm;
+varying vec3 vW; varying vec2 vUv; varying vec3 vN; varying float vSeed;
+void main() {
+    // Glowing frame around each panel face, dark inside
+    vec2 q = abs(vUv - 0.5);
+    float edge = smoothstep(0.455, 0.49, max(q.x, q.y));
+    vec3 c = mix(uRed, uMag, 0.5 + 0.5 * sin(vSeed * 20.0 + uTime * 0.6));
+    float d = length(vW - cameraPosition);
+    // Brightest in the middle distance; dim right under the player, where the bullets are
+    float depth = smoothstep(2000.0, 300.0, d) * (0.3 + 0.7 * smoothstep(60.0, 320.0, d));
+    vec3 col = vec3(0.02, 0.0, 0.012);
+    col += c * edge * 0.5 * uBright;
+    // Some cells flicker on
+    float flick = step(0.9, vSeed) * (0.5 + 0.5 * sin(uTime * 8.0 * (1.0 - uCalm) + vSeed * 40.0));
+    col += c * 0.14 * flick;
+    gl_FragColor = vec4(col * depth, 1.0);
+}`, U), RINGS * SIDES);
+            const panelDefs = [];
+            for (let r = 0; r < RINGS; r++) {
+                for (let k = 0; k < SIDES; k++) {
+                    const h = rnd();
+                    panelDefs.push({
+                        ring: r, k,
+                        missing: h < 0.12,
+                        loose: h > 0.86,          // breaks away and drifts outward as it nears
+                        spin: (rnd() - 0.5) * 3, drift: 0.5 + rnd(),
+                    });
+                }
+            }
+            B3D.always(panels);
+            scene.add(panels);
+
+            // Singularity: black core, swirling accretion disc, lensing halo
+            const sing = new THREE.Group();
+            const hole = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 16), new THREE.MeshBasicMaterial({ color: 0x000000, fog: false }));
+            const disc = new THREE.Mesh(new THREE.RingGeometry(80, 300, 96, 1), B3D.mat(`
+varying vec3 vP;
+void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`, `
+uniform float uTime; uniform vec3 uRed; uniform vec3 uMag; uniform float uBoss;
+varying vec3 vP;
+void main() {
+    float r = length(vP.xy);
+    float a = atan(vP.y, vP.x);
+    float swirl = fbm3(vec2(a * 3.0 + r * 0.02 - uTime * (0.9 + uBoss), r * 0.03));
+    float inner = smoothstep(300.0, 90.0, r) * smoothstep(80.0, 95.0, r);
+    vec3 col = mix(uMag, mix(vec3(1.0, 0.7, 0.6), uRed, smoothstep(90.0, 200.0, r)), smoothstep(80.0, 260.0, r));
+    gl_FragColor = vec4(col * inner * (0.35 + 0.65 * swirl) * 0.8, 1.0);
+}`, Object.assign({ uBoss: { value: 0 } }, U), { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+            disc.rotation.x = -1.15;
+            const lens = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uRed; uniform float uTime;
+varying vec2 vUv;
+void main() {
+    float r = length(vUv - 0.5) * 2.0;
+    float ringGlow = exp(-abs(r - 0.16) * 30.0) * 0.6 + exp(-r * 4.0) * 0.25;
+    gl_FragColor = vec4(uRed * ringGlow * (0.85 + 0.15 * sin(uTime * 3.0)), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            lens.position.z = -40;
+            sing.add(lens, disc, hole);
+            scene.add(sing);
+
+            // Specks spiralling down toward the singularity
+            const SPECKS = 500;
+            const sGeo = new THREE.BufferGeometry();
+            const sPos = new Float32Array(SPECKS * 3), sSeed = new Float32Array(SPECKS);
+            for (let i = 0; i < SPECKS; i++) { sPos.set([rnd(), rnd(), rnd()], i * 3); sSeed[i] = rnd(); }
+            sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
+            sGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(sSeed, 1));
+            const specks = new THREE.Points(sGeo, B3D.mat(`
+uniform float uTime; uniform vec3 uEnd;
+attribute float aSeed;
+varying float vA;
+void main() {
+    float life = fract(uTime * (0.08 + aSeed * 0.08) + position.x);
+    float ang = position.y * 6.2831 + life * (4.0 + aSeed * 6.0);
+    float rad = mix(110.0, 8.0, life * life);
+    vec3 p = mix(vec3(0.0, 0.0, -40.0), uEnd, life) + vec3(cos(ang), sin(ang), 0.0) * rad;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = smoothstep(0.0, 0.1, life) * (1.0 - life);
+    gl_PointSize = clamp(400.0 / -mv.z, 1.0, 4.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uMag;
+varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(mix(uMag, vec3(1.0), 0.3) * vA * smoothstep(1.0, 0.2, r) * 0.7, 1.0);
+}`, Object.assign({ uEnd: { value: new THREE.Vector3() } }, U), { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(specks);
+            scene.add(specks);
+
+            // The tunnel's centre line: straight here, bending more with distance
+            const centre = (z, t, out) => {
+                const k = Math.pow(Math.max(0, -z) / 1000, 2);
+                return out.set(Math.sin(t * 0.23) * 130 * k, Math.cos(t * 0.17) * 60 * k, z);
+            };
+            const c = new THREE.Vector3();
+            const SPEED = 120;
+            const scene3d = {
+                scene, camera, glitch: 1,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uBright.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    U.uCalm.value = s.calm;
+                    disc.material.uniforms.uBoss.value = s.boss;
+                    const adv = s.t * SPEED;
+                    const twist = s.t * 0.08;
+                    for (let i = 0; i < panelDefs.length; i++) {
+                        const p = panelDefs[i];
+                        let z = -((p.ring * STEP - adv % (RINGS * STEP) + RINGS * STEP) % (RINGS * STEP)) + 30;
+                        if (p.missing) { m4.makeScale(0, 0, 0); panels.setMatrixAt(i, m4); continue; }
+                        centre(z, s.t, c);
+                        const a = (p.k / SIDES) * Math.PI * 2 + twist + p.ring * 0.03;
+                        let rad = RAD;
+                        const near = Math.max(0, Math.min(1, (z + 600) / 600));   // 0 far .. 1 at the camera
+                        eul.set(0, 0, a + Math.PI / 2);
+                        if (p.loose && near > 0) {
+                            rad += near * near * 160 * p.drift;
+                            eul.x += near * p.spin; eul.y += near * p.spin * 0.7;
+                        }
+                        quat.setFromEuler(eul);
+                        const w = 2 * RAD * Math.sin(Math.PI / SIDES) * 0.92;
+                        m4.compose(pos.set(c.x + Math.cos(a) * rad, c.y + Math.sin(a) * rad, z), quat, scl.set(w, 3, STEP * 0.9));
+                        panels.setMatrixAt(i, m4);
+                    }
+                    panels.instanceMatrix.needsUpdate = true;
+                    centre(-RINGS * STEP + 60, s.t, c);
+                    sing.position.copy(c);
+                    sing.lookAt(camera.position);
+                    specks.material.uniforms.uEnd.value.copy(c);
+                    // Glitches grow during the boss
+                    scene3d.glitch = 0.7 + 0.3 * s.boss;
+                },
+            };
+            return scene3d;
+        },
+    },
+};
 
 
 // === config.js ===
@@ -2384,7 +4655,7 @@ const SaveData = {
 //  HIGH SCORE SYSTEM
 // ============================================================
 const HighScores = {
-    boards: { casual: [], normal: [], hardcore: [], endless: [] },
+    boards: { casual: [], normal: [], hardcore: [], endless: [], bossrush: [] },
     sessionScores: [],
     loaded: false,
     enteringInitials: false,
@@ -2400,7 +4671,7 @@ const HighScores = {
             this.boards = data;
         }
         // Ensure arrays exist
-        ['casual', 'normal', 'hardcore', 'endless'].forEach(d => {
+        ['casual', 'normal', 'hardcore', 'endless', 'bossrush'].forEach(d => {
             if (!this.boards[d]) this.boards[d] = [];
         });
         this.loaded = true;
@@ -2429,6 +4700,9 @@ const HighScores = {
             won: details ? details.won : false,
             date: new Date().toLocaleDateString()
         };
+        if (details && details.mode === 'bossrush') {
+            entry.bosses = details.bosses; entry.of = details.of; entry.time = details.time;
+        }
         if (!this.boards[board]) this.boards[board] = [];
         this.boards[board].push(entry);
         this.boards[board].sort((a, b) => b.score - a.score);
@@ -2559,6 +4833,7 @@ const Settings = {
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
         graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
+        backdrop3d: true,         // three.js level backdrops (backdrop3d.js); off = shader backdrops
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -2567,6 +4842,7 @@ const Settings = {
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
         { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
+        { key: 'backdrop3d', label: '3D BACKDROPS', type: 'toggle' },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'showFps', label: 'SHOW FPS', type: 'toggle' },
@@ -3014,9 +5290,12 @@ const NeonCredits = {
         await Storage.set('neonCredits', this.balance);
     },
 
+    lastEarned: 0,   // credits from the run that just ended (shown on the results screen)
+
     earn(score, difficulty) {
         const multipliers = { casual: 0.75, normal: 1.0, hardcore: 1.5, custom: 0.75 };
         const nc = Math.max(5, Math.floor(score / 3000 * (multipliers[difficulty] || 1)));
+        this.lastEarned = nc;
         this.balance += nc;
         this.save();
         return nc;
@@ -3610,8 +5889,9 @@ const Neon = {
     // --- Sprite atlas ---
     BAKE: true,              // false: draw everything live (for comparing output/cost)
     BAKE_SCALE: 2,           // atlas pixels per play-area pixel (keeps rotated sprites crisp)
-    ATLAS_SIZE: 2048,
-    ATLAS_MAX_PAGES: 4,      // past this the cache is flushed and rebuilt on demand
+    ATLAS_SIZE: 1024,        // each page is a GPU texture re-uploaded whole when a sprite is
+                             // baked into it, so pages stay small (4 MB per upload)
+    ATLAS_MAX_PAGES: 16,     // past this the cache is flushed and rebuilt on demand
     _pages: [],
     _sprites: new Map(),
 
@@ -3649,6 +5929,7 @@ const Neon = {
         c.scale(this.BAKE_SCALE, this.BAKE_SCALE);
         drawFn(c, a, b, cArg, d);
         c.restore();
+        page.canvas.__gpuDirty = true;   // GpuCtx re-uploads the page on its next use
         this._sprites.set(key, spr);
         return spr;
     },
@@ -3667,8 +5948,18 @@ const Neon = {
     },
 
     flush() {
+        if (typeof GpuCtx !== 'undefined') for (const p of this._pages) GpuCtx.release(p.canvas);
         this._pages.length = 0;
         this._sprites.clear();
+    },
+
+    // Draw fn() through Pixi filters (e.g. Renderer.shieldGlow()). Only the
+    // GPU path can filter one object; plain Canvas 2D draws it unfiltered.
+    filtered(ctx, filters, fn) {
+        if (!filters || !ctx.beginLayer) { fn(); return; }
+        ctx.beginLayer(filters);
+        fn();
+        ctx.endLayer();
     },
 
     // Wall-clock seconds for idle animation (spins, pulses) that
@@ -5846,8 +8137,11 @@ const Enemies = {
         shielded_cruiser(ctx, e, r, flash) {
             this._neonGlow(e, r * 2.2, flash);
             Neon.squash(ctx, flash, 0.06);
-            Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
-            Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            // Energy outline around the hull while the shield holds (white on a hit)
+            Neon.filtered(ctx, e.shieldHp > 0 ? Renderer.shieldGlow(flash) : null, () => {
+                Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
+                Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            });
             // Rotating half-shield
             if (e.shieldHp > 0) {
                 const a = 0.55 + Math.sin(e.moveTimer * 5) * 0.3;
@@ -7378,6 +9672,9 @@ const Campaign = {
     currentLevel: 0,
     levelsUnlocked: 1,
     secretUnlocked: false,
+    campaignCleared: false,   // Level 5 beaten on a preset difficulty: unlocks Boss Rush
+    bossesDefeated: [],       // boss types beaten in the campaign or Boss Rush: playable in Boss Practice
+    practiceBests: {},        // Boss Practice best times, by '<difficulty>_<bossType>'
     levelData: ALL_LEVELS,
     levelBests: {},
 
@@ -7387,13 +9684,43 @@ const Campaign = {
             this.levelsUnlocked = data.levelsUnlocked || 1;
             this.secretUnlocked = data.secretUnlocked || false;
             this.levelBests = data.levelBests || {};
+            // Saves from before the flag: the secret level or a Level 5/6 record means a clear
+            this.campaignCleared = !!data.campaignCleared || this.secretUnlocked ||
+                Object.keys(this.levelBests).some(k => /_L[45]$/.test(k) && !k.startsWith('custom'));
+            this.practiceBests = data.practiceBests || {};
+            // Saves from before the list: a level is beaten if the next one is unlocked or it has a record
+            const beaten = new Set(data.bossesDefeated || []);
+            ALL_LEVELS.forEach((L, i) => {
+                const record = Object.keys(this.levelBests).some(k => k.endsWith('_L' + i));
+                if (i < this.levelsUnlocked - 1 || record || (i === 4 && this.campaignCleared)) beaten.add(L.bossType);
+            });
+            this.bossesDefeated = [...beaten];
         }
+    },
+
+    recordBoss(bossType) {
+        if (bossType && !this.bossesDefeated.includes(bossType)) {
+            this.bossesDefeated.push(bossType);
+            this.save();
+        }
+    },
+
+    // true when the time is a new best for that boss and difficulty
+    recordPractice(difficulty, bossType, time) {
+        const key = difficulty + '_' + bossType;
+        if (this.practiceBests[key] && this.practiceBests[key] <= time) return false;
+        this.practiceBests[key] = +time.toFixed(1);
+        this.save();
+        return true;
     },
 
     async save() {
         await Storage.set('campaign', {
             levelsUnlocked: this.levelsUnlocked,
             secretUnlocked: this.secretUnlocked,
+            campaignCleared: this.campaignCleared,
+            bossesDefeated: this.bossesDefeated,
+            practiceBests: this.practiceBests,
             levelBests: this.levelBests
         });
     },
@@ -7406,6 +9733,10 @@ const Campaign = {
             if (levelIndex === 4) {
                 this.secretUnlocked = true;
             }
+        }
+        if (levelIndex >= 4 && difficulty !== 'custom') this.campaignCleared = true;
+        if (ALL_LEVELS[levelIndex] && !this.bossesDefeated.includes(ALL_LEVELS[levelIndex].bossType)) {
+            this.bossesDefeated.push(ALL_LEVELS[levelIndex].bossType);
         }
         this.save();
     },
@@ -7434,6 +9765,143 @@ const Campaign = {
         if (index === 5) return this.secretUnlocked;
         return index < this.levelsUnlocked;
     }
+};
+
+// ============================================================
+//  BOSS RUSH — the campaign's bosses back to back
+//  Unlocked by clearing the main campaign (Campaign.campaignCleared). The
+//  Echo joins only once the secret level is unlocked. Before the first boss
+//  the player picks a weapon (at START_LEVEL, with START_DRONES); between
+//  bosses, one upgrade out of three. Each boss is fought in its own level's
+//  backdrop, scaling and music (Game._beginRushStage). Ranked by score, with a
+//  time bonus against PAR_PER_BOSS; the run time is shown alongside.
+//
+//  Boss Practice runs on the same machinery with `practice` set: one boss
+//  (any the player has beaten), a chosen starting phase and loadout, no
+//  intermission, no credits or high scores, a best time per boss.
+// ============================================================
+const BossRush = {
+    active: false,
+    order: [],          // level indices, one boss each
+    stage: 0,           // index into order
+    time: 0,            // run time (seconds of play while a boss is up)
+    stageTime: 0,
+    splits: [],         // clear time per boss
+    choices: [],        // what the intermission offers
+    practice: null,     // Boss Practice setup when this run is a practice
+    PAR_PER_BOSS: 90,       // seconds; a perfect-aim bot takes ~40-60 s on Level 1 (sim:boss-ttk)
+    START_LEVEL: 2,
+    START_DRONES: 1,
+    WEAPONS: {
+        spread: { name: 'SPREAD SHOT', color: '#ff8c00', desc: 'A WIDE FAN OF SHOTS' },
+        homing: { name: 'HOMING MISSILES', color: '#00ff88', desc: 'MISSILES THAT SEEK THEIR TARGET' },
+        laser:  { name: 'LASER BEAM', color: '#4488ff', desc: 'A PIERCING BEAM, HIGH DAMAGE' },
+    },
+
+    unlocked() { return Campaign.campaignCleared; },
+
+    begin() {
+        this.active = true;
+        this.practice = null;
+        this.order = [0, 1, 2, 3, 4];
+        if (Campaign.secretUnlocked) this.order.push(5);
+        this.stage = 0;
+        this.time = 0;
+        this.stageTime = 0;
+        this.splits = [];
+        this.choices = Object.keys(this.WEAPONS).map(w => ({
+            kind: 'weapon', weapon: w, label: this.WEAPONS[w].name,
+            desc: this.WEAPONS[w].desc + ' — STARTS AT LV' + this.START_LEVEL, color: this.WEAPONS[w].color,
+        }));
+    },
+
+    beginPractice(setup) {
+        this.active = true;
+        this.practice = setup;
+        this.order = [setup.level];
+        this.stage = 0;
+        this.time = 0;
+        this.stageTime = 0;
+        this.splits = [];
+        this.choices = [];
+    },
+
+    // Levels whose boss can be practised, in campaign order
+    practiceLevels() {
+        return ALL_LEVELS.map((L, i) => i).filter(i => Campaign.bossesDefeated.includes(ALL_LEVELS[i].bossType));
+    },
+
+    level() { return ALL_LEVELS[this.order[this.stage]]; },
+    bossName() { const l = this.level(); return (BossTypes[l.bossType] || BossTypes.architect).name; },
+    isLast() { return this.stage >= this.order.length - 1; },
+
+    // The boss is down: record its split; true when that was the last one
+    cleared() {
+        this.splits.push(this.stageTime);
+        Campaign.recordBoss(this.level().bossType);
+        return this.isLast();
+    },
+
+    // Three upgrades that would still help: the weapon upgrade whenever it is
+    // possible, plus two of the rest at random
+    rollChoices() {
+        const P = Player, W = this.WEAPONS;
+        const up = P.primaryWeapon !== 'none' && P.primaryLevel < 5 ? {
+            kind: 'upgrade', label: W[P.primaryWeapon].name + ' LV' + (P.primaryLevel + 1),
+            desc: 'WEAPON POWER +1', color: W[P.primaryWeapon].color,
+        } : null;
+        const rest = [];
+        for (const w of Object.keys(W)) {
+            if (w === P.primaryWeapon) continue;
+            rest.push({ kind: 'weapon', weapon: w, label: 'SWITCH TO ' + W[w].name,
+                desc: 'KEEPS YOUR WEAPON LEVEL (LV' + Math.max(1, P.primaryLevel) + ')', color: W[w].color });
+        }
+        if (P.droneLevel < 5) rest.push({ kind: 'drones', label: 'DRONES LV' + (P.droneLevel + 1), desc: 'MORE DRONE FIREPOWER', color: '#cc44ff' });
+        if (P.lives < 9) rest.push({ kind: 'life', label: '+1 LIFE', desc: 'AN EXTRA SHIP', color: '#00ffff' });
+        if (GameConfig.bombs.enabled) rest.push({ kind: 'bombs', label: '+2 BOMBS', desc: 'CLEAR THE SCREEN WHEN IT GETS BAD', color: '#ff8800' });
+        for (let i = rest.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [rest[i], rest[j]] = [rest[j], rest[i]];
+        }
+        this.choices = (up ? [up] : []).concat(rest).slice(0, 3);
+    },
+
+    apply(c) {
+        const P = Player;
+        switch (c.kind) {
+            case 'weapon':
+                P.primaryLevel = this.stage === 0 && this.splits.length === 0 ? this.START_LEVEL : Math.max(1, P.primaryLevel);
+                P.primaryWeapon = c.weapon;
+                break;
+            case 'upgrade': P.primaryLevel = Math.min(5, P.primaryLevel + 1); break;
+            case 'drones': P.droneLevel = Math.min(5, P.droneLevel + 1); break;
+            case 'life': P.lives++; break;
+            case 'bombs': P.bombs += 2; break;
+        }
+    },
+
+    // End-of-run bonuses (into EndRunBonus, so the results screen lists them)
+    bonuses(won) {
+        const k = GameConfig.scoreMultiplier;
+        const list = [];
+        if (won) {
+            const par = this.PAR_PER_BOSS * this.order.length;
+            const timeBonus = Math.floor(Math.max(0, par - this.time) * 250 * k);
+            if (timeBonus > 0) list.push({ label: 'TIME BONUS', value: timeBonus });
+            list.push({ label: 'LIVES BONUS', value: Math.floor(Player.lives * 10000 * k) });
+        }
+        const chain = Math.floor(Scoring.maxChain * 50 * k);
+        if (chain > 0) list.push({ label: 'CHAIN BONUS', value: chain });
+        EndRunBonus.bonuses = list;
+        EndRunBonus.totalBonus = list.reduce((s, b) => s + b.value, 0);
+        return EndRunBonus.totalBonus;
+    },
+
+    // m:ss.t
+    formatTime(t) {
+        const m = Math.floor(t / 60), s = t - m * 60;
+        return m + ':' + (s < 10 ? '0' : '') + s.toFixed(1);
+    },
 };
 
 
@@ -7547,6 +10015,29 @@ const Boss = {
                 this.armor.push({ hp: def.armorHp || 15, angle: (Math.PI * 2 / count) * i, alive: true });
             }
         }
+        this._prebake();
+    },
+
+    // Bake every phase colour and hit-flash variant of the art now, while the
+    // WARNING banner is up. Baked mid-fight, each new sprite re-uploads an atlas
+    // page to the GPU, a visible hitch at phase changes and on the first hit.
+    _prebake() {
+        if (!Neon.BAKE) return;
+        const c = this._scratchCtx || (this._scratchCtx = document.createElement('canvas').getContext('2d'));
+        const draw = this._neon[this.bossType] || this._neon.architect;
+        const phase = this.phase;
+        for (let p = 1; p <= this.totalPhases; p++) {
+            this.phase = p;
+            for (const flash of [false, true]) {
+                c.save();
+                draw.call(this, c, this.radius, this.colors[p - 1] || '#ff4444', flash);
+                c.restore();
+                if (this.armor.length) {
+                    Neon.sprite(c, 'b_armor' + (flash ? '|f' : ''), BOSS_ARMOR_RADIUS + 3, this._bake.armor, '#ff6644', BOSS_ARMOR_RADIUS - 3, flash);
+                }
+            }
+        }
+        this.phase = phase;
     },
 
     update(dt, playerX, playerY) {
@@ -8664,7 +11155,7 @@ const Boss = {
         const mainColor = flash ? '#ffffff' : (this.colors[this.phase - 1] || '#ff4444');
 
         // Dynamic light — boss core glow (brighter during flash)
-        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 5 : 3), flash ? 0.8 : 0.35);
+        Renderer.addGlow(this.x, this.y, Renderer.colorToHex(mainColor), this.radius * (flash ? 3.6 : 3), flash ? 0.45 : 0.35);
 
         // Type-specific body (unknown types draw as the Architect, matching init())
         const draw = this._neon[this.bossType] || this._neon.architect;
@@ -9625,7 +12116,9 @@ const Player = {
             ctx.globalAlpha = 1;
         }
 
-        this._drawShipNeon(ctx);
+        // While the shield holds, an energy outline hugs the hull (white on a hit)
+        const shielded = this.maxShieldHp > 0 && this.shieldHp > 0;
+        Neon.filtered(ctx, shielded ? Renderer.shieldGlow(this.shieldFlashTimer > 0) : null, () => this._drawShipNeon(ctx));
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
@@ -10644,16 +13137,25 @@ const Background = {
 //    right: score, chain, run stats, mission (level, time, escort), controls
 // ============================================================
 const HUD = {
-    _bgCache: null,
+    _bg: null,          // canvas behind the overlay holding the static panel backgrounds
+    _drawn: false,      // HUD.draw ran this frame (Game.draw shows _bg only then)
 
-    // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
+    // Static panel backgrounds (gradient, faint scanlines, edge glow). They live on
+    // their own canvas under the overlay and are drawn only when the resolution
+    // changes: blitting them onto the overlay every frame cost ~4.5 ms at HIGH.
     _bakeBackground() {
         const k = Renderer.uiScale || 1;
-        const c = document.createElement('canvas');
+        let c = this._bg;
+        if (!c) {
+            c = this._bg = document.createElement('canvas');
+            c.id = 'hud-bg';
+            c.style.cssText = 'position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; display: none;';
+            canvas.parentNode.insertBefore(c, canvas.parentNode.firstChild);
+        }
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
         const g = c.getContext('2d');
-        g.scale(k, k);
+        g.setTransform(k, 0, 0, k, 0, 0);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -10675,15 +13177,24 @@ const HUD = {
             g.fillStyle = '#ff2bd6';
             g.fillRect(x - 1, 0, 2, SCREEN_H);
         }
-        return c;
+    },
+
+    // Called by Game.draw after every frame: the background shows only under the HUD
+    showBackground(on) {
+        const c = this._bg;
+        if (!c) return;
+        if (on) {
+            // Track the overlay's on-screen size (window resizes)
+            if (c.style.width !== canvas.style.width) c.style.width = canvas.style.width;
+            if (c.style.height !== canvas.style.height) c.style.height = canvas.style.height;
+        }
+        const display = on ? 'block' : 'none';
+        if (c.style.display !== display) c.style.display = display;
     },
 
     draw(ctx) {
-        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
-        // Only the side panels: the middle of the overlay stays clear for the play area
-        const k = this._bgCache._scale;
-        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
-        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        if (!this._bg || this._bg._scale !== Renderer.uiScale) this._bakeBackground();
+        this._drawn = true;
         this._drawLeft(ctx);
         this._drawRight(ctx);
         this._drawDanger(ctx);
@@ -10775,7 +13286,8 @@ const HUD = {
         let y = 40;
         UI.panel(ctx, x, y, w, 130, UI.CYAN, { title: 'SCORE' });
         Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 88, '#ffffff', 46, { core: 0.2, halo: 0.35 });
-        const board = HighScores.boards && HighScores.boards[Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty];
+        const board = BossRush.practice ? null
+            : HighScores.boards && HighScores.boards[BossRush.active ? 'bossrush' : (Game.currentLevelIndex === -1 ? 'endless' : GameConfig.difficulty)];
         if (board && board.length) UI.label(ctx, 'BEST  ' + board[0].score.toLocaleString(), cx, y + 118, UI.DIM, 14);
         y += 154;
 
@@ -10814,11 +13326,16 @@ const HUD = {
         const isEndless = Game.currentLevelIndex === -1;
         const lvlData = ALL_LEVELS[Game.currentLevelIndex];
         const escort = Escort.active && Escort.alive;
-        UI.panel(ctx, x, y, w, escort ? 170 : 124, UI.CYAN, { title: isEndless ? 'ENDLESS' : 'MISSION' });
-        Neon.text(ctx, isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
-            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', 22, { align: 'left', halo: 0.2 });
-        const mins = Math.floor(WaveSystem.levelTimer / 60);
-        const secs = Math.floor(WaveSystem.levelTimer % 60);
+        const rush = BossRush.active;
+        UI.panel(ctx, x, y, w, escort ? 170 : 124, rush ? '#ff2255' : UI.CYAN,
+            { title: rush ? (BossRush.practice ? 'BOSS PRACTICE' : 'BOSS RUSH') : (isEndless ? 'ENDLESS' : 'MISSION') });
+        Neon.text(ctx, rush ? (BossRush.practice ? BossRush.bossName() : 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length + '  ' + BossRush.bossName())
+            : isEndless ? 'WAVE ' + EndlessMode.wave : (Game.currentLevelIndex + 1) + '  ' + (lvlData ? lvlData.name : '').toUpperCase(),
+            x + 24, y + 62, isEndless ? '#ffaa00' : '#ffffff', rush ? 20 : 22, { align: 'left', halo: 0.2 });
+        // Boss Rush shows its run clock instead of the level time
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const mins = Math.floor(clock / 60);
+        const secs = Math.floor(clock % 60);
         const diffColors = { casual: '#00ff88', normal: '#ffee33', hardcore: '#ff3355', custom: '#cc44ff' };
         UI.label(ctx, GameConfig.difficulty.toUpperCase(), x + 24, y + 98, diffColors[GameConfig.difficulty] || '#ffffff', 16, 'left');
         Neon.text(ctx, `${mins}:${secs.toString().padStart(2, '0')}`, x + w - 24, y + 98, UI.TEXT, 20, { align: 'right', halo: 0 });
@@ -10933,7 +13450,7 @@ const Menu = {
         const cx = SCREEN_W / 2;
         const bob = Renderer.calm() ? 0 : Math.sin(t * 1.3) * 4;
         Neon.text(ctx, 'NEON STORM', cx - 26, 200 + bob, UI.CYAN, 110, { core: 0.5, halo: 0.55 });
-        Neon.text(ctx, 'γ', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
+        Neon.text(ctx, 'δ', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
         Neon.text(ctx, 'BULLET HELL SHOOTER', cx, 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
 
         // The player's ship hovering over the grid, engines lit
@@ -10944,23 +13461,27 @@ const Menu = {
         UI.ship(ctx, cx, sy, 44);
 
         // Menu
-        this.items = ['NEW GAME', 'ENDLESS MODE', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
-        UI.panel(ctx, cx - 250, 300, 500, 415, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
+        this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS MODES', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
+        const rushLocked = !BossRush.unlocked() && !BossRush.practiceLevels().length;
+        UI.panel(ctx, cx - 250, 296, 500, 444, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
-            UI.item(ctx, this.items[i], cx, 358 + i * 54, i === this.selectedIndex, { w: 440 });
+            UI.item(ctx, this.items[i], cx, 350 + i * 50, i === this.selectedIndex, { w: 440, disabled: i === 2 && rushLocked });
         }
-
-        if (SaveData.migrated) {
-            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 752, '#ffdd44', 14);
-            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 774, UI.DIM, 13);
+        if (rushLocked && this.selectedIndex === 2) {
+            UI.label(ctx, 'DEFEAT A BOSS TO UNLOCK BOSS PRACTICE', cx, 764, '#ffaa00', 15);
+        } else if (SaveData.migrated) {
+            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 764, '#ffdd44', 14);
+            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 786, UI.DIM, 13);
         }
         UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
-        UI.label(ctx, 'GAMMA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
+        UI.label(ctx, 'DELTA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
     },
 
     drawDifficultySelect(ctx) {
         UI.background(ctx, { dim: 0.45 });
         UI.title(ctx, 'SELECT DIFFICULTY', 130);
+        const mode = Game._pendingBossRush ? 'BOSS RUSH' : (Game._pendingEndless ? 'ENDLESS MODE' : '');
+        if (mode) UI.label(ctx, mode, SCREEN_W / 2, 178, UI.MAGENTA, 18);
 
         this.items = ['CASUAL', 'NORMAL', 'HARDCORE', 'CUSTOM', 'BACK'];
         const descs = [
@@ -10996,13 +13517,12 @@ const Menu = {
                 y += 26;
             }
         }
+        // The end-of-run bonuses are already in Scoring.score: show the score before them, then the total
         UI.label(ctx, 'SCORE', cx, y + 24, UI.DIM, 15);
-        Neon.text(ctx, Scoring.score.toLocaleString(), cx, y + 66, scoreColor, 42, { core: 0.4 });
+        Neon.text(ctx, (Scoring.score - EndRunBonus.totalBonus).toLocaleString(), cx, y + 66, scoreColor, 42, { core: 0.4 });
         const bonusEndY = EndRunBonus.draw(ctx, cx, y + 104);
-        const totalScore = Scoring.score + EndRunBonus.totalBonus;
-        Neon.text(ctx, 'TOTAL  ' + totalScore.toLocaleString(), cx, bonusEndY + 22, '#ffee33', 28, { core: 0.35 });
-        const ncEarned = Math.floor(totalScore / 3000 * GameConfig.scoreMultiplier);
-        UI.label(ctx, '+ ' + ncEarned + ' NEON CREDITS', cx, bonusEndY + 54, '#ffaa00', 17);
+        Neon.text(ctx, 'TOTAL  ' + Scoring.score.toLocaleString(), cx, bonusEndY + 22, '#ffee33', 28, { core: 0.35 });
+        if (NeonCredits.lastEarned > 0) UI.label(ctx, '+ ' + NeonCredits.lastEarned + ' NEON CREDITS', cx, bonusEndY + 54, '#ffaa00', 17);
         return bonusEndY + 70;
     },
 
@@ -11010,7 +13530,14 @@ const Menu = {
         UI.dim(ctx, 0.82);
         const isEndless = Game.currentLevelIndex === -1;
         this._resultsSub = null;
-        if (isEndless) {
+        if (BossRush.practice) {
+            this._resultsSub = [['BOSS PRACTICE — ' + BossRush.bossName() + ' — ' + (GameConfig.difficulty || '').toUpperCase(), '#ff2255', 20]];
+        } else if (BossRush.active) {
+            this._resultsSub = [
+                ['BOSS RUSH — BOSS ' + (BossRush.stage + 1) + ' / ' + BossRush.order.length + ': ' + BossRush.bossName(), '#ff2255', 20],
+                ['TIME ' + BossRush.formatTime(BossRush.time), UI.TEXT, 16],
+            ];
+        } else if (isEndless) {
             const mins = Math.floor(WaveSystem.levelTimer / 60);
             const secs = Math.floor(WaveSystem.levelTimer % 60);
             this._resultsSub = [
@@ -11047,6 +13574,180 @@ const Menu = {
                 UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 48, i === this.selectedIndex, {
                     w: 380, size: 22, color: this.items[i] === 'NEXT LEVEL' ? '#00ff88' : UI.CYAN,
                 });
+            }
+        }
+    },
+
+    // Right-hand THREAT panel: a boss drawn in neon with its name and phase count
+    _drawThreat(ctx, bossType, t) {
+        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+        const def = BossTypes[bossType] || BossTypes.architect;
+        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
+        const fake = Object.create(Boss);
+        fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = bossType;
+        ctx.save();
+        ctx.translate(rx, 470);
+        ctx.scale(1.7, 1.7);
+        const draw = Boss._neon[bossType] || Boss._neon.architect;
+        draw.call(fake, ctx, Boss.radius, def.colors[0], false);
+        ctx.restore();
+        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
+        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+    },
+
+    // --- Boss Rush intermission: the next boss's backdrop, the run so far, a choice ---
+    drawRushIntermission(ctx) {
+        const t = Game.briefingTimer;
+        const inK = Math.min(1, t * 2);
+        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
+        ctx.fillStyle = side;
+        ctx.fillRect(0, 0, PLAY_X, SCREEN_H);
+        ctx.fillRect(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H);
+        ctx.fillStyle = 'rgba(3, 0, 10, 0.5)';
+        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
+
+        ctx.globalAlpha = inK;
+        const cx = SCREEN_W / 2, R = BossRush, n = R.order.length;
+        const first = R.stage === 0 && R.splits.length === 0;
+        UI.label(ctx, 'BOSS RUSH  •  BOSS ' + (R.stage + 1) + ' / ' + n, cx, 250, UI.MAGENTA, 18);
+        Neon.text(ctx, R.bossName(), cx, 312, '#ff2255', 50, { core: 0.45, halo: 0.55 });
+        UI.label(ctx, 'TIME ' + R.formatTime(R.time), cx, 352, UI.TEXT, 17);
+
+        // The choice
+        UI.panel(ctx, cx - 320, 392, 640, 380, UI.CYAN, { title: first ? 'CHOOSE YOUR WEAPON' : 'CHOOSE AN UPGRADE' });
+        this.items = R.choices.map(c => c.label);
+        R.choices.forEach((c, i) => {
+            UI.item(ctx, c.label, cx, 480 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26 });
+        });
+
+        // The run so far (left): bosses with their split times, then the loadout
+        const lx = PLAY_X / 2;
+        UI.panel(ctx, lx - 220, 260, 440, 70 + n * 56, UI.MAGENTA, { title: 'BOSSES' });
+        for (let i = 0; i < n; i++) {
+            const L = ALL_LEVELS[R.order[i]];
+            const def = BossTypes[L.bossType] || BossTypes.architect;
+            const y = 330 + i * 56;
+            const cur = i === R.stage, done = i < R.splits.length;
+            UI.pip(ctx, lx - 180, y - 6, 7, cur ? '#ff2255' : UI.MAGENTA, cur || done);
+            Neon.text(ctx, def.name, lx - 158, y, cur ? '#ffffff' : (done ? UI.TEXT : UI.DIM), cur ? 19 : 16,
+                { align: 'left', halo: cur ? 0.35 : 0, weight: cur ? 'bold' : '' });
+            if (done) UI.label(ctx, R.formatTime(R.splits[i]), lx + 190, y, '#00ff88', 15, 'right');
+        }
+        const ly = 330 + n * 56 + 20;
+        UI.panel(ctx, lx - 220, ly, 440, 150, UI.CYAN, { title: 'LOADOUT' });
+        const P = Player;
+        const wName = P.primaryWeapon === 'none' ? 'BASE SHOT' : R.WEAPONS[P.primaryWeapon].name + ' LV' + P.primaryLevel;
+        UI.label(ctx, first ? 'WEAPON — CHOOSE BELOW' : wName, lx - 190, ly + 62, UI.TEXT, 17, 'left');
+        UI.label(ctx, 'DRONES LV' + P.droneLevel + '    LIVES ' + P.lives + (GameConfig.bombs.enabled ? '    BOMBS ' + P.bombs : ''),
+            lx - 190, ly + 100, UI.DIM, 15, 'left');
+
+        this._drawThreat(ctx, R.level().bossType, t);
+
+        ctx.globalAlpha = 1;
+        UI.hint(ctx, '↑↓ CHOOSE  •  ENTER TO LAUNCH  •  ESC TO QUIT');
+    },
+
+    // --- BOSS MODES: Boss Rush and Boss Practice ---
+    drawBossMenu(ctx) {
+        UI.background(ctx, { dim: 0.5 });
+        UI.title(ctx, 'BOSS MODES', 130);
+        const cx = SCREEN_W / 2;
+        const rush = BossRush.unlocked(), practice = BossRush.practiceLevels().length > 0;
+        this.items = ['BOSS RUSH', 'BOSS PRACTICE', 'BACK'];
+        const descs = [
+            rush ? 'EVERY BOSS BACK TO BACK  •  UPGRADES BETWEEN BOSSES  •  SCORE + TIME' : 'CLEAR THE CAMPAIGN TO UNLOCK',
+            practice ? 'FIGHT ANY BOSS YOU HAVE BEATEN  •  CHOOSE THE PHASE AND LOADOUT' : 'DEFEAT A BOSS TO UNLOCK',
+            '',
+        ];
+        const colors = ['#ff2255', UI.CYAN, UI.DIM];
+        for (let i = 0; i < 3; i++) {
+            const y = 300 + i * 150;
+            const selected = i === this.selectedIndex;
+            const locked = (i === 0 && !rush) || (i === 1 && !practice);
+            if (i < 2) UI.panel(ctx, cx - 380, y - 56, 760, 110, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: 700, color: colors[i], desc: descs[i], size: 30, disabled: locked });
+        }
+        if (practice) UI.label(ctx, BossRush.practiceLevels().length + ' / ' + ALL_LEVELS.length + ' BOSSES BEATEN', cx, 690, UI.DIM, 15);
+        UI.hint(ctx, '↑↓ SELECT  •  ENTER CONFIRM  •  ESC BACK');
+    },
+
+    // --- Boss Practice setup: ←/→ rows, the boss on the right with its best time ---
+    drawPracticeSetup(ctx) {
+        UI.background(ctx, { dim: 0.6 });
+        UI.title(ctx, 'BOSS PRACTICE', 110);
+        const p = Game._practice, L = ALL_LEVELS[p.level];
+        const def = BossTypes[L.bossType] || BossTypes.architect;
+        const W = BossRush.WEAPONS;
+        const rows = [
+            ['BOSS', def.name],
+            ['START AT PHASE', p.phase + ' / ' + def.phases],
+            ['DIFFICULTY', p.difficulty.toUpperCase()],
+            ['WEAPON', W[p.weapon].name],
+            ['WEAPON LEVEL', 'LV' + p.weaponLevel],
+            ['DRONES', p.drones ? 'LV' + p.drones : 'NONE'],
+        ];
+        const lx = 260, lw = 760, top = 200;
+        UI.panel(ctx, lx, top, lw, 660, UI.CYAN, { title: 'SETUP' });
+        this.items = rows.map(r => r[0]).concat(['START', 'BACK']);
+        rows.forEach(([label, value], i) => {
+            const y = top + 80 + i * 70;
+            const sel = i === this.selectedIndex;
+            if (sel) {
+                ctx.fillStyle = UI.CYAN; ctx.globalAlpha = 0.1;
+                ctx.fillRect(lx + 20, y - 30, lw - 40, 46);
+                ctx.globalAlpha = 1;
+            }
+            Neon.text(ctx, label, lx + 50, y, sel ? '#ffffff' : UI.TEXT, 20, { align: 'left', halo: 0, weight: sel ? 'bold' : '' });
+            const vc = i === 3 ? W[p.weapon].color : (sel ? UI.CYAN : UI.TEXT);
+            Neon.text(ctx, (sel ? '◀  ' : '') + value + (sel ? '  ▶' : ''), lx + lw - 50, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
+        });
+        UI.item(ctx, 'START', lx + lw / 2, top + 545, this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88' });
+        UI.item(ctx, 'BACK', lx + lw / 2, top + 610, this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM });
+
+        // The boss, and the best time for this boss on this difficulty
+        this._drawThreat(ctx, L.bossType, UI.time());
+        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+        const best = Campaign.practiceBests[p.difficulty + '_' + L.bossType];
+        UI.label(ctx, best ? 'BEST ' + BossRush.formatTime(best) : 'NO BEST TIME YET', rx, 740, best ? '#00ff88' : UI.DIM, 18);
+        UI.label(ctx, 'NO CREDITS OR HIGH SCORES IN PRACTICE', rx, 776, UI.DIM, 13);
+        UI.hint(ctx, '↑↓ SELECT  •  ←→ CHANGE  •  ENTER START  •  ESC BACK');
+    },
+
+    drawPracticeComplete(ctx) {
+        UI.dim(ctx, 0.78);
+        const cx = SCREEN_W / 2, p = BossRush.practice;
+        const best = Campaign.practiceBests[p.difficulty + '_' + ALL_LEVELS[p.level].bossType];
+        UI.panel(ctx, cx - 360, 220, 720, 520, UI.CYAN);
+        Neon.text(ctx, 'BOSS DOWN', cx, 300, UI.CYAN, 58, { core: 0.45, halo: 0.55 });
+        UI.label(ctx, BossRush.bossName() + ' — ' + p.difficulty.toUpperCase() + (p.phase > 1 ? '  •  FROM PHASE ' + p.phase : ''), cx, 345, UI.TEXT, 17);
+        UI.label(ctx, 'TIME', cx, 400, UI.DIM, 15);
+        Neon.text(ctx, BossRush.formatTime(BossRush.time), cx, 446, '#ffee33', 46, { core: 0.4 });
+        if (Game._practiceNewBest) Neon.text(ctx, 'NEW BEST!', cx, 492, '#00ff88', 24, { halo: 0.4 });
+        else if (best) UI.label(ctx, 'BEST ' + BossRush.formatTime(best), cx, 492, UI.DIM, 17);
+        UI.label(ctx, 'DEATHS ' + Scoring.levelDeaths + '    BOMBS ' + Scoring.levelBombs, cx, 530, UI.TEXT, 16);
+        this.items = ['RETRY', 'CHANGE SETUP', 'MAIN MENU'];
+        for (let i = 0; i < this.items.length; i++) {
+            UI.item(ctx, this.items[i], cx, 590 + i * 48, i === this.selectedIndex, { w: 380, size: 22 });
+        }
+    },
+
+    // --- Boss Rush results ---
+    drawRushComplete(ctx) {
+        UI.dim(ctx, 0.78);
+        const R = BossRush;
+        this._resultsSub = [
+            ['ALL ' + R.order.length + ' BOSSES DOWN — ' + (GameConfig.difficulty || '').toUpperCase(), UI.TEXT, 17],
+            ['TIME ' + R.formatTime(R.time), '#00ff88', 22],
+            [R.splits.map((s, i) => (i + 1) + ': ' + R.formatTime(s)).join('    '), UI.DIM, 14],
+        ];
+        const endY = this._results(ctx, 100, 'RUSH COMPLETE', UI.CYAN, '#ffee33', HighScores.enteringInitials ? 190 : 130);
+        if (HighScores.enteringInitials) {
+            HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
+        } else {
+            this.items = ['PLAY AGAIN', 'MAIN MENU'];
+            for (let i = 0; i < this.items.length; i++) {
+                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 50, i === this.selectedIndex, { w: 380, size: 22 });
             }
         }
     },
@@ -11094,19 +13795,7 @@ const Menu = {
         }
 
         // Threat assessment (right): the level's boss in neon
-        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
-        const def = BossTypes[lvl.bossType] || BossTypes.architect;
-        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
-        const fake = Object.create(Boss);
-        fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = lvl.bossType;
-        ctx.save();
-        ctx.translate(rx, 470);
-        ctx.scale(1.7, 1.7);
-        const draw = Boss._neon[lvl.bossType] || Boss._neon.architect;
-        draw.call(fake, ctx, Boss.radius, def.colors[0], false);
-        ctx.restore();
-        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
-        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+        this._drawThreat(ctx, lvl.bossType, t);
 
         // Start prompt with an auto-start countdown
         ctx.globalAlpha = inK * (Renderer.calm() ? 1 : 0.7 + Math.sin(t * 5) * 0.3);
@@ -11223,9 +13912,9 @@ const Menu = {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'HIGH SCORES', 110);
 
-        const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'SESSION'];
-        const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'session'];
-        const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#cc44ff'];
+        const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'BOSS RUSH', 'SESSION'];
+        const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'bossrush', 'session'];
+        const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#ff2255', '#cc44ff'];
         UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
 
         const color = colors[this.highScoreTab];
@@ -11238,10 +13927,10 @@ const Menu = {
         if (rows.length === 0) {
             UI.label(ctx, session ? 'NO SCORES THIS SESSION' : 'NO SCORES YET', SCREEN_W / 2, top + 300, UI.DIM, 20);
         } else {
-            const isEndless = tabKey === 'endless';
+            const isEndless = tabKey === 'endless', isRush = tabKey === 'bossrush';
             const cols = session
                 ? [['#', 40], ['NAME', 100], ['SCORE', 200], ['INFO', 460], ['MODE', 620]]
-                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : 'LEVEL', 560], ['DATE', 680]];
+                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : (isRush ? 'TIME' : 'LEVEL'), 560], ['DATE', 680]];
             for (const [h, x] of cols) UI.label(ctx, h, px + x, top + 48, UI.DIM, 14, 'left');
             rows.forEach((entry, i) => {
                 const ey = top + 90 + i * 50;
@@ -11257,11 +13946,15 @@ const Menu = {
                 cell(entry.initials, 100);
                 cell(entry.score.toLocaleString(), 200);
                 if (session) {
-                    cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?') : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
+                    cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?')
+                        : entry.mode === 'bossrush' ? 'RUSH ' + (entry.won ? BossRush.formatTime(entry.time || 0) : (entry.bosses || 0) + '/' + (entry.of || '?'))
+                        : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
                     cell((entry.difficulty || '').toUpperCase(), 620, UI.DIM, 17);
                 } else {
                     cell((entry.maxChain || 0).toString(), 440);
-                    cell(isEndless ? 'W' + (entry.wave || '?') : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
+                    cell(isEndless ? 'W' + (entry.wave || '?')
+                        : isRush ? (entry.won ? BossRush.formatTime(entry.time || 0) + ' ✓' : (entry.bosses || 0) + '/' + (entry.of || '?'))
+                        : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
                     cell(entry.date || '', 680, UI.DIM, 16);
                 }
             });
@@ -11305,6 +13998,10 @@ const Game = {
     briefingText: '',
     briefingTimer: 0,
     _pendingEndless: false,
+    _pendingBossRush: false,
+    _rushDifficulty: 'normal',
+    _practice: null,            // Boss Practice setup (kept for RETRY and CHANGE SETUP)
+    _practiceNewBest: false,
     _gameOverPending: false,
 
     async init() {
@@ -11383,11 +14080,27 @@ const Game = {
         Asteroids.clear();
         Escort.init();
         EndlessMode.active = false; // Ensure endless mode is off for campaign
+        BossRush.active = false;
         Boss.active = false;
         Boss.defeated = false;
         WaveSystem.loadLevel(levelData);
+        this._applyLevelLook(levelData);
+
+        // Activate level-specific systems
+        if (levelData.hasAsteroids) Asteroids.activate();
+        if (levelData.hasEscort) Escort.activate();
+
+        this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this._levelStartWeapon = Player.primaryWeapon;
+        this._levelStartDrones = Player.droneLevel;
+        this.state = 'playing';
+    },
+
+    // A level's backdrop, bloom, colour grade and chroma (campaign levels and Boss Rush stages)
+    _applyLevelLook(lvl) {
         Background.init();
-        Background.bgType = levelData.bgType || 'synthwave';
+        Background.bgType = lvl.bgType || 'synthwave';
         Background._generateNearLayer(); // Regenerate silhouettes for new theme
 
         // Bloom intensity per level theme
@@ -11416,16 +14129,6 @@ const Game = {
 
         // Level 6 glitch atmosphere — persistent chromatic aberration
         Renderer.setPersistentChroma(Background.bgType === 'void' ? 0.003 : 0);
-
-        // Activate level-specific systems
-        if (levelData.hasAsteroids) Asteroids.activate();
-        if (levelData.hasEscort) Escort.activate();
-
-        this.endRunProcessed = false; this._gameOverPending = false;
-        this._lastWaveClearTimer = null;
-        this._levelStartWeapon = Player.primaryWeapon;
-        this._levelStartDrones = Player.droneLevel;
-        this.state = 'playing';
     },
 
     startGame(difficulty) {
@@ -11459,12 +14162,136 @@ const Game = {
         WaveSystem.waveTime = 0;
         WaveSystem.bossActive = false;
         EndlessMode.init();
+        BossRush.active = false;
         Background.init();
         Background.bgType = 'synthwave';
         Background._generateNearLayer();
         this.endRunProcessed = false; this._gameOverPending = false;
         this._lastWaveClearTimer = null;
         this.state = 'playing';
+    },
+
+    // Boss Rush: the weapon pick comes first (an intermission), then the bosses in order
+    startBossRush(difficulty) {
+        SaveData.migrated = null;
+        if (difficulty !== 'custom') {
+            GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[difficulty]));
+            GameConfig.difficulty = difficulty;
+        } else {
+            GameConfig = CustomDifficulty.getConfig();
+        }
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity || 1.0;
+        this._rushDifficulty = difficulty;
+        this._retryLoadout = null;
+        EndlessMode.active = false;
+        Player.init();
+        Player.droneLevel = BossRush.START_DRONES;
+        Scoring.reset();
+        BossRush.begin();
+        this._showRushIntermission();
+    },
+
+    // Boss Practice: one beaten boss, from a chosen phase, with a chosen loadout
+    startPractice(setup) {
+        SaveData.migrated = null;
+        GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[setup.difficulty]));
+        GameConfig.difficulty = setup.difficulty;
+        GameConfig.fireMode = GameConfig.autofire ? 'auto' : Settings.values.fireMode;
+        GameConfig._baseDensity = GameConfig.bulletDensity || 1.0;
+        this._retryLoadout = null;
+        EndlessMode.active = false;
+        Player.init();
+        Player.primaryWeapon = setup.weapon;
+        Player.primaryLevel = setup.weaponLevel;
+        Player.droneLevel = setup.drones;
+        Scoring.reset();
+        BossRush.beginPractice(setup);
+        this._beginRushStage();
+    },
+
+    // Between bosses: the next boss's backdrop plays behind the upgrade choice
+    _showRushIntermission() {
+        const lvl = BossRush.level();
+        this.currentLevelIndex = BossRush.order[BossRush.stage];
+        this._applyLevelLook(lvl);
+        Scheduler.clear();
+        Enemies.clear();
+        Enemies.enemyBullets.clear();
+        Player.bullets.clear();
+        Particles.clear();
+        PowerUps.clear();
+        Boss.active = false;
+        Boss.defeated = false;
+        this.briefingTimer = 0;
+        Menu.selectedIndex = 0;
+        this.state = 'rush_intermission';
+    },
+
+    _beginRushStage() {
+        const lvl = BossRush.level();
+        this.currentLevelIndex = BossRush.order[BossRush.stage];
+        this.applyLevelScaling(lvl.levelScale || 1.0, GameConfig._baseDensity);
+        Scoring.softReset();
+        Scoring.beginLevel();
+        Scheduler.clear();
+        Enemies.clear();
+        Particles.clear();
+        PowerUps.clear();
+        Asteroids.clear();
+        Escort.init();
+        WaveSystem.waves = [];
+        WaveSystem.currentWaveIndex = 0;
+        WaveSystem.levelTimer = 0;
+        WaveSystem.waveTime = 0;
+        this._applyLevelLook(lvl);
+        Player.x = PLAY_W / 2;
+        Player.y = PLAY_H - 80;
+        Player.bullets.clear();
+        Boss.init(lvl.bossType || 'architect');
+        const startPhase = BossRush.practice ? Math.min(BossRush.practice.phase, Boss.totalPhases) : 1;
+        if (startPhase > 1) {
+            // Practice from a later phase: that phase's HP, armour already gone
+            Boss.phase = startPhase;
+            Boss.hp = Boss.maxHp = Boss.phaseHps[startPhase - 1];
+            Boss.armor = [];
+        }
+        Audio.playBossWarning();
+        WaveSystem.bossActive = true;
+        BossRush.stageTime = 0;
+        this.endRunProcessed = false; this._gameOverPending = false;
+        this._lastWaveClearTimer = null;
+        this.state = 'playing';
+    },
+
+    // A Boss Rush boss is down: on to the next intermission, or the results
+    _rushBossDown() {
+        if (this.state !== 'playing') return;
+        if (BossRush.practice) {
+            BossRush.cleared();
+            this._processEndRun(true);
+            this.state = 'practice_complete';
+            Menu.selectedIndex = 0;
+            return;
+        }
+        if (BossRush.cleared()) {
+            this._processEndRun(true);
+            this.state = 'rush_complete';
+            Menu.selectedIndex = 0;
+            return;
+        }
+        BossRush.stage++;
+        BossRush.rollChoices();
+        Transition.start(() => this._showRushIntermission());
+    },
+
+    // Restart whatever mode the current run is in
+    _restartRun() {
+        const diff = GameConfig.difficulty;
+        if (BossRush.practice) this.startPractice(BossRush.practice);
+        else if (BossRush.active) this.startBossRush(this._rushDifficulty);
+        else if (this.currentLevelIndex === -1) this.startEndless(diff);
+        else this.startLevel(this.currentLevelIndex, diff, false);
     },
 
     showBriefing(levelIndex, continuing = false) {
@@ -11483,6 +14310,29 @@ const Game = {
     _processEndRun(won) {
         if (this.endRunProcessed) return;
         this.endRunProcessed = true;
+        NeonCredits.lastEarned = 0;   // only a run's end pays out
+
+        if (BossRush.practice) {
+            // Practice pays nothing and has no leaderboard; it keeps a best time
+            EndRunBonus.bonuses = [];
+            EndRunBonus.totalBonus = 0;
+            const p = BossRush.practice;
+            this._practiceNewBest = won && Campaign.recordPractice(p.difficulty, ALL_LEVELS[p.level].bossType, BossRush.time);
+            return;
+        }
+        if (BossRush.active) {
+            Scoring.score += BossRush.bonuses(won);
+            NeonCredits.earn(Scoring.score, GameConfig.difficulty);
+            const entry = {
+                score: Scoring.score, maxChain: Scoring.maxChain, graze: Scoring.grazeCount, mode: 'bossrush',
+                bosses: BossRush.splits.length, of: BossRush.order.length, time: +BossRush.time.toFixed(1), won,
+            };
+            // Custom difficulty has no leaderboard, as in the campaign
+            if (GameConfig.difficulty !== 'custom' && HighScores.qualifies(Scoring.score, 'bossrush')) {
+                HighScores.startInitialEntry(Scoring.score, 'bossrush', entry);
+            }
+            return;
+        }
 
         const isEndless = this.currentLevelIndex === -1;
 
@@ -11559,8 +14409,12 @@ const Game = {
 
         switch (this.state) {
             case 'title':
-                this._updateMenu(dt, 7);
+                this._updateMenu(dt, 8);
                 if (Input.isPressed('confirm')) {
+                    if (Menu.selectedIndex === 2 && !BossRush.unlocked() && !BossRush.practiceLevels().length) {
+                        Audio.playMenuNav();   // locked: the title explains how to unlock it
+                        break;
+                    }
                     Audio.playMenuSelect();
                     switch (Menu.selectedIndex) {
                         case 0: // New Game
@@ -11572,25 +14426,29 @@ const Game = {
                             this._pendingEndless = true;
                             Menu.selectedIndex = 1;
                             break;
-                        case 2: // Hangar
+                        case 2: // Boss modes: Rush and Practice
+                            this.state = 'boss_menu';
+                            Menu.selectedIndex = BossRush.unlocked() ? 0 : 1;
+                            break;
+                        case 3: // Hangar
                             this.state = 'hangar';
                             Hangar.categoryIndex = 0;
                             Hangar.mode = 'categories';
                             break;
-                        case 3: // High Scores
+                        case 4: // High Scores
                             this.state = 'high_scores';
                             Menu.selectedIndex = 0;
                             Menu.highScoreTab = 1;
                             break;
-                        case 4: // Achievements
+                        case 5: // Achievements
                             this.state = 'achievements';
                             Menu.selectedIndex = 0;
                             break;
-                        case 5: // Settings
+                        case 6: // Settings
                             this.state = 'settings';
                             Settings.selectedIndex = 0;
                             break;
-                        case 6: // How to Play
+                        case 7: // How to Play
                             this.state = 'tutorial';
                             Tutorial.pageIndex = 0;
                             break;
@@ -11607,6 +14465,9 @@ const Game = {
                         if (self._pendingEndless) {
                             self._pendingEndless = false;
                             Transition.start(() => { self.startEndless(diff); });
+                        } else if (self._pendingBossRush) {
+                            self._pendingBossRush = false;
+                            Transition.start(() => { self.startBossRush(diff); });
                         } else {
                             GameConfig = JSON.parse(JSON.stringify(DIFFICULTY_PRESETS[diff]));
                             GameConfig.difficulty = diff;
@@ -11627,12 +14488,18 @@ const Game = {
                             CustomDifficulty.init();
                             break;
                         case 4:
-                            this.state = 'title';
+                            this.state = this._pendingBossRush ? 'boss_menu' : 'title';
                             Menu.selectedIndex = 0;
+                            this._pendingEndless = this._pendingBossRush = false;
                             break;
                     }
                 }
-                if (Input.isPressed('back')) {
+                if (Input.isPressed('back') && this._pendingBossRush) {
+                    this._pendingBossRush = false;
+                    this.state = 'boss_menu';
+                    Menu.selectedIndex = 0;
+                    Audio.playMenuNav();
+                } else if (Input.isPressed('back')) {
                     this._pendingEndless = false;
                     this.state = 'title';
                     Menu.selectedIndex = 0;
@@ -11642,7 +14509,10 @@ const Game = {
 
             case 'custom_difficulty': {
                 const cdResult = CustomDifficulty.update();
-                if (cdResult === 'start') {
+                if (cdResult === 'start' && this._pendingBossRush) {
+                    this._pendingBossRush = false;
+                    Transition.start(() => { this.startBossRush('custom'); });
+                } else if (cdResult === 'start') {
                     GameConfig = CustomDifficulty.getConfig();
                     GameConfig.fireMode = Settings.values.fireMode;
                     this.currentLevelIndex = CustomDifficulty.startLevel || 0;
@@ -11659,7 +14529,7 @@ const Game = {
                 const hResult = Hangar.update();
                 if (hResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 2;
+                    Menu.selectedIndex = 3;
                     Audio.playMenuNav();
                 }
                 break;
@@ -11669,7 +14539,7 @@ const Game = {
                 const tResult = Tutorial.update();
                 if (tResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 6;
+                    Menu.selectedIndex = 7;
                     Audio.playMenuNav();
                 }
                 break;
@@ -11699,7 +14569,7 @@ const Game = {
                 const settingsResult = Settings.update();
                 if (settingsResult === 'back') {
                     this.state = 'title';
-                    Menu.selectedIndex = 5;
+                    Menu.selectedIndex = 6;
                     Audio.playMenuNav();
                 } else if (settingsResult === 'controls') {
                     this.state = 'controls';
@@ -11719,16 +14589,16 @@ const Game = {
 
             case 'high_scores':
                 if (Input.isPressed('left')) {
-                    Menu.highScoreTab = (Menu.highScoreTab - 1 + 5) % 5;
+                    Menu.highScoreTab = (Menu.highScoreTab - 1 + 6) % 6;
                     Audio.playMenuNav();
                 }
                 if (Input.isPressed('right')) {
-                    Menu.highScoreTab = (Menu.highScoreTab + 1) % 5;
+                    Menu.highScoreTab = (Menu.highScoreTab + 1) % 6;
                     Audio.playMenuNav();
                 }
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
-                    Menu.selectedIndex = 3;
+                    Menu.selectedIndex = 4;
                     Audio.playMenuNav();
                 }
                 break;
@@ -11736,7 +14606,7 @@ const Game = {
             case 'achievements':
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
-                    Menu.selectedIndex = 4;
+                    Menu.selectedIndex = 5;
                     Audio.playMenuNav();
                 }
                 break;
@@ -11831,7 +14701,7 @@ const Game = {
 
                 // Boss trigger — campaign only. The boss comes once every wave has spawned and the
                 // field is clear, or after a grace period (stragglers then retreat), so a level can't stall.
-                if (!EndlessMode.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
+                if (!EndlessMode.active && !BossRush.active && !Boss.active && !Boss.defeated && WaveSystem.allWavesSpawned()) {
                     if (this._lastWaveClearTimer === null) this._lastWaveClearTimer = 0;
                     this._lastWaveClearTimer += dt;
                     if (Enemies.list.length === 0 || this._lastWaveClearTimer >= this.BOSS_GRACE_SECONDS) {
@@ -11845,10 +14715,16 @@ const Game = {
 
                 // Boss update
                 if (Boss.active) {
+                    // Boss Rush clock: runs while a boss is up and fighting
+                    if (BossRush.active && Boss.entered && !Boss.defeated) {
+                        BossRush.time += dt;
+                        BossRush.stageTime += dt;
+                    }
                     Boss.update(dt, Player.x, Player.y);
                     if (!Boss.active && Boss.defeated) {
                         WaveSystem.bossActive = false;
-                        Scheduler.after(1.5, () => this._endLevel(true));
+                        if (BossRush.active) Scheduler.after(1.5, () => this._rushBossDown());
+                        else Scheduler.after(1.5, () => this._endLevel(true));
                     }
                 }
 
@@ -11867,9 +14743,7 @@ const Game = {
                         Audio.playMenuSelect();
                         if (this.pauseConfirm === 'restart') {
                             this.pauseConfirm = null;
-                            const isEndless = this.currentLevelIndex === -1;
-                            const diff = GameConfig.difficulty;
-                            Transition.start(() => { isEndless ? this.startEndless(diff) : this.startLevel(this.currentLevelIndex, diff, false); });
+                            Transition.start(() => this._restartRun());
                         } else if (this.pauseConfirm === 'quit') {
                             this.pauseConfirm = null;
                             Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; });
@@ -11902,11 +14776,8 @@ const Game = {
                     this._updateMenu(dt, 2);
                     if (Input.isPressed('confirm')) {
                         Audio.playMenuSelect();
-                        const lvlIdx = this.currentLevelIndex;
-                        const diff = GameConfig.difficulty;
-                        const isEndless = lvlIdx === -1;
                         switch (Menu.selectedIndex) {
-                            case 0: Transition.start(() => { isEndless ? this.startEndless(diff) : this.startLevel(lvlIdx, diff, false); }); break;
+                            case 0: Transition.start(() => this._restartRun()); break;
                             case 1: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 0; }); break;
                         }
                     }
@@ -11947,6 +14818,72 @@ const Game = {
                 }
                 break;
 
+            case 'boss_menu': {
+                this._updateMenu(dt, 3);
+                const back = () => { this.state = 'title'; Menu.selectedIndex = 2; Audio.playMenuNav(); };
+                if (Input.isPressed('confirm')) {
+                    const i = Menu.selectedIndex;
+                    if (i === 0 && BossRush.unlocked()) {
+                        Audio.playMenuSelect();
+                        this.state = 'difficulty_select';
+                        this._pendingBossRush = true;
+                        Menu.selectedIndex = 1;
+                    } else if (i === 1 && BossRush.practiceLevels().length) {
+                        Audio.playMenuSelect();
+                        this._openPracticeSetup();
+                    } else if (i === 2) {
+                        back();
+                    } else {
+                        Audio.playMenuNav();   // locked
+                    }
+                }
+                if (Input.isPressed('back')) back();
+                break;
+            }
+
+            case 'practice_setup':
+                this._updatePracticeSetup(dt);
+                break;
+
+            case 'practice_complete':
+                this._updateMenu(dt, 3);
+                if (Input.isPressed('confirm')) {
+                    Audio.playMenuSelect();
+                    switch (Menu.selectedIndex) {
+                        case 0: Transition.start(() => this.startPractice(BossRush.practice)); break;
+                        case 1: Transition.start(() => this._openPracticeSetup()); break;
+                        case 2: Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; }); break;
+                    }
+                }
+                break;
+
+            case 'rush_intermission':
+                this.briefingTimer += dt;
+                Background.update(dt);
+                this._updateMenu(dt, BossRush.choices.length);
+                if (Input.isPressed('confirm') && this.briefingTimer > 0.4) {
+                    Audio.playMenuSelect();
+                    BossRush.apply(BossRush.choices[Menu.selectedIndex]);
+                    Transition.start(() => this._beginRushStage());
+                }
+                if (Input.isPressed('back')) {
+                    Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; });
+                }
+                break;
+
+            case 'rush_complete':
+                if (HighScores.enteringInitials) {
+                    HighScores.updateInitialEntry();
+                } else {
+                    this._updateMenu(dt, 2);
+                    if (Input.isPressed('confirm')) {
+                        Audio.playMenuSelect();
+                        if (Menu.selectedIndex === 0) Transition.start(() => this.startBossRush(this._rushDifficulty));
+                        else Transition.start(() => { this.state = 'title'; Menu.selectedIndex = 2; });
+                    }
+                }
+                break;
+
             case 'campaign_complete':
                 this.briefingTimer += dt;
                 this._updateMenu(dt, 2);
@@ -11962,6 +14899,44 @@ const Game = {
         }
     },
 
+    // --- Boss Practice setup: rows of ←/→ choices, then START / BACK ---
+    PRACTICE_ROWS: ['boss', 'phase', 'difficulty', 'weapon', 'weaponLevel', 'drones', 'start', 'back'],
+
+    _openPracticeSetup() {
+        const levels = BossRush.practiceLevels();
+        const p = this._practice || { level: levels[0], phase: 1, difficulty: 'normal', weapon: 'spread', weaponLevel: 3, drones: 2 };
+        if (!levels.includes(p.level)) p.level = levels[0];
+        this._practice = p;
+        this.state = 'practice_setup';
+        Menu.selectedIndex = this.PRACTICE_ROWS.indexOf('start');
+    },
+
+    _updatePracticeSetup(dt) {
+        const rows = this.PRACTICE_ROWS;
+        this._updateMenu(dt, rows.length);
+        const p = this._practice, row = rows[Menu.selectedIndex];
+        const step = Input.isPressed('right') ? 1 : (Input.isPressed('left') ? -1 : 0);
+        const cycle = (list, v) => list[(list.indexOf(v) + step + list.length) % list.length];
+        const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v + step));
+        if (step) {
+            Audio.playMenuNav();
+            switch (row) {
+                case 'boss': p.level = cycle(BossRush.practiceLevels(), p.level); p.phase = 1; break;
+                case 'phase': p.phase = clamp(p.phase, 1, (BossTypes[ALL_LEVELS[p.level].bossType] || BossTypes.architect).phases); break;
+                case 'difficulty': p.difficulty = cycle(['casual', 'normal', 'hardcore'], p.difficulty); break;
+                case 'weapon': p.weapon = cycle(['spread', 'homing', 'laser'], p.weapon); break;
+                case 'weaponLevel': p.weaponLevel = clamp(p.weaponLevel, 1, 5); break;
+                case 'drones': p.drones = clamp(p.drones, 0, 5); break;
+            }
+        }
+        if (Input.isPressed('confirm') && (row === 'start' || row === 'back')) {
+            Audio.playMenuSelect();
+            if (row === 'start') Transition.start(() => this.startPractice(this._practice));
+            else { this.state = 'boss_menu'; Menu.selectedIndex = 1; }
+        }
+        if (Input.isPressed('back')) { this.state = 'boss_menu'; Menu.selectedIndex = 1; Audio.playMenuNav(); }
+    },
+
     _updateMenu(dt, itemCount) {
         if (Input.isPressed('down')) {
             Menu.selectedIndex = (Menu.selectedIndex + 1) % itemCount;
@@ -11975,6 +14950,7 @@ const Game = {
 
     draw() {
         ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        HUD._drawn = false;
 
         switch (this.state) {
             case 'title':
@@ -12036,15 +15012,16 @@ const Game = {
                 const pctx = Renderer.getPlayCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                const ectx = Renderer.getEntityCtx();
                 Background.draw(pctx);
-                Asteroids.draw(pctx);
-                Escort.draw(pctx);
-                PowerUps.draw(pctx);
-                Enemies.draw(pctx);
-                Player.draw(pctx);
-                if (Boss.active) Boss.draw(pctx);
-                Particles.draw(pctx);
-                Scoring.drawPopups(pctx);
+                Asteroids.draw(ectx);
+                Escort.draw(ectx);
+                PowerUps.draw(ectx);
+                Enemies.draw(ectx);
+                Player.draw(ectx);
+                if (Boss.active) Boss.draw(ectx);
+                Particles.draw(ectx);
+                Scoring.drawPopups(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
@@ -12060,10 +15037,11 @@ const Game = {
                 const pctx = Renderer.getPlayCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(0, 0);
+                const ectx = Renderer.getEntityCtx();
                 Background.draw(pctx);
-                Asteroids.draw(pctx);
-                Enemies.draw(pctx);
-                Particles.draw(pctx);
+                Asteroids.draw(ectx);
+                Enemies.draw(ectx);
+                Particles.draw(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
@@ -12076,11 +15054,11 @@ const Game = {
             }
 
             case 'victory': {
-                const pctx = Renderer.getPlayCtx();
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(0, 0);
                 Background.draw(pctx);
-                Particles.draw(pctx);
+                Particles.draw(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
@@ -12092,6 +15070,51 @@ const Game = {
                 break;
             }
 
+            case 'boss_menu':
+                Menu.drawBossMenu(ctx);
+                break;
+
+            case 'practice_setup':
+                Menu.drawPracticeSetup(ctx);
+                break;
+
+            case 'practice_complete': {
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(ectx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                HUD.draw(ctx);
+                Menu.drawPracticeComplete(ctx);
+                break;
+            }
+
+            case 'rush_intermission': {
+                const pctx = Renderer.getPlayCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                Menu.drawRushIntermission(ctx);
+                break;
+            }
+
+            case 'rush_complete': {
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
+                Renderer.beginFrame();
+                Renderer.setShake(0, 0);
+                Background.draw(pctx);
+                Particles.draw(ectx);
+                Renderer.endFrame();
+                if (!Renderer.usePixi) Renderer.blitToOverlay(ctx, PLAY_X, PLAY_Y);
+                HUD.draw(ctx);
+                Menu.drawRushComplete(ctx);
+                break;
+            }
+
             case 'campaign_complete':
                 Menu.drawCampaignComplete(ctx);
                 break;
@@ -12100,6 +15123,7 @@ const Game = {
         // Transition overlay — always drawn on top of everything
         Transition.draw(ctx);
         FpsMeter.draw(ctx);
+        HUD.showBackground(HUD._drawn);
     }
 };
 
@@ -12222,6 +15246,7 @@ const Music = {
         const lvl = EndlessMode.active ? 'endless' : (MusicTracks['level_' + (Game.currentLevelIndex + 1)] ? 'level_' + (Game.currentLevelIndex + 1) : 'level_1');
         switch (Game.state) {
             case 'briefing':
+            case 'rush_intermission':
                 return { id: lvl, intensity: 0 };
             case 'playing':
             case 'paused': {
@@ -12237,6 +15262,8 @@ const Music = {
                 return { id: lvl, intensity: surge ? 3 : n, surge };
             }
             case 'victory':
+            case 'rush_complete':
+            case 'practice_complete':
             case 'campaign_complete':
                 return { id: 'results', intensity: 0 };
             case 'game_over':

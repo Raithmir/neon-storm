@@ -83,7 +83,7 @@ const SaveData = {
 //  HIGH SCORE SYSTEM
 // ============================================================
 const HighScores = {
-    boards: { casual: [], normal: [], hardcore: [], endless: [] },
+    boards: { casual: [], normal: [], hardcore: [], endless: [], bossrush: [] },
     sessionScores: [],
     loaded: false,
     enteringInitials: false,
@@ -99,7 +99,7 @@ const HighScores = {
             this.boards = data;
         }
         // Ensure arrays exist
-        ['casual', 'normal', 'hardcore', 'endless'].forEach(d => {
+        ['casual', 'normal', 'hardcore', 'endless', 'bossrush'].forEach(d => {
             if (!this.boards[d]) this.boards[d] = [];
         });
         this.loaded = true;
@@ -128,6 +128,9 @@ const HighScores = {
             won: details ? details.won : false,
             date: new Date().toLocaleDateString()
         };
+        if (details && details.mode === 'bossrush') {
+            entry.bosses = details.bosses; entry.of = details.of; entry.time = details.time;
+        }
         if (!this.boards[board]) this.boards[board] = [];
         this.boards[board].push(entry);
         this.boards[board].sort((a, b) => b.score - a.score);
@@ -258,6 +261,7 @@ const Settings = {
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
         graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
+        backdrop3d: true,         // three.js level backdrops (backdrop3d.js); off = shader backdrops
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -266,6 +270,7 @@ const Settings = {
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
         { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
+        { key: 'backdrop3d', label: '3D BACKDROPS', type: 'toggle' },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'showFps', label: 'SHOW FPS', type: 'toggle' },
@@ -713,9 +718,12 @@ const NeonCredits = {
         await Storage.set('neonCredits', this.balance);
     },
 
+    lastEarned: 0,   // credits from the run that just ended (shown on the results screen)
+
     earn(score, difficulty) {
         const multipliers = { casual: 0.75, normal: 1.0, hardcore: 1.5, custom: 0.75 };
         const nc = Math.max(5, Math.floor(score / 3000 * (multipliers[difficulty] || 1)));
+        this.lastEarned = nc;
         this.balance += nc;
         this.save();
         return nc;

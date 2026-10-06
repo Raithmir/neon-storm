@@ -14,14 +14,19 @@ const VENDOR = path.join(__dirname, 'vendor');
 // Libraries bundled into the HTML: cached in vendor/ (committed), downloaded on first build.
 // pixi-filters v6 is the PixiJS v8 line; it registers itself as PIXI.filters.
 const VENDOR_LIBS = [
-    { name: 'pixi.min.js', url: 'https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js' },
+    // Pinned: backdrop3d.js relies on Pixi internals (see its header); re-check it when upgrading
+    { name: 'pixi.min.js', url: 'https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.js' },
     { name: 'pixi-filters.min.js', url: 'https://cdn.jsdelivr.net/npm/pixi-filters@6.1.5/dist/pixi-filters.min.js' },
+    // three.js: an esbuild bundle of the classes the 3D backdrops use (tools/three/bundle.js), committed
+    { name: 'three.min.js', url: null },
 ];
 
 const SOURCE_FILES = [
     'constants.js',
     'backdrops.js',
     'renderer.js',
+    'gpu-ctx.js',
+    'backdrop3d.js',
     'config.js',
     'input.js',
     'audio.js',
@@ -81,6 +86,10 @@ async function build() {
     for (const lib of VENDOR_LIBS) {
         const cache = path.join(VENDOR, lib.name);
         if (!fs.existsSync(cache)) {
+            if (!lib.url) {
+                console.error('  ERROR: Missing vendor/' + lib.name + ' (see tools/three/bundle.js)');
+                process.exit(1);
+            }
             try {
                 console.log('  \u21bb Downloading ' + lib.name + '...');
                 await downloadFile(lib.url, cache);
@@ -135,11 +144,11 @@ async function build() {
         + '\n</script>\n</body>\n</html>';
 
     fs.writeFileSync(path.join(DIST, 'neon-storm.js'), combinedJS);
-    fs.writeFileSync(path.join(DIST, 'neon-storm-gamma.html'), html);
+    fs.writeFileSync(path.join(DIST, 'neon-storm-delta.html'), html);
 
     console.log('\nBuild complete: ' + SOURCE_FILES.length + ' modules, ' + totalLines + ' total lines');
     console.log('Libraries: ' + VENDOR_LIBS.map((l, i) => l.name + (libTags[i].includes(' src=') ? ' (CDN link)' : ' (inline)')).join(', '));
-    console.log('Output: dist/neon-storm-gamma.html');
+    console.log('Output: dist/neon-storm-delta.html');
     console.log('Debug:  dist/neon-storm.js');
 }
 

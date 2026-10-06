@@ -2,7 +2,7 @@
 
 ## Overview
 
-Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, and a full meta-game with persistent unlockables.
+Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level campaign (each ~3–4.5 minutes with a mid-boss and a boss), 9 enemy types, 6 mid-bosses, 6 boss fights, 3 primary weapons plus a drone slot, an Endless mode, Boss Rush and Boss Practice modes, and a full meta-game with persistent unlockables.
 
 **Tech stack:** PixiJS v8 (WebGPU/WebGL) with pixi-filters v6 for gameplay rendering and GLSL shader backgrounds, HTML5 Canvas 2D for gameplay art (neon line art via a sprite atlas) and UI/menus, vanilla JavaScript (no frameworks), Web Audio API for procedural SFX and a procedural synthwave soundtrack, localStorage/Artifact Storage API for persistence.
 
@@ -14,7 +14,7 @@ Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level
 
 ## File Structure
 
-The project is split into 25 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
+The project is split into 27 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
 
 ### Module Map (in dependency order)
 
@@ -22,7 +22,9 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
 |--------|-------|---------|
 | `constants.js` | ~45 | Canvas setup, screen constants, dual-canvas sizing |
 | `backdrops.js` | ~405 | GPU fragment shaders for the six level backgrounds |
-| `renderer.js` | ~1085 | PixiJS pipeline, offscreen Canvas 2D bridge, FX texture sheet, backdrop, bloom/screen effects, resolution & graphics quality |
+| `renderer.js` | ~1130 | PixiJS pipeline, FX texture sheet, backdrop, GPU glow/bloom, screen effects, resolution & graphics quality; offscreen Canvas 2D for the no-WebGL fallback |
+| `backdrop3d.js` | ~1590 | three.js 3D level backgrounds (`Backdrop3D`, `BACKDROP_SCENES_3D`) on Pixi's GL context |
+| `gpu-ctx.js` | ~480 | `GpuCtx`: the Canvas 2D subset the play-area draw code uses, emitted as pooled Pixi sprites/graphics |
 | `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
 | `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions (incl. `surge`) |
 | `audio.js` | ~370 | Web Audio API procedural SFX; mix buses (SFX, music with pause filter and ducking, master compressor) |
@@ -53,10 +55,10 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
   Gameplay .draw(ctx) methods
            │
            ▼
-  Offscreen Canvas 2D (720×960 × render scale)   ◄── Neon art stamped from the sprite atlas
+  GpuCtx → Pixi sprites + graphics               ◄── Neon art stamped from the sprite atlas
            │
            ▼
-  PixiJS texture upload + native particles       ◄── Bullets/particles from the FX sheet
+  Native particles + glow render texture         ◄── Bullets/particles from the FX sheet, bloom halos
            │
            ▼
   Filters: colour grade, bloom, shockwave, god-rays, chroma, CRT, glitch
@@ -67,14 +69,14 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
   Overlay Canvas 2D (1920×1080 × render scale)   ◄── Menus, HUD, transitions (UI kit)
 ```
 
-- `Renderer.getPlayCtx()` / `beginFrame()` / `endFrame()` — frame lifecycle for the offscreen canvas.
+- `Renderer.getEntityCtx()` / `beginFrame()` / `endFrame()` — frame lifecycle. In Pixi mode the context is a `GpuCtx` (`gpu-ctx.js`); without Pixi it is the offscreen canvas (`getPlayCtx()`), which in Pixi mode only holds the painted background when no shader backdrop is active.
 - `Renderer.setBackdrop(theme)` — picks the level's shader; `_updateBackdrop` feeds it pulse/boss/Surge/bullet-density uniforms.
 - `Renderer.fx` — the shared particle texture sheet (glow, orb, core, shadow, streak, needle, missile, spark, pixel).
 - `Renderer.applyResolution()` — both canvases render at CSS scale × `devicePixelRatio`, capped by GRAPHICS QUALITY (high 2×, medium 1.5×, low 1×; auto steps down on slow frames). Draw code keeps logical coordinates.
 - `Renderer.calm()` — true with Flash Reduction on; every flash, glitch and pulse checks it.
 - Screen effects use pixi-filters v6 (`PIXI.filters`); centres are play-area pixels.
 
-When PixiJS isn't available, `endFrame()` is a no-op, the painted Canvas 2D backgrounds are used, and `Game.draw()` blits the offscreen canvas onto the overlay.
+When PixiJS isn't available, the draw code gets the offscreen canvas, the painted Canvas 2D backgrounds are used, and `Game.draw()` blits it onto the overlay.
 
 The art conventions (neon style rules, `_bake`/`_neon` split, sprite keys, adding art for new entities) are documented in `CLAUDE.md` → Art Style and in the header of `src/neon.js`.
 
@@ -271,7 +273,17 @@ Targets: ~2.3× power from Lv1 to Lv5, all weapons within ~20% on a single targe
 
 ### Background Themes
 
-Each level's `bgType` selects a GPU fragment shader in `BACKDROP_SHADERS` (`src/backdrops.js`), drawn under all gameplay with the world streaming toward the player:
+Each level's `bgType` selects a three.js scene in `BACKDROP_SCENES_3D` (`src/backdrop3d.js`; how it is wired into Pixi is in that file's header):
+- `synthwave` — neon grid toward a striped sun setting behind a Neo-Tokyo skyline, wireframe mountains, light pylons
+- `industrial` — foundry canyon: molten channel, riveted decks and conveyors, vent-lit factory blocks, pipes, gantries overhead, smokestacks, embers
+- `space` — asteroid belt: nebula with dust lanes and a galactic band, ringed gas giant, tumbling rocks, glinting debris
+- `sky` — night flight: moonlit cloud decks, a city and highways far below, moon and aurora, the convoy's navigation lights
+- `digital` — circuit-board city: routed traces with data pulses, chips and data towers, the Core with rings and beams, hex sky
+- `void` — collapsing tunnel of panels breaking away, a singularity with an accretion disc, band glitches
+
+A scene is `{ build() }` returning `{ scene, camera, update(s), glitch? }`; `s` carries the time and the backdrop uniforms (pulse, boss, surge, calm). Scenes use ShaderMaterials with their own fog (helpers in `B3D` and `B3D_GLSL`); anything that moves per frame or in its vertex shader needs `B3D.always()` (no frustum culling). Preview a scene by starting its level; `npm run sim:render` catches shader errors.
+
+**Fallback:** the GPU fragment shader in `BACKDROP_SHADERS` (`src/backdrops.js`), drawn under all gameplay with the world streaming toward the player:
 - `synthwave` — perspective neon grid, striped sun and wireframe mountains on a horizon near the top
 - `industrial` — top-down foundry deck: vents, conveyor belts, pipes, girders overhead, embers
 - `space` — parallax star layers, nebula, ringed planet
@@ -401,7 +413,7 @@ There are no unit tests; the game is verified headlessly with `tools/sim/` (Play
 - `tools/sim/playthrough.js`, `tools/sim/campaign.js` — single levels and whole campaigns played by a bot (perfect, or human-like with reaction time and perception noise).
 - `tools/sim/perf.js` — game-logic cost per frame (logic only). For rendering, use Settings → SHOW FPS in a real browser.
 
-**CI** (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/gamma: build, a check that the committed `dist/` matches `src/`, `sim:checks` and `sim:render`. **Hosting** (`.github/workflows/pages.yml`) publishes the build from main to GitHub Pages.
+**CI** (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/delta: build, a check that the committed `dist/` matches `src/`, `sim:checks` and `sim:render`. **Hosting** (`.github/workflows/pages.yml`) publishes the build from main to GitHub Pages.
 
 Checks reach into game globals (`Player`, `Boss`, `WaveSystem`…); keep them in step when renaming.
 
@@ -424,7 +436,7 @@ See `neon-storm-checklist.md` for the complete remaining work tracker.
 - [ ] Endless has no mid-bosses
 
 ### Hangar Bonus Content
-- [ ] Boss Practice Mode, Enemy Gallery, Music Player, Ship Color Designer — listed in shop but not implemented
+- [ ] Enemy Gallery, Music Player, Ship Color Designer — ideas for bonus content (Boss Practice is now a mode under BOSS MODES)
 
 ---
 
