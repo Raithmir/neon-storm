@@ -258,6 +258,7 @@ const Settings = {
         fireMode: 'manual',     // 'auto', 'manual'
         colorblind: false,
         graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
+        backdrop3d: true,         // three.js level backdrops (backdrop3d.js); off = shader backdrops
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -266,6 +267,7 @@ const Settings = {
         { key: 'musicVolume', label: 'MUSIC VOLUME', type: 'slider', min: 0, max: 100, step: 10 },
         { key: 'screenShake', label: 'SCREEN SHAKE', type: 'cycle', options: ['off', 'low', 'high'] },
         { key: 'graphicsQuality', label: 'GRAPHICS QUALITY', type: 'cycle', options: ['auto', 'high', 'medium', 'low'] },
+        { key: 'backdrop3d', label: '3D BACKDROPS', type: 'toggle' },
         { key: 'particleDensity', label: 'PARTICLES', type: 'cycle', options: ['low', 'medium', 'high'] },
         { key: 'showHitbox', label: 'SHOW HITBOX', type: 'toggle' },
         { key: 'showFps', label: 'SHOW FPS', type: 'toggle' },

@@ -242,6 +242,7 @@ const Renderer = {
             this.worldLayer.addChild(this.gameSprite);      // 1. Game canvas (only the painted background now)
             this.entityLayer = new PIXI.Container();         // 1b. Entities drawn through GpuCtx
             this.worldLayer.addChild(this.entityLayer);
+            Backdrop3D.init();                              // 0b. three.js scene over the shader backdrop
             this.gpu = new GpuCtx(this.entityLayer);
             this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
@@ -264,6 +265,7 @@ const Renderer = {
                 e.preventDefault();
                 console.warn('[Renderer] WebGL context lost');
                 this.usePixi = false;
+                Backdrop3D.lose();
             });
             this.pixiCanvas.addEventListener('webglcontextrestored', () => {
                 console.log('[Renderer] WebGL context restored');
@@ -448,6 +450,8 @@ const Renderer = {
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
         u.uCalm = this.calm() ? 1 : 0;
+        // A 3D scene replaces the shader backdrop where the level has one
+        this._bgMesh.visible = !Backdrop3D.frame(this.backdropTheme, dt, u);
         // Heat haze behind the boss, centred a little above it (heat rises)
         const h = u.uHaze;
         if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.2; }

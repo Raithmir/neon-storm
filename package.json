@@ -1,7 +1,7 @@
 {
   "name": "neon-storm",
   "version": "0.4.0-delta",
-  "description": "Neon Storm \u03b3 \u2014 Vertical scrolling bullet hell shooter with a neon vector look and PixiJS renderer",
+  "description": "Neon Storm δ — Vertical scrolling bullet hell shooter with a neon vector look and PixiJS renderer",
   "scripts": {
     "build": "node build.js",
     "dev": "npx http-server . -p 8080 -c-1",
@@ -9,7 +9,8 @@
     "sim:render": "node tools/sim/render-smoke.js",
     "sim:weapons": "node tools/sim/weapons.js",
     "sim:boss-ttk": "node tools/sim/boss-ttk.js",
-    "sim:audio": "node tools/sim/audio.js"
+    "sim:audio": "node tools/sim/audio.js",
+    "three:bundle": "node tools/three/bundle.js"
   },
   "private": true
 }

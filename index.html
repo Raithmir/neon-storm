@@ -19,15 +19,18 @@ body { background: #0a0612; overflow: hidden; display: flex; justify-content: ce
 </div>
 
 <!-- PixiJS v8 — WebGPU/WebGL renderer with Canvas fallback -->
-<script src="https://cdn.jsdelivr.net/npm/pixi.js@8/dist/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@8.18.1/dist/pixi.min.js"></script>
 <!-- pixi-filters v6 (the PixiJS v8 line) — Shockwave, Godray and Glitch effects; registers PIXI.filters -->
 <script src="https://cdn.jsdelivr.net/npm/pixi-filters@6.1.5/dist/pixi-filters.min.js"></script>
+<!-- three.js bundle for the 3D backdrops (tools/three/bundle.js) -->
+<script src="vendor/three.min.js"></script>
 
 <!-- Source modules loaded in dependency order -->
 <script src="src/constants.js"></script>
 <script src="src/backdrops.js"></script>
 <script src="src/renderer.js"></script>
 <script src="src/gpu-ctx.js"></script>
+<script src="src/backdrop3d.js"></script>
 <script src="src/config.js"></script>
 <script src="src/input.js"></script>
 <script src="src/audio.js"></script>
