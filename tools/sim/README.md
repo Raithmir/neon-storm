@@ -32,6 +32,7 @@ Environment variables:
 | `node tools/sim/playthrough.js <level 0-5> [casual\|normal\|hardcore] [weapon] [level] [--human]` | One full level with a fixed loadout. Default: perfect bot, hits counted. `--human`: human-like bot, real deaths | 1–3 min |
 | `node tools/sim/campaign.js [difficulty] [label]` | Whole campaign as one run with the human-like bot: deaths, lives, extends, weapon progress, chain, Surge, mid-boss outcomes per level | 15–30 min |
 | `node tools/sim/perf.js` | Game-logic cost per frame in a heavy late-Endless scene, with and without Surge | ~5 min |
+| `node tools/sim/perf.js --render` | Texture bytes uploaded per frame and CPU time of the gameplay and HUD draw calls, in late Endless and a level-6 boss fight, at HIGH and LOW | ~10 min |
 
 Results are written to `tools/sim/out/` (git-ignored) as JSON.
 
@@ -69,7 +70,7 @@ encode a design decision rather than a plain bug (e.g. `laserPierces`, `surgeNot
   (`--human`, `campaign.js`) has a 180 ms reaction time, perception noise and limited attention, but it is
   still better than a typical player — treat its death counts as a lower bound. It rarely bombs, so the
   bomb economy is not well measured.
-- `perf.js` times game logic only; rendering (PixiJS) is not representative in headless software WebGL.
+- `perf.js` times game logic; `--render` measures upload volume and CPU draw time. GPU time can't be measured headless (WebGL is software-emulated by SwiftShader, and its timings swing by 100× between runs), so use Settings → SHOW FPS in a real browser for frame rate.
 - The simulation runs at a fixed 60 fps, so it cannot show frame-rate-dependent effects such as bullet
   tunnelling; `asteroidRateIndependentOfFps` calls the update function directly at both rates instead.
 - Checks and tools reach into game globals (`Player`, `Boss`, `WaveSystem`…). Renaming those will need the

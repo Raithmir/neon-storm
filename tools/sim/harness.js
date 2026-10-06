@@ -26,6 +26,7 @@ const GAME_HTML = path.resolve(process.env.GAME_HTML || path.join(__dirname, '..
 const OUT_DIR = path.join(__dirname, 'out');
 
 // opts.draw: keep rendering on (for render tests); the default stubs it out for speed
+// opts.args: extra Chromium flags
 async function launch(opts = {}) {
     if (!fs.existsSync(GAME_HTML)) {
         throw new Error('Game build not found: ' + GAME_HTML + ' (run `node build.js` first)');
@@ -33,7 +34,7 @@ async function launch(opts = {}) {
     const browser = await chromium.launch({
         executablePath: process.env.CHROMIUM_PATH || undefined,
         // Software WebGL so the PixiJS renderer can initialise without a GPU
-        args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'],
+        args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', ...(opts.args || [])],
     });
     const page = await browser.newPage();
     const errors = [];
