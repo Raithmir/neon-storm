@@ -15,6 +15,9 @@
 //    fillText/strokeText  → white text baked once per string/font, tinted
 //    clip()               → a container masked by the clip path
 //    'lighter'            → additive blend
+//    beginLayer(filters)  → (not Canvas 2D) the drawing up to endLayer() goes
+//      / endLayer()          into a container with those Pixi filters; use
+//                            Neon.filtered(), which plain Canvas 2D skips
 //
 //  Only the subset of Canvas 2D that the play-area draw code uses is here.
 //  Gradients, patterns, shadows, filters and getImageData are not supported.
@@ -25,6 +28,8 @@ class GpuCtx {
         this._sprites = [];  this._nSprites = 0;
         this._graphics = []; this._nGraphics = 0;
         this._clips = [];    this._nClips = 0;
+        this._layers = [];   this._nLayers = 0;
+        this._layerStack = [];
         this._parent = root;
         this._g = null;           // Graphics currently being filled (consecutive vector ops)
         this._gBlend = 'normal';
@@ -58,7 +63,9 @@ class GpuCtx {
         this._release.length = 0;
         this.root.removeChildren();
         for (let i = 0; i < this._nClips; i++) this._clips[i].box.removeChildren();
-        this._nSprites = this._nGraphics = this._nClips = 0;
+        for (let i = 0; i < this._nLayers; i++) this._layers[i].removeChildren();
+        this._nSprites = this._nGraphics = this._nClips = this._nLayers = 0;
+        this._layerStack.length = 0;
         this._parent = this.root;
         this._g = null;
         this._resetState();
@@ -317,6 +324,24 @@ class GpuCtx {
         c.box.mask = c.mask;
         this._parent.addChild(c.box);
         this._parent = c.box;
+        this._g = null;
+    }
+
+    // --- Filter layers (GpuCtx only) ---
+
+    beginLayer(filters) {
+        let c = this._layers[this._nLayers];
+        if (!c) { c = new PIXI.Container(); this._layers.push(c); }
+        this._nLayers++;
+        c.filters = filters;
+        this._parent.addChild(c);
+        this._layerStack.push(this._parent);
+        this._parent = c;
+        this._g = null;
+    }
+
+    endLayer() {
+        this._parent = this._layerStack.pop() || this.root;
         this._g = null;
     }
 

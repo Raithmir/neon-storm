@@ -666,8 +666,11 @@ const Enemies = {
         shielded_cruiser(ctx, e, r, flash) {
             this._neonGlow(e, r * 2.2, flash);
             Neon.squash(ctx, flash, 0.06);
-            Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
-            Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            // Energy outline around the hull while the shield holds (white on a hit)
+            Neon.filtered(ctx, e.shieldHp > 0 ? Renderer.shieldGlow(flash) : null, () => {
+                Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
+                Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            });
             // Rotating half-shield
             if (e.shieldHp > 0) {
                 const a = 0.55 + Math.sin(e.moveTimer * 5) * 0.3;

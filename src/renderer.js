@@ -11,13 +11,36 @@
 //    5. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
 //    6. _explosionLayer: fireball PIXI.Sprites for big hits
 //    7. _laserBeamMesh: MeshRope for laser beam visual
-//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
+//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray;
+//       the backdrop, gameSprite and entityLayer sit in worldLayer inside it, which
+//       carries the teleport warp (bullets and particles stay undistorted)
 //    9. _flashSprite sits on app.stage (above colour grade + bloom)
 //   10. app.stage carries chroma + CRT + glitch filters (screen-space)
 //
 //  Canvas 2D fallback: glowCanvas composited additively into
 //  compCanvas, then blitted onto overlay — identical to alpha build.
 // ============================================================
+// Standard Pixi v8 filter vertex shader, shared by the custom filters below
+const FILTER_VERTEX = `
+    in vec2 aPosition;
+    out vec2 vTextureCoord;
+    uniform vec4 uInputSize;
+    uniform vec4 uOutputFrame;
+    uniform vec4 uOutputTexture;
+    vec4 filterVertexPosition(void) {
+        vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+        position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+        position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+        return vec4(position, 0.0, 1.0);
+    }
+    vec2 filterTextureCoord(void) {
+        return aPosition * (uOutputFrame.zw * uInputSize.zw);
+    }
+    void main(void) {
+        gl_Position = filterVertexPosition();
+        vTextureCoord = filterTextureCoord();
+    }`;
+
 const Renderer = {
     app: null,
     pixiCanvas: null,
@@ -211,10 +234,14 @@ const Renderer = {
             // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
             this.gameLayer = new PIXI.Container();
             this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
+            // World layer: backdrop + entities, without bullets/particles (the warp bends only this)
+            this.worldLayer = new PIXI.Container();
+            this.worldLayer.filterArea = this.gameLayer.filterArea;
+            this.gameLayer.addChild(this.worldLayer);
             this._initBackdrop();                           // 0. GPU shader background
-            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (Canvas 2D drawing not yet on the GPU)
+            this.worldLayer.addChild(this.gameSprite);      // 1. Game canvas (only the painted background now)
             this.entityLayer = new PIXI.Container();         // 1b. Entities drawn through GpuCtx
-            this.gameLayer.addChild(this.entityLayer);
+            this.worldLayer.addChild(this.entityLayer);
             this.gpu = new GpuCtx(this.entityLayer);
             this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
@@ -250,11 +277,14 @@ const Renderer = {
             this._initShockwaveFilter();
             this._initGodrayFilter();
             this._initGlitchFilter();
+            this._initShieldGlow();
+            this._initWarpFilter();
 
             // --- Laser beam MeshRope ---
             this._initLaserBeam();
 
-            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter]) {
+            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter,
+                this._warpFilter, ...(this._shieldGlow || [])]) {
                 if (f) f.resolution = 'inherit';
             }
 
@@ -370,13 +400,14 @@ const Renderer = {
                 uSurge: { value: 0, type: 'f32' },
                 uDim:   { value: 0, type: 'f32' },
                 uCalm:  { value: 0, type: 'f32' },
+                uHaze:  { value: new Float32Array(4), type: 'vec4<f32>' },
             });
             this._bgShaders = {};
             this._bgGeometry = geometry;
             this.backdropTheme = null;
             this.bgPulse = 0;
             this.setBackdrop('synthwave');
-            this.gameLayer.addChild(this._bgMesh);
+            this.worldLayer.addChild(this._bgMesh);
             this.backdropActive = true;
         } catch (e) {
             console.warn('[Renderer] Shader backdrop unavailable — using Canvas 2D background:', e);
@@ -417,6 +448,10 @@ const Renderer = {
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
         u.uCalm = this.calm() ? 1 : 0;
+        // Heat haze behind the boss, centred a little above it (heat rises)
+        const h = u.uHaze;
+        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.6; }
+        h[3] = approach(h[3], bossOn * (this.calm() ? 0.5 : 1), 1.5);
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
@@ -600,31 +635,101 @@ const Renderer = {
         if (this._shockwaveFilter && this._shockwaveActive) filters.push(this._shockwaveFilter);
         if (this._godrayFilter && this._godrayTimer > 0) filters.push(this._godrayFilter);
         this.gameLayer.filters = filters;
+        // The warp bends the world but not bullets, so their positions stay readable
+        this.worldLayer.filters = this._warpFilter && this._warpOn ? [this._warpFilter] : null;
+    },
+
+    // Shield outline: a soft glow hugging a shielded object's silhouette, drawn
+    // through Neon.filtered(). [0] normal, [1] on a shield hit.
+    _initShieldGlow() {
+        const F = this._filtersLib();
+        if (!F || !F.GlowFilter) return;
+        try {
+            this._shieldGlow = [
+                new F.GlowFilter({ distance: 10, outerStrength: 2.2, innerStrength: 0, color: 0x4488ff, quality: 0.2 }),
+                new F.GlowFilter({ distance: 12, outerStrength: 3.5, innerStrength: 0.4, color: 0xffffff, quality: 0.2 }),
+            ];
+        } catch (e) {
+            console.warn('[Renderer] GlowFilter unavailable:', e);
+        }
+    },
+
+    // Filters list for Neon.filtered(), or null where per-object filters aren't available
+    shieldGlow(hit) {
+        if (!this._shieldGlow) return null;
+        return hit && !this.calm() ? this._shieldGlowHit || (this._shieldGlowHit = [this._shieldGlow[1]])
+            : this._shieldGlowIdle || (this._shieldGlowIdle = [this._shieldGlow[0]]);
+    },
+
+    // Space warp for teleports: up to WARP_MAX points in play-area pixels, each
+    // pinching (+) or bulging (-) and twisting the world layer within its radius
+    WARP_MAX: 4,
+    _initWarpFilter() {
+        try {
+            this._warpFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: FILTER_VERTEX,
+                    fragment: `
+                        precision highp float;
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uInputClamp;
+                        uniform vec4 uWarp[4];
+                        void main(void) {
+                            vec2 p = vTextureCoord * uInputSize.xy + uOutputFrame.xy;
+                            vec2 q = p;
+                            for (int i = 0; i < 4; i++) {
+                                vec4 w = uWarp[i];
+                                if (w.z <= 0.0) continue;
+                                vec2 d = q - w.xy;
+                                float r = length(d) / w.z;
+                                if (r >= 1.0) continue;
+                                float k = (1.0 - r) * (1.0 - r) * w.w;
+                                float a = k * 2.5, c = cos(a), s = sin(a);
+                                q = w.xy + mat2(c, s, -s, c) * d * (1.0 + k);
+                            }
+                            vec2 uv = clamp((q - uOutputFrame.xy) * uInputSize.zw, uInputClamp.xy, uInputClamp.zw);
+                            gl_FragColor = texture(uTexture, uv);
+                        }`,
+                },
+                resources: {
+                    warpUniforms: { uWarp: { value: new Float32Array(16), type: 'vec4<f32>', size: 4 } },
+                },
+            });
+            this._warpOn = false;
+        } catch (e) {
+            console.warn('[Renderer] Warp filter unavailable:', e);
+            this._warpFilter = null;
+        }
+    },
+
+    // Per frame: warp points from enemies mid-teleport (phase shifters, teleporting mid-bosses)
+    _updateWarp() {
+        if (!this._warpFilter) return;
+        const w = this._warpFilter.resources.warpUniforms.uniforms.uWarp;
+        w.fill(0);
+        let n = 0;
+        const k = this.calm() ? 0.4 : 1;
+        if (typeof Enemies !== 'undefined') {
+            for (const e of Enemies.list) {
+                if (!(e.warpTimer > 0) || !e.warpTo || n > this.WARP_MAX - 2) continue;
+                const t = Math.max(0, Math.min(1, 1 - e.warpTimer / (e.midboss ? 0.5 : 0.45)));
+                const r = e.radius * 2.8;
+                w.set([e.x, e.y, r, 0.55 * t * k], n * 4); n++;                    // departing: pinch in
+                w.set([e.warpTo.x, e.warpTo.y, r, -0.35 * t * k], n * 4); n++;      // arriving: bulge out
+            }
+        }
+        const on = n > 0;
+        if (on !== this._warpOn) { this._warpOn = on; this._rebuildGameLayerFilters(); }
     },
 
     _initChromaFilter() {
         try {
             this._chromaFilter = PIXI.Filter.from({
                 gl: {
-                    vertex: `
-                        in vec2 aPosition;
-                        out vec2 vTextureCoord;
-                        uniform vec4 uInputSize;
-                        uniform vec4 uOutputFrame;
-                        uniform vec4 uOutputTexture;
-                        vec4 filterVertexPosition(void) {
-                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-                            return vec4(position, 0.0, 1.0);
-                        }
-                        vec2 filterTextureCoord(void) {
-                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
-                        }
-                        void main(void) {
-                            gl_Position = filterVertexPosition();
-                            vTextureCoord = filterTextureCoord();
-                        }`,
+                    vertex: FILTER_VERTEX,
                     fragment: `
                         in vec2 vTextureCoord;
                         uniform sampler2D uTexture;
@@ -892,6 +997,7 @@ const Renderer = {
             const now = performance.now();
             const frameMs = now - (this._lastFrameTime || now);
             this._updateBackdrop(Math.min(0.1, frameMs / 1000));
+            this._updateWarp();
             if (frameMs > 0) this._autoTune(frameMs);
             this._lastFrameTime = now;
             if (this.gpu) this.gpu.end();

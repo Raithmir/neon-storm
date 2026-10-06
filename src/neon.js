@@ -88,6 +88,15 @@ const Neon = {
         this._sprites.clear();
     },
 
+    // Draw fn() through Pixi filters (e.g. Renderer.shieldGlow()). Only the
+    // GPU path can filter one object; plain Canvas 2D draws it unfiltered.
+    filtered(ctx, filters, fn) {
+        if (!filters || !ctx.beginLayer) { fn(); return; }
+        ctx.beginLayer(filters);
+        fn();
+        ctx.endLayer();
+    },
+
     // Wall-clock seconds for idle animation (spins, pulses) that
     // doesn't need to be tied to an entity's own timers
     time() {

@@ -2435,6 +2435,8 @@ window.addEventListener('resize', resizeCanvas);
 //    uSurge   0..1 while Neon Surge is active
 //    uDim     0..~0.35, darkens the backdrop under dense bullet patterns
 //    uCalm    1 when Flash Reduction is on: no glitch flicker or strobing
+//    uHaze    boss centre (px), radius (px), strength 0..1: heat haze
+//             behind the boss; every shader starts with p = haze(...)
 //
 //  Readability rule: keep backdrops darker and less saturated than
 //  anything the player can collide with. Pixel coords: p = vUV * uRes,
@@ -2466,6 +2468,7 @@ uniform float uBoss;
 uniform float uSurge;
 uniform float uDim;
 uniform float uCalm;
+uniform vec4 uHaze;
 
 float hash(vec2 p) {
     p = fract(p * vec2(123.34, 456.21));
@@ -2477,6 +2480,16 @@ float noise(vec2 p) {
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
                mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+// Heat haze: shimmer the backdrop behind the boss (a tall ellipse around it,
+// with the noise drifting upward like rising air)
+vec2 haze(vec2 p) {
+    if (uHaze.w <= 0.0) return p;
+    vec2 d = (p - uHaze.xy) / vec2(uHaze.z, uHaze.z * 1.4);
+    float f = smoothstep(1.0, 0.2, length(d)) * uHaze.w;
+    if (f <= 0.0) return p;
+    vec2 q = p * 0.035 + vec2(0.0, uTime * 1.8);
+    return p + (vec2(noise(q), noise(q + 17.3)) - 0.5) * 16.0 * f;
 }
 float fbm(vec2 p) {
     float v = 0.0, a = 0.5;
@@ -2513,7 +2526,7 @@ const BACKDROP_SHADERS = {
     // sun and wireframe mountains on a horizon near the top
     synthwave: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float W = uRes.x;
     float cx = W * 0.5;
     float hy = uRes.y * 0.27;
@@ -2580,7 +2593,7 @@ void main() {
     // conveyor belts, pipes, and dark girders sweeping past overhead
     industrial: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec2 w = vec2(p.x, p.y - uTime * 70.0);
     float T = 96.0;
     vec2 cell = floor(w / T);
@@ -2645,7 +2658,7 @@ void main() {
     // Level 3 — deep space: parallax star layers, drifting nebula, a ringed planet
     space: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     vec3 col = vec3(0.004, 0.006, 0.025);
     // Nebula
     vec2 np = vec2(p.x, p.y - uTime * 6.0) * 0.004;
@@ -2695,7 +2708,7 @@ void main() {
     // moonlit cloud layers streaming past at two speeds
     sky: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // City lights far below: clusters of lamps in districts, a few winding main roads
     vec2 cp = vec2(p.x, p.y - uTime * 30.0);
     float district = smoothstep(0.45, 0.72, fbm(cp * 0.004));
@@ -2734,7 +2747,7 @@ void main() {
     digital: `
 vec2 edgeHash(vec2 c) { return vec2(hash(c + 0.5), hash(c + 17.3)); }
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     float S = 40.0;
     vec2 w = vec2(p.x, p.y - uTime * 80.0);
     vec2 c = floor(w / S);
@@ -2789,7 +2802,7 @@ void main() {
     // Level 6 — a collapsing tunnel into the void, with glitch bands and tears
     void: `
 void main() {
-    vec2 p = vUV * uRes;
+    vec2 p = haze(vUV * uRes);
     // Glitch bands: horizontal strips occasionally jump sideways
     float band = floor(p.y / 22.0);
     float gt = floor(uTime * 9.0);
@@ -2840,13 +2853,36 @@ void main() {
 //    5. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
 //    6. _explosionLayer: fireball PIXI.Sprites for big hits
 //    7. _laserBeamMesh: MeshRope for laser beam visual
-//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
+//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray;
+//       the backdrop, gameSprite and entityLayer sit in worldLayer inside it, which
+//       carries the teleport warp (bullets and particles stay undistorted)
 //    9. _flashSprite sits on app.stage (above colour grade + bloom)
 //   10. app.stage carries chroma + CRT + glitch filters (screen-space)
 //
 //  Canvas 2D fallback: glowCanvas composited additively into
 //  compCanvas, then blitted onto overlay — identical to alpha build.
 // ============================================================
+// Standard Pixi v8 filter vertex shader, shared by the custom filters below
+const FILTER_VERTEX = `
+    in vec2 aPosition;
+    out vec2 vTextureCoord;
+    uniform vec4 uInputSize;
+    uniform vec4 uOutputFrame;
+    uniform vec4 uOutputTexture;
+    vec4 filterVertexPosition(void) {
+        vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
+        position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
+        position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
+        return vec4(position, 0.0, 1.0);
+    }
+    vec2 filterTextureCoord(void) {
+        return aPosition * (uOutputFrame.zw * uInputSize.zw);
+    }
+    void main(void) {
+        gl_Position = filterVertexPosition();
+        vTextureCoord = filterTextureCoord();
+    }`;
+
 const Renderer = {
     app: null,
     pixiCanvas: null,
@@ -3040,10 +3076,14 @@ const Renderer = {
             // Order: sky canvas → GPU stars → bloom → bullets → particles → explosions → laser beam
             this.gameLayer = new PIXI.Container();
             this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
+            // World layer: backdrop + entities, without bullets/particles (the warp bends only this)
+            this.worldLayer = new PIXI.Container();
+            this.worldLayer.filterArea = this.gameLayer.filterArea;
+            this.gameLayer.addChild(this.worldLayer);
             this._initBackdrop();                           // 0. GPU shader background
-            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (Canvas 2D drawing not yet on the GPU)
+            this.worldLayer.addChild(this.gameSprite);      // 1. Game canvas (only the painted background now)
             this.entityLayer = new PIXI.Container();         // 1b. Entities drawn through GpuCtx
-            this.gameLayer.addChild(this.entityLayer);
+            this.worldLayer.addChild(this.entityLayer);
             this.gpu = new GpuCtx(this.entityLayer);
             this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
@@ -3079,11 +3119,14 @@ const Renderer = {
             this._initShockwaveFilter();
             this._initGodrayFilter();
             this._initGlitchFilter();
+            this._initShieldGlow();
+            this._initWarpFilter();
 
             // --- Laser beam MeshRope ---
             this._initLaserBeam();
 
-            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter]) {
+            for (const f of [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter, this._glitchFilter,
+                this._warpFilter, ...(this._shieldGlow || [])]) {
                 if (f) f.resolution = 'inherit';
             }
 
@@ -3199,13 +3242,14 @@ const Renderer = {
                 uSurge: { value: 0, type: 'f32' },
                 uDim:   { value: 0, type: 'f32' },
                 uCalm:  { value: 0, type: 'f32' },
+                uHaze:  { value: new Float32Array(4), type: 'vec4<f32>' },
             });
             this._bgShaders = {};
             this._bgGeometry = geometry;
             this.backdropTheme = null;
             this.bgPulse = 0;
             this.setBackdrop('synthwave');
-            this.gameLayer.addChild(this._bgMesh);
+            this.worldLayer.addChild(this._bgMesh);
             this.backdropActive = true;
         } catch (e) {
             console.warn('[Renderer] Shader backdrop unavailable — using Canvas 2D background:', e);
@@ -3246,6 +3290,10 @@ const Renderer = {
         u.uSurge = approach(u.uSurge, surgeOn, 4);
         u.uDim = approach(u.uDim, Math.min(0.35, bullets / 350 * 0.35), 3);
         u.uCalm = this.calm() ? 1 : 0;
+        // Heat haze behind the boss, centred a little above it (heat rises)
+        const h = u.uHaze;
+        if (bossOn) { h[0] = Boss.x; h[1] = Boss.y - Boss.radius * 0.4; h[2] = Boss.radius * 2.6; }
+        h[3] = approach(h[3], bossOn * (this.calm() ? 0.5 : 1), 1.5);
         if (this._starSlowLayer) this._starSlowLayer.visible = this._starFastLayer.visible = false;
     },
 
@@ -3429,31 +3477,101 @@ const Renderer = {
         if (this._shockwaveFilter && this._shockwaveActive) filters.push(this._shockwaveFilter);
         if (this._godrayFilter && this._godrayTimer > 0) filters.push(this._godrayFilter);
         this.gameLayer.filters = filters;
+        // The warp bends the world but not bullets, so their positions stay readable
+        this.worldLayer.filters = this._warpFilter && this._warpOn ? [this._warpFilter] : null;
+    },
+
+    // Shield outline: a soft glow hugging a shielded object's silhouette, drawn
+    // through Neon.filtered(). [0] normal, [1] on a shield hit.
+    _initShieldGlow() {
+        const F = this._filtersLib();
+        if (!F || !F.GlowFilter) return;
+        try {
+            this._shieldGlow = [
+                new F.GlowFilter({ distance: 10, outerStrength: 2.2, innerStrength: 0, color: 0x4488ff, quality: 0.2 }),
+                new F.GlowFilter({ distance: 12, outerStrength: 3.5, innerStrength: 0.4, color: 0xffffff, quality: 0.2 }),
+            ];
+        } catch (e) {
+            console.warn('[Renderer] GlowFilter unavailable:', e);
+        }
+    },
+
+    // Filters list for Neon.filtered(), or null where per-object filters aren't available
+    shieldGlow(hit) {
+        if (!this._shieldGlow) return null;
+        return hit && !this.calm() ? this._shieldGlowHit || (this._shieldGlowHit = [this._shieldGlow[1]])
+            : this._shieldGlowIdle || (this._shieldGlowIdle = [this._shieldGlow[0]]);
+    },
+
+    // Space warp for teleports: up to WARP_MAX points in play-area pixels, each
+    // pinching (+) or bulging (-) and twisting the world layer within its radius
+    WARP_MAX: 4,
+    _initWarpFilter() {
+        try {
+            this._warpFilter = PIXI.Filter.from({
+                gl: {
+                    vertex: FILTER_VERTEX,
+                    fragment: `
+                        precision highp float;
+                        in vec2 vTextureCoord;
+                        uniform sampler2D uTexture;
+                        uniform vec4 uInputSize;
+                        uniform vec4 uOutputFrame;
+                        uniform vec4 uInputClamp;
+                        uniform vec4 uWarp[4];
+                        void main(void) {
+                            vec2 p = vTextureCoord * uInputSize.xy + uOutputFrame.xy;
+                            vec2 q = p;
+                            for (int i = 0; i < 4; i++) {
+                                vec4 w = uWarp[i];
+                                if (w.z <= 0.0) continue;
+                                vec2 d = q - w.xy;
+                                float r = length(d) / w.z;
+                                if (r >= 1.0) continue;
+                                float k = (1.0 - r) * (1.0 - r) * w.w;
+                                float a = k * 2.5, c = cos(a), s = sin(a);
+                                q = w.xy + mat2(c, s, -s, c) * d * (1.0 + k);
+                            }
+                            vec2 uv = clamp((q - uOutputFrame.xy) * uInputSize.zw, uInputClamp.xy, uInputClamp.zw);
+                            gl_FragColor = texture(uTexture, uv);
+                        }`,
+                },
+                resources: {
+                    warpUniforms: { uWarp: { value: new Float32Array(16), type: 'vec4<f32>', size: 4 } },
+                },
+            });
+            this._warpOn = false;
+        } catch (e) {
+            console.warn('[Renderer] Warp filter unavailable:', e);
+            this._warpFilter = null;
+        }
+    },
+
+    // Per frame: warp points from enemies mid-teleport (phase shifters, teleporting mid-bosses)
+    _updateWarp() {
+        if (!this._warpFilter) return;
+        const w = this._warpFilter.resources.warpUniforms.uniforms.uWarp;
+        w.fill(0);
+        let n = 0;
+        const k = this.calm() ? 0.4 : 1;
+        if (typeof Enemies !== 'undefined') {
+            for (const e of Enemies.list) {
+                if (!(e.warpTimer > 0) || !e.warpTo || n > this.WARP_MAX - 2) continue;
+                const t = Math.max(0, Math.min(1, 1 - e.warpTimer / (e.midboss ? 0.5 : 0.45)));
+                const r = e.radius * 2.8;
+                w.set([e.x, e.y, r, 0.55 * t * k], n * 4); n++;                    // departing: pinch in
+                w.set([e.warpTo.x, e.warpTo.y, r, -0.35 * t * k], n * 4); n++;      // arriving: bulge out
+            }
+        }
+        const on = n > 0;
+        if (on !== this._warpOn) { this._warpOn = on; this._rebuildGameLayerFilters(); }
     },
 
     _initChromaFilter() {
         try {
             this._chromaFilter = PIXI.Filter.from({
                 gl: {
-                    vertex: `
-                        in vec2 aPosition;
-                        out vec2 vTextureCoord;
-                        uniform vec4 uInputSize;
-                        uniform vec4 uOutputFrame;
-                        uniform vec4 uOutputTexture;
-                        vec4 filterVertexPosition(void) {
-                            vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-                            position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-                            position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-                            return vec4(position, 0.0, 1.0);
-                        }
-                        vec2 filterTextureCoord(void) {
-                            return aPosition * (uOutputFrame.zw * uInputSize.zw);
-                        }
-                        void main(void) {
-                            gl_Position = filterVertexPosition();
-                            vTextureCoord = filterTextureCoord();
-                        }`,
+                    vertex: FILTER_VERTEX,
                     fragment: `
                         in vec2 vTextureCoord;
                         uniform sampler2D uTexture;
@@ -3721,6 +3839,7 @@ const Renderer = {
             const now = performance.now();
             const frameMs = now - (this._lastFrameTime || now);
             this._updateBackdrop(Math.min(0.1, frameMs / 1000));
+            this._updateWarp();
             if (frameMs > 0) this._autoTune(frameMs);
             this._lastFrameTime = now;
             if (this.gpu) this.gpu.end();
@@ -3975,6 +4094,9 @@ function _rendererHslToRgb(h, s, l) {
 //    fillText/strokeText  → white text baked once per string/font, tinted
 //    clip()               → a container masked by the clip path
 //    'lighter'            → additive blend
+//    beginLayer(filters)  → (not Canvas 2D) the drawing up to endLayer() goes
+//      / endLayer()          into a container with those Pixi filters; use
+//                            Neon.filtered(), which plain Canvas 2D skips
 //
 //  Only the subset of Canvas 2D that the play-area draw code uses is here.
 //  Gradients, patterns, shadows, filters and getImageData are not supported.
@@ -3985,6 +4107,8 @@ class GpuCtx {
         this._sprites = [];  this._nSprites = 0;
         this._graphics = []; this._nGraphics = 0;
         this._clips = [];    this._nClips = 0;
+        this._layers = [];   this._nLayers = 0;
+        this._layerStack = [];
         this._parent = root;
         this._g = null;           // Graphics currently being filled (consecutive vector ops)
         this._gBlend = 'normal';
@@ -4018,7 +4142,9 @@ class GpuCtx {
         this._release.length = 0;
         this.root.removeChildren();
         for (let i = 0; i < this._nClips; i++) this._clips[i].box.removeChildren();
-        this._nSprites = this._nGraphics = this._nClips = 0;
+        for (let i = 0; i < this._nLayers; i++) this._layers[i].removeChildren();
+        this._nSprites = this._nGraphics = this._nClips = this._nLayers = 0;
+        this._layerStack.length = 0;
         this._parent = this.root;
         this._g = null;
         this._resetState();
@@ -4277,6 +4403,24 @@ class GpuCtx {
         c.box.mask = c.mask;
         this._parent.addChild(c.box);
         this._parent = c.box;
+        this._g = null;
+    }
+
+    // --- Filter layers (GpuCtx only) ---
+
+    beginLayer(filters) {
+        let c = this._layers[this._nLayers];
+        if (!c) { c = new PIXI.Container(); this._layers.push(c); }
+        this._nLayers++;
+        c.filters = filters;
+        this._parent.addChild(c);
+        this._layerStack.push(this._parent);
+        this._parent = c;
+        this._g = null;
+    }
+
+    endLayer() {
+        this._parent = this._layerStack.pop() || this.root;
         this._g = null;
     }
 
@@ -6572,6 +6716,15 @@ const Neon = {
         this._sprites.clear();
     },
 
+    // Draw fn() through Pixi filters (e.g. Renderer.shieldGlow()). Only the
+    // GPU path can filter one object; plain Canvas 2D draws it unfiltered.
+    filtered(ctx, filters, fn) {
+        if (!filters || !ctx.beginLayer) { fn(); return; }
+        ctx.beginLayer(filters);
+        fn();
+        ctx.endLayer();
+    },
+
     // Wall-clock seconds for idle animation (spins, pulses) that
     // doesn't need to be tied to an entity's own timers
     time() {
@@ -8747,8 +8900,11 @@ const Enemies = {
         shielded_cruiser(ctx, e, r, flash) {
             this._neonGlow(e, r * 2.2, flash);
             Neon.squash(ctx, flash, 0.06);
-            Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
-            Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            // Energy outline around the hull while the shield holds (white on a hit)
+            Neon.filtered(ctx, e.shieldHp > 0 ? Renderer.shieldGlow(flash) : null, () => {
+                Neon.sprite(ctx, 'cruiser|' + e.color + (flash ? '|f' : ''), r * 0.85 + 5, this._bake.shielded_cruiser, e, r, flash);
+                Neon.light(ctx, 0, -r * 0.31, 2, e.accent, 0.6 + Math.sin(e.moveTimer * 3) * 0.3);
+            });
             // Rotating half-shield
             if (e.shieldHp > 0) {
                 const a = 0.55 + Math.sin(e.moveTimer * 5) * 0.3;
@@ -12526,7 +12682,9 @@ const Player = {
             ctx.globalAlpha = 1;
         }
 
-        this._drawShipNeon(ctx);
+        // While the shield holds, an energy outline hugs the hull (white on a hit)
+        const shielded = this.maxShieldHp > 0 && this.shieldHp > 0;
+        Neon.filtered(ctx, shielded ? Renderer.shieldGlow(this.shieldFlashTimer > 0) : null, () => this._drawShipNeon(ctx));
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {

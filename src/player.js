@@ -914,7 +914,9 @@ const Player = {
             ctx.globalAlpha = 1;
         }
 
-        this._drawShipNeon(ctx);
+        // While the shield holds, an energy outline hugs the hull (white on a hit)
+        const shielded = this.maxShieldHp > 0 && this.shieldHp > 0;
+        Neon.filtered(ctx, shielded ? Renderer.shieldGlow(this.shieldFlashTimer > 0) : null, () => this._drawShipNeon(ctx));
 
         // Focus mode hitbox indicator (or always if setting enabled)
         if (focusing || Settings.values.showHitbox) {
