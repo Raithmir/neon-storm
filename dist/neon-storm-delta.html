@@ -8842,7 +8842,8 @@ if (typeof document !== 'undefined' && document.fonts) {
 //  graphics quality, without WebGL2, or after any error or context loss.
 //
 //  Scenes: BACKDROP_SCENES_3D[theme] = { build() } returning
-//    { scene, camera, update(s) }, where s = { t, dt, pulse, boss, surge, calm }
+//    { scene, camera, update(s), glitch? }, where s = { t, dt, pulse, boss, surge, calm };
+//  glitch (0..1, read after update) turns on the composite's sideways band glitches
 //  (t pauses with the game; pulse/boss/surge are the 0..1 backdrop uniforms).
 //  Readability rule as for the shader backdrops: keep everything darker and
 //  less saturated than what the player can collide with. Scenes write their
@@ -8971,20 +8972,27 @@ const Backdrop3D = {
     // The mesh in worldLayer that shows the 3D scene through the backdrop uniforms
     _initComposite() {
         this._source = new PIXI.TextureSource({ width: 1, height: 1 });
+        this._u = new PIXI.UniformGroup({ uGlitch: { value: 0, type: 'f32' } });
         this._shader = PIXI.Shader.from({
             gl: {
                 vertex: BACKDROP_VERTEX,
                 fragment: BACKDROP_COMMON + `
 uniform sampler2D uScene;
+uniform float uGlitch;
 void main() {
     vec2 p = haze(vUV * uRes);
+    // Band glitches (scenes that ask for them): strips jump sideways and tint cyan
+    float band = floor(p.y / 22.0), gt = floor(uTime * 9.0);
+    float g = step(0.94 - uPulse * 0.2 - uBoss * 0.04, hash(vec2(band, gt))) * (1.0 - uCalm) * uGlitch;
+    p.x += g * (hash(vec2(band, gt + 3.0)) - 0.5) * 70.0;
     // GL render targets are stored bottom-up
-    vec3 col = texture(uScene, vec2(p.x / uRes.x, 1.0 - p.y / uRes.y)).rgb;
+    vec3 col = texture(uScene, clamp(vec2(p.x / uRes.x, 1.0 - p.y / uRes.y), 0.001, 0.999)).rgb;
+    col = mix(col, col.gbr * 1.6 + vec3(0.0, 0.08, 0.08), g * 0.8);
     col += col * uPulse * (1.0 - uCalm * 0.7) * 0.5;
     gl_FragColor = vec4(finish(col), 1.0);
 }`,
             },
-            resources: { bgUniforms: Renderer._bgUniforms, uScene: this._source },
+            resources: { bgUniforms: Renderer._bgUniforms, b3dUniforms: this._u, uScene: this._source },
         });
         this.mesh = new PIXI.Mesh({ geometry: Renderer._bgGeometry, shader: this._shader });
         this.mesh.visible = false;
@@ -9009,6 +9017,7 @@ void main() {
             const s = this._state;
             s.t = u.uTime; s.dt = dt; s.pulse = u.uPulse; s.boss = u.uBoss; s.surge = u.uSurge; s.calm = u.uCalm;
             sc.update(s);
+            this._u.uniforms.uGlitch = sc.glitch || 0;
             this._render(sc.scene, sc.camera);
             this.mesh.visible = true;
             return true;
@@ -10230,6 +10239,179 @@ void main() {
                     comps.instanceMatrix.needsUpdate = true;
                 },
             };
+        },
+    },
+
+    // Level 6 — SIGNAL LOST: falling down a collapsing tunnel into the void.
+    // Rings of glowing wall panels curve away ahead; panels are missing, and
+    // more break loose and tumble outward as they pass. At the end a black
+    // singularity spins in a red accretion disc, specks spiralling into it.
+    // The composite's band glitches are on (not under Flash Reduction).
+    void: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(64, PLAY_W / PLAY_H, 1, 4000);
+            camera.rotation.x = -0.24;
+
+            const U = {
+                uTime: { value: 0 }, uBoss: { value: 0 }, uBright: { value: 1 }, uCalm: { value: 0 },
+                uRed: { value: B3D.col(0xe60d40) }, uMag: { value: B3D.col(0xff00b3) },
+            };
+            const rnd = B3D.rng(6666);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3(), eul = new THREE.Euler();
+
+            // Black, with a faint red mist toward the singularity
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(3500, 32, 16), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uRed;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float a = acos(clamp(dot(d, normalize(vec3(0.0, 0.0, -1.0))), -1.0, 1.0));
+    vec3 col = vec3(0.004, 0.0, 0.004) + uRed * 0.06 * exp(-a * 3.0) * (0.6 + 0.4 * fbm3(d.xy * 6.0 + uTime * 0.05));
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // The tunnel: RINGS rings of SIDES panels along a path that bends away ahead
+            const RINGS = 44, SIDES = 14, STEP = 42, RAD = 130;
+            const panelGeo = new THREE.BoxGeometry(1, 1, 1);
+            const panels = new THREE.InstancedMesh(panelGeo, B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uRed; uniform vec3 uMag; uniform float uBright; uniform float uCalm;
+varying vec3 vW; varying vec2 vUv; varying vec3 vN; varying float vSeed;
+void main() {
+    // Glowing frame around each panel face, dark inside
+    vec2 q = abs(vUv - 0.5);
+    float edge = smoothstep(0.455, 0.49, max(q.x, q.y));
+    vec3 c = mix(uRed, uMag, 0.5 + 0.5 * sin(vSeed * 20.0 + uTime * 0.6));
+    float d = length(vW - cameraPosition);
+    // Brightest in the middle distance; dim right under the player, where the bullets are
+    float depth = smoothstep(2000.0, 300.0, d) * (0.3 + 0.7 * smoothstep(60.0, 320.0, d));
+    vec3 col = vec3(0.02, 0.0, 0.012);
+    col += c * edge * 0.5 * uBright;
+    // Some cells flicker on
+    float flick = step(0.9, vSeed) * (0.5 + 0.5 * sin(uTime * 8.0 * (1.0 - uCalm) + vSeed * 40.0));
+    col += c * 0.14 * flick;
+    gl_FragColor = vec4(col * depth, 1.0);
+}`, U), RINGS * SIDES);
+            const panelDefs = [];
+            for (let r = 0; r < RINGS; r++) {
+                for (let k = 0; k < SIDES; k++) {
+                    const h = rnd();
+                    panelDefs.push({
+                        ring: r, k,
+                        missing: h < 0.12,
+                        loose: h > 0.86,          // breaks away and drifts outward as it nears
+                        spin: (rnd() - 0.5) * 3, drift: 0.5 + rnd(),
+                    });
+                }
+            }
+            B3D.always(panels);
+            scene.add(panels);
+
+            // Singularity: black core, swirling accretion disc, lensing halo
+            const sing = new THREE.Group();
+            const hole = new THREE.Mesh(new THREE.SphereGeometry(70, 32, 16), new THREE.MeshBasicMaterial({ color: 0x000000, fog: false }));
+            const disc = new THREE.Mesh(new THREE.RingGeometry(80, 300, 96, 1), B3D.mat(`
+varying vec3 vP;
+void main() { vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`, `
+uniform float uTime; uniform vec3 uRed; uniform vec3 uMag; uniform float uBoss;
+varying vec3 vP;
+void main() {
+    float r = length(vP.xy);
+    float a = atan(vP.y, vP.x);
+    float swirl = fbm3(vec2(a * 3.0 + r * 0.02 - uTime * (0.9 + uBoss), r * 0.03));
+    float inner = smoothstep(300.0, 90.0, r) * smoothstep(80.0, 95.0, r);
+    vec3 col = mix(uMag, mix(vec3(1.0, 0.7, 0.6), uRed, smoothstep(90.0, 200.0, r)), smoothstep(80.0, 260.0, r));
+    gl_FragColor = vec4(col * inner * (0.35 + 0.65 * swirl) * 0.8, 1.0);
+}`, Object.assign({ uBoss: { value: 0 } }, U), { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+            disc.rotation.x = -1.15;
+            const lens = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uRed; uniform float uTime;
+varying vec2 vUv;
+void main() {
+    float r = length(vUv - 0.5) * 2.0;
+    float ringGlow = exp(-abs(r - 0.16) * 30.0) * 0.6 + exp(-r * 4.0) * 0.25;
+    gl_FragColor = vec4(uRed * ringGlow * (0.85 + 0.15 * sin(uTime * 3.0)), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            lens.position.z = -40;
+            sing.add(lens, disc, hole);
+            scene.add(sing);
+
+            // Specks spiralling down toward the singularity
+            const SPECKS = 500;
+            const sGeo = new THREE.BufferGeometry();
+            const sPos = new Float32Array(SPECKS * 3), sSeed = new Float32Array(SPECKS);
+            for (let i = 0; i < SPECKS; i++) { sPos.set([rnd(), rnd(), rnd()], i * 3); sSeed[i] = rnd(); }
+            sGeo.setAttribute('position', new THREE.Float32BufferAttribute(sPos, 3));
+            sGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(sSeed, 1));
+            const specks = new THREE.Points(sGeo, B3D.mat(`
+uniform float uTime; uniform vec3 uEnd;
+attribute float aSeed;
+varying float vA;
+void main() {
+    float life = fract(uTime * (0.08 + aSeed * 0.08) + position.x);
+    float ang = position.y * 6.2831 + life * (4.0 + aSeed * 6.0);
+    float rad = mix(110.0, 8.0, life * life);
+    vec3 p = mix(vec3(0.0, 0.0, -40.0), uEnd, life) + vec3(cos(ang), sin(ang), 0.0) * rad;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vA = smoothstep(0.0, 0.1, life) * (1.0 - life);
+    gl_PointSize = clamp(400.0 / -mv.z, 1.0, 4.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+uniform vec3 uMag;
+varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(mix(uMag, vec3(1.0), 0.3) * vA * smoothstep(1.0, 0.2, r) * 0.7, 1.0);
+}`, Object.assign({ uEnd: { value: new THREE.Vector3() } }, U), { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(specks);
+            scene.add(specks);
+
+            // The tunnel's centre line: straight here, bending more with distance
+            const centre = (z, t, out) => {
+                const k = Math.pow(Math.max(0, -z) / 1000, 2);
+                return out.set(Math.sin(t * 0.23) * 130 * k, Math.cos(t * 0.17) * 60 * k, z);
+            };
+            const c = new THREE.Vector3();
+            const SPEED = 120;
+            const scene3d = {
+                scene, camera, glitch: 1,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uBright.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    U.uCalm.value = s.calm;
+                    disc.material.uniforms.uBoss.value = s.boss;
+                    const adv = s.t * SPEED;
+                    const twist = s.t * 0.08;
+                    for (let i = 0; i < panelDefs.length; i++) {
+                        const p = panelDefs[i];
+                        let z = -((p.ring * STEP - adv % (RINGS * STEP) + RINGS * STEP) % (RINGS * STEP)) + 30;
+                        if (p.missing) { m4.makeScale(0, 0, 0); panels.setMatrixAt(i, m4); continue; }
+                        centre(z, s.t, c);
+                        const a = (p.k / SIDES) * Math.PI * 2 + twist + p.ring * 0.03;
+                        let rad = RAD;
+                        const near = Math.max(0, Math.min(1, (z + 600) / 600));   // 0 far .. 1 at the camera
+                        eul.set(0, 0, a + Math.PI / 2);
+                        if (p.loose && near > 0) {
+                            rad += near * near * 160 * p.drift;
+                            eul.x += near * p.spin; eul.y += near * p.spin * 0.7;
+                        }
+                        quat.setFromEuler(eul);
+                        const w = 2 * RAD * Math.sin(Math.PI / SIDES) * 0.92;
+                        m4.compose(pos.set(c.x + Math.cos(a) * rad, c.y + Math.sin(a) * rad, z), quat, scl.set(w, 3, STEP * 0.9));
+                        panels.setMatrixAt(i, m4);
+                    }
+                    panels.instanceMatrix.needsUpdate = true;
+                    centre(-RINGS * STEP + 60, s.t, c);
+                    sing.position.copy(c);
+                    sing.lookAt(camera.position);
+                    specks.material.uniforms.uEnd.value.copy(c);
+                    // Glitches grow during the boss
+                    scene3d.glitch = 0.7 + 0.3 * s.boss;
+                },
+            };
+            return scene3d;
         },
     },
 };
