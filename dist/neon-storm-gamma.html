@@ -7067,9 +7067,9 @@ class BulletPool {
         }
         p.rotation = pc.rotation = rot;
         if (b._shape === 'missile') {
-            p.scaleX = p.scaleY = r * 0.5;
-            pc.scaleX = pc.scaleY = r * 0.12;
-            pc.x = b.x - b.vx * 0.012; pc.y = b.y - b.vy * 0.012;   // hot exhaust at the tail
+            p.scaleX = p.scaleY = r * 0.3;
+            pc.scaleX = pc.scaleY = r * 0.08;
+            pc.x = b.x - b.vx * 0.007; pc.y = b.y - b.vy * 0.007;   // hot exhaust at the tail
         } else if (b._shape === 'plasma') {
             const k = 1 + Math.sin(b.age * 30) * 0.12;
             p.rotation = pc.rotation = 0;
@@ -7131,7 +7131,7 @@ class BulletPool {
                 this._syncParticles(b);
                 // Homing missiles leave a short exhaust trail
                 if (b._shape === 'missile' && (b.age * 60 | 0) % 2 === 0) {
-                    Particles.flash(b.x - b.vx * 0.015, b.y - b.vy * 0.015, 3, b.color, 0.18);
+                    Particles.flash(b.x - b.vx * 0.01, b.y - b.vy * 0.01, 2, b.color, 0.18);
                 }
             }
         }
@@ -7141,7 +7141,7 @@ class BulletPool {
         // In Pixi mode the particles are synced in update(); only keep addGlow for bloom source
         if (Renderer.usePixi) {
             for (const b of this.pool) {
-                Renderer.addGlow(b.x, b.y, b._hex, b.radius * 7, this.enemy ? 0.4 : 0.5);
+                Renderer.addGlow(b.x, b.y, b._hex, b.radius * (b._shape === 'missile' ? 4.5 : 7), this.enemy ? 0.4 : 0.5);
             }
             return;
         }
