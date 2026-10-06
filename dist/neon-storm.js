@@ -3005,6 +3005,227 @@ void main() {
             };
         },
     },
+
+    // Level 3 — Debris Field: flying through an asteroid belt. A nebula with
+    // dust lanes and a galactic band behind, a ringed gas giant low on the
+    // right, dark tumbling rocks and glinting debris streaming past. The rocks
+    // stay dim and fogged so they never read as the level's neon asteroids.
+    space: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 6000);
+            camera.rotation.x = -0.22;
+
+            const U = {
+                uTime: { value: 0 }, uBoss: { value: 0 }, uStar: { value: 1 },
+                uSun: { value: new THREE.Vector3(-0.55, 0.5, 0.65).normalize() },
+            };
+            const rnd = B3D.rng(4242);
+            const m4 = new THREE.Matrix4(), pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3(), eul = new THREE.Euler();
+
+            // Nebula sky: coloured gas, dark dust lanes, a galactic band, stars
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(5000, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uBoss; uniform float uStar;
+varying vec3 vW;
+float starLayer(vec3 d, float scale, float density) {
+    vec2 sp = vec2(atan(d.x, -d.z), asin(clamp(d.y, -1.0, 1.0))) * scale;
+    vec2 c = floor(sp);
+    float h = h21(c);
+    vec2 o = vec2(h21(c + 3.1), h21(c + 7.7)) * 0.6 + 0.2;
+    float s = smoothstep(0.22, 0.0, length(fract(sp) - o)) * step(1.0 - density, h);
+    return s * (0.6 + 0.4 * sin(uTime * (1.0 + h * 5.0) + h * 40.0));
+}
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    vec2 q = vec2(atan(d.x, -d.z), d.y) * vec2(1.6, 2.4);
+    float n1 = fbm3(q * 1.6 + vec2(uTime * 0.004, 0.0));
+    float n2 = fbm3(q * 3.1 + 7.0);
+    float dust = smoothstep(0.45, 0.7, fbm3(q * 2.3 + 21.0));
+    vec3 col = vec3(0.006, 0.008, 0.025);
+    vec3 teal = vec3(0.03, 0.17, 0.24), mag = vec3(0.2, 0.035, 0.22);
+    mag = mix(mag, vec3(0.28, 0.02, 0.04), uBoss * 0.6);
+    col += teal * smoothstep(0.35, 0.85, n1) * 1.2;
+    col += mag * smoothstep(0.4, 0.9, n2) * smoothstep(0.3, 0.7, n1);
+    // Galactic band across the sky
+    float band = exp(-pow((d.y - 0.18 * sin(atan(d.x, -d.z))) * 4.5, 2.0));
+    col += vec3(0.09, 0.08, 0.13) * band * (0.4 + 0.6 * n2);
+    col *= 1.0 - dust * 0.75;
+    float st = starLayer(d, 90.0, 0.3) * 0.5 + starLayer(d, 220.0, 0.4) * 0.35 + band * starLayer(d, 400.0, 0.5) * 0.4;
+    vec3 sc = mix(vec3(0.7, 0.8, 1.0), vec3(1.0, 0.85, 0.7), step(0.5, h21(floor(d.xy * 300.0))));
+    col += sc * st * (1.0 - dust * 0.6) * uStar;
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // Gas giant: banded, lit from the upper left, with an atmospheric rim
+            const planetU = Object.assign({}, U);
+            const planet = new THREE.Mesh(new THREE.SphereGeometry(1, 96, 48), B3D.mat(`
+varying vec3 vP; varying vec3 vN; varying vec3 vW;
+void main() {
+    vP = position;
+    vN = normalize(mat3(modelMatrix) * normal);
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+}`, `
+uniform float uTime; uniform vec3 uSun;
+varying vec3 vP; varying vec3 vN; varying vec3 vW;
+void main() {
+    float lat = vP.y;
+    float lon = atan(vP.x, vP.z);
+    float turb = fbm3(vec2(lon * 3.0 + uTime * 0.01, lat * 9.0)) - 0.5;
+    float b = lat * 7.0 + turb * 1.6 + fbm3(vec2(lon * 1.0, lat * 30.0)) * 0.5;
+    vec3 c1 = vec3(0.16, 0.2, 0.38), c2 = vec3(0.32, 0.5, 0.62), c3 = vec3(0.45, 0.32, 0.55);
+    vec3 alb = mix(c1, c2, 0.5 + 0.5 * sin(b * 3.1));
+    alb = mix(alb, c3, smoothstep(0.6, 0.95, sin(b * 1.7 + 1.0)) * 0.6);
+    // A storm vortex in the southern bands
+    float storm = smoothstep(0.16, 0.0, length(vec2(lon - 0.6, (lat + 0.35) * 2.2)));
+    alb = mix(alb, vec3(0.6, 0.38, 0.5), storm * 0.8);
+    float ndl = dot(vN, uSun);
+    float lit = smoothstep(-0.15, 0.6, ndl);
+    vec3 V = normalize(cameraPosition - vW);
+    float rim = pow(1.0 - max(dot(vN, V), 0.0), 3.0);
+    vec3 col = alb * lit * 0.45 + vec3(0.25, 0.55, 0.9) * rim * (0.15 + 0.6 * smoothstep(-0.3, 0.4, ndl));
+    gl_FragColor = vec4(col, 1.0);
+}`, planetU));
+            const R = 820;
+            planet.scale.setScalar(R);
+            planet.position.set(1250, -1050, -3300);
+            planet.rotation.z = 0.35;
+            planet.renderOrder = -8;
+            scene.add(planet);
+
+            // Rings: banded, translucent, darkened where the planet's shadow falls
+            const ringGeo = new THREE.RingGeometry(1.35, 2.35, 160, 1);
+            const ring = new THREE.Mesh(ringGeo, B3D.mat(`
+varying vec3 vP; varying vec3 vW;
+void main() {
+    vP = position;
+    vec4 w = modelMatrix * vec4(position, 1.0);
+    vW = w.xyz;
+    gl_Position = projectionMatrix * viewMatrix * w;
+}`, `
+uniform vec3 uSun; uniform vec3 uCentre; uniform float uR;
+varying vec3 vP; varying vec3 vW;
+void main() {
+    float r = length(vP.xy);
+    float bands = 0.5 + 0.5 * sin(r * 60.0) * sin(r * 23.0 + 1.0);
+    float gap = smoothstep(0.02, 0.05, abs(r - 1.85)) * smoothstep(0.01, 0.03, abs(r - 2.1));
+    float a = (0.25 + 0.5 * bands) * gap * smoothstep(1.35, 1.45, r) * smoothstep(2.35, 2.2, r);
+    // Shadow: is the planet between this point and the sun?
+    vec3 toC = uCentre - vW;
+    float along = dot(toC, uSun);
+    float perp = length(toC - uSun * along);
+    float shadow = step(0.0, along) * smoothstep(uR * 0.95, uR * 1.02, perp);
+    shadow = 1.0 - step(0.0, along) * (1.0 - smoothstep(uR * 0.95, uR * 1.02, perp));
+    vec3 col = vec3(0.4, 0.42, 0.55) * (0.3 + 0.7 * shadow) * 0.6;
+    gl_FragColor = vec4(col, a * 0.8);
+}`, Object.assign({ uCentre: { value: planet.position }, uR: { value: R } }, U), { transparent: true, depthWrite: false, side: THREE.DoubleSide }));
+            ring.scale.setScalar(R);
+            ring.position.copy(planet.position);
+            ring.rotation.set(-1.25, 0.25, 0.35);
+            ring.renderOrder = -7;
+            scene.add(ring);
+
+            // Asteroids: one jagged rock shape, scaled and spun per instance, flat-shaded
+            const rockGeo = new THREE.IcosahedronGeometry(1, 2);
+            const rp = rockGeo.attributes.position, v = new THREE.Vector3();
+            for (let i = 0; i < rp.count; i++) {
+                v.fromBufferAttribute(rp, i);
+                const n = B3D.fbm2(v.x * 1.7 + v.z * 0.9 + 3, v.y * 1.7 - v.z * 0.6 + 7, 3);
+                v.multiplyScalar(0.7 + n * 0.75);
+                rp.setXYZ(i, v.x, v.y, v.z);
+            }
+            rockGeo.computeVertexNormals();
+            const ROCKS = 120, RZ = 2400;
+            const rocks = new THREE.InstancedMesh(rockGeo, B3D.mat(B3D.VS_WORLD, `
+uniform vec3 uSun;
+varying vec3 vW; varying vec3 vN; varying float vSeed;
+void main() {
+    vec3 N = normalize(vN);
+    vec3 V = normalize(cameraPosition - vW);
+    vec3 alb = mix(vec3(0.07, 0.065, 0.075), vec3(0.1, 0.085, 0.07), vSeed);
+    float key = max(dot(N, uSun), 0.0);
+    float rim = pow(1.0 - max(dot(N, V), 0.0), 2.5);
+    vec3 col = alb * (0.25 + 1.6 * key) * vec3(1.0, 0.92, 0.85);
+    col += vec3(0.1, 0.32, 0.45) * rim * 0.35;               // nebula light from behind
+    float d = length(vW - cameraPosition);
+    col = mix(col, vec3(0.01, 0.015, 0.035), smoothstep(250.0, 2300.0, d));
+    gl_FragColor = vec4(col, 1.0);
+}`, U), ROCKS);
+            const rockDefs = [];
+            for (let i = 0; i < ROCKS; i++) {
+                // Keep the middle of the view clear: rocks below and to the sides of the flight path
+                const big = rnd() < 0.07;
+                const ang = rnd() * Math.PI * 2;
+                const rad = (big ? 620 : 230) + Math.pow(rnd(), 0.8) * 650;
+                let x = Math.cos(ang) * rad * 1.25, y = Math.sin(ang) * rad * 0.8;
+                if (y > -60 && Math.abs(x) < 260) y -= 220;      // keep the flight path clear
+                rockDefs.push({
+                    x, y: y - 120, z0: -rnd() * RZ,
+                    s: big ? 45 + rnd() * 50 : 3 + Math.pow(rnd(), 2.2) * 18,
+                    sx: 0.7 + rnd() * 0.6, sy: 0.6 + rnd() * 0.5,
+                    rx: rnd() * 6, ry: rnd() * 6, wx: (rnd() - 0.5) * 0.8, wy: (rnd() - 0.5) * 0.8,
+                });
+            }
+            B3D.always(rocks);
+            scene.add(rocks);
+
+            // Glinting debris and dust streaming past
+            const DUST = 700;
+            const dGeo = new THREE.BufferGeometry();
+            const dPos = new Float32Array(DUST * 3), dSeed = new Float32Array(DUST);
+            for (let i = 0; i < DUST; i++) {
+                dPos.set([(rnd() - 0.5) * 900, (rnd() - 0.65) * 700, -rnd() * 2000], i * 3);
+                dSeed[i] = rnd();
+            }
+            dGeo.setAttribute('position', new THREE.Float32BufferAttribute(dPos, 3));
+            dGeo.setAttribute('aSeed', new THREE.Float32BufferAttribute(dSeed, 1));
+            const dust = new THREE.Points(dGeo, B3D.mat(`
+uniform float uTime;
+attribute float aSeed;
+varying float vA; varying float vGlint;
+void main() {
+    vec3 p = position;
+    p.z = mod(position.z + uTime * 140.0, 2000.0) - 1980.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    float d = -mv.z;
+    vGlint = step(0.93, aSeed) * pow(max(sin(uTime * (2.0 + aSeed * 6.0) + aSeed * 50.0), 0.0), 12.0);
+    vA = (1.0 - smoothstep(900.0, 1900.0, d)) * smoothstep(5.0, 60.0, d);
+    gl_PointSize = clamp(300.0 / d, 1.0, 3.5) * (1.0 + vGlint * 2.0);
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying float vA; varying float vGlint;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    vec3 c = mix(vec3(0.35, 0.4, 0.5) * 0.5, vec3(1.0, 0.95, 0.85), vGlint);
+    gl_FragColor = vec4(c * vA * smoothstep(1.0, 0.3, r), 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(dust);
+            scene.add(dust);
+
+            const SPEED = 140;
+            return {
+                scene, camera,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uBoss.value = s.boss;
+                    U.uStar.value = 1 + s.pulse * 0.8 + s.surge * 0.4;
+                    const adv = s.t * SPEED;
+                    for (let i = 0; i < ROCKS; i++) {
+                        const r = rockDefs[i];
+                        const z = ((r.z0 + adv) % RZ + RZ) % RZ - RZ + 60;
+                        eul.set(r.rx + s.t * r.wx, r.ry + s.t * r.wy, 0);
+                        quat.setFromEuler(eul);
+                        m4.compose(pos.set(r.x, r.y, z), quat, scl.set(r.s * r.sx, r.s * r.sy, r.s));
+                        rocks.setMatrixAt(i, m4);
+                    }
+                    rocks.instanceMatrix.needsUpdate = true;
+                },
+            };
+        },
+    },
 };
 
 
