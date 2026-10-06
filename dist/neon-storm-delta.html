@@ -13545,16 +13545,25 @@ const Background = {
 //    right: score, chain, run stats, mission (level, time, escort), controls
 // ============================================================
 const HUD = {
-    _bgCache: null,
+    _bg: null,          // canvas behind the overlay holding the static panel backgrounds
+    _drawn: false,      // HUD.draw ran this frame (Game.draw shows _bg only then)
 
-    // Static panel backgrounds (gradient, faint scanlines, edge glow), baked once
+    // Static panel backgrounds (gradient, faint scanlines, edge glow). They live on
+    // their own canvas under the overlay and are drawn only when the resolution
+    // changes: blitting them onto the overlay every frame cost ~4.5 ms at HIGH.
     _bakeBackground() {
         const k = Renderer.uiScale || 1;
-        const c = document.createElement('canvas');
+        let c = this._bg;
+        if (!c) {
+            c = this._bg = document.createElement('canvas');
+            c.id = 'hud-bg';
+            c.style.cssText = 'position: absolute; left: 0; top: 0; z-index: 0; pointer-events: none; display: none;';
+            canvas.parentNode.insertBefore(c, canvas.parentNode.firstChild);
+        }
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
         const g = c.getContext('2d');
-        g.scale(k, k);
+        g.setTransform(k, 0, 0, k, 0, 0);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -13576,15 +13585,24 @@ const HUD = {
             g.fillStyle = '#ff2bd6';
             g.fillRect(x - 1, 0, 2, SCREEN_H);
         }
-        return c;
+    },
+
+    // Called by Game.draw after every frame: the background shows only under the HUD
+    showBackground(on) {
+        const c = this._bg;
+        if (!c) return;
+        if (on) {
+            // Track the overlay's on-screen size (window resizes)
+            if (c.style.width !== canvas.style.width) c.style.width = canvas.style.width;
+            if (c.style.height !== canvas.style.height) c.style.height = canvas.style.height;
+        }
+        const display = on ? 'block' : 'none';
+        if (c.style.display !== display) c.style.display = display;
     },
 
     draw(ctx) {
-        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
-        // Only the side panels: the middle of the overlay stays clear for the play area
-        const k = this._bgCache._scale;
-        ctx.drawImage(this._bgCache, 0, 0, (HUD_LEFT_W + 2) * k, SCREEN_H * k, 0, 0, HUD_LEFT_W + 2, SCREEN_H);
-        ctx.drawImage(this._bgCache, (HUD_RIGHT_X - 2) * k, 0, (HUD_RIGHT_W + 2) * k, SCREEN_H * k, HUD_RIGHT_X - 2, 0, HUD_RIGHT_W + 2, SCREEN_H);
+        if (!this._bg || this._bg._scale !== Renderer.uiScale) this._bakeBackground();
+        this._drawn = true;
         this._drawLeft(ctx);
         this._drawRight(ctx);
         this._drawDanger(ctx);
@@ -14876,6 +14894,7 @@ const Game = {
 
     draw() {
         ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        HUD._drawn = false;
 
         switch (this.state) {
             case 'title':
@@ -15003,6 +15022,7 @@ const Game = {
         // Transition overlay — always drawn on top of everything
         Transition.draw(ctx);
         FpsMeter.draw(ctx);
+        HUD.showBackground(HUD._drawn);
     }
 };
 

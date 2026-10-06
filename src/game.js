@@ -680,6 +680,7 @@ const Game = {
 
     draw() {
         ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        HUD._drawn = false;
 
         switch (this.state) {
             case 'title':
@@ -807,5 +808,6 @@ const Game = {
         // Transition overlay — always drawn on top of everything
         Transition.draw(ctx);
         FpsMeter.draw(ctx);
+        HUD.showBackground(HUD._drawn);
     }
 };
