@@ -14,7 +14,7 @@ Neon Storm γ is a vertical scrolling bullet hell shooter. It features a 6-level
 
 ## File Structure
 
-The project is split into 25 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
+The project is split into 26 source modules in `src/`, concatenated by `build.js` into a single distributable HTML file (with PixiJS and pixi-filters inlined from `vendor/`). For the web server approach, `index.html` loads them directly via `<script>` tags.
 
 ### Module Map (in dependency order)
 
@@ -22,7 +22,8 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
 |--------|-------|---------|
 | `constants.js` | ~45 | Canvas setup, screen constants, dual-canvas sizing |
 | `backdrops.js` | ~405 | GPU fragment shaders for the six level backgrounds |
-| `renderer.js` | ~1085 | PixiJS pipeline, offscreen Canvas 2D bridge, FX texture sheet, backdrop, bloom/screen effects, resolution & graphics quality |
+| `renderer.js` | ~1130 | PixiJS pipeline, FX texture sheet, backdrop, GPU glow/bloom, screen effects, resolution & graphics quality; offscreen Canvas 2D for the no-WebGL fallback |
+| `gpu-ctx.js` | ~480 | `GpuCtx`: the Canvas 2D subset the play-area draw code uses, emitted as pooled Pixi sprites/graphics |
 | `config.js` | ~50 | Difficulty presets (casual/normal/hardcore) |
 | `input.js` | ~250 | Keyboard + gamepad polling, rebindable actions (incl. `surge`) |
 | `audio.js` | ~370 | Web Audio API procedural SFX; mix buses (SFX, music with pause filter and ducking, master compressor) |
@@ -53,10 +54,10 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
   Gameplay .draw(ctx) methods
            │
            ▼
-  Offscreen Canvas 2D (720×960 × render scale)   ◄── Neon art stamped from the sprite atlas
+  GpuCtx → Pixi sprites + graphics               ◄── Neon art stamped from the sprite atlas
            │
            ▼
-  PixiJS texture upload + native particles       ◄── Bullets/particles from the FX sheet
+  Native particles + glow render texture         ◄── Bullets/particles from the FX sheet, bloom halos
            │
            ▼
   Filters: colour grade, bloom, shockwave, god-rays, chroma, CRT, glitch
@@ -67,14 +68,14 @@ The project is split into 25 source modules in `src/`, concatenated by `build.js
   Overlay Canvas 2D (1920×1080 × render scale)   ◄── Menus, HUD, transitions (UI kit)
 ```
 
-- `Renderer.getPlayCtx()` / `beginFrame()` / `endFrame()` — frame lifecycle for the offscreen canvas.
+- `Renderer.getEntityCtx()` / `beginFrame()` / `endFrame()` — frame lifecycle. In Pixi mode the context is a `GpuCtx` (`gpu-ctx.js`); without Pixi it is the offscreen canvas (`getPlayCtx()`), which in Pixi mode only holds the painted background when no shader backdrop is active.
 - `Renderer.setBackdrop(theme)` — picks the level's shader; `_updateBackdrop` feeds it pulse/boss/Surge/bullet-density uniforms.
 - `Renderer.fx` — the shared particle texture sheet (glow, orb, core, shadow, streak, needle, missile, spark, pixel).
 - `Renderer.applyResolution()` — both canvases render at CSS scale × `devicePixelRatio`, capped by GRAPHICS QUALITY (high 2×, medium 1.5×, low 1×; auto steps down on slow frames). Draw code keeps logical coordinates.
 - `Renderer.calm()` — true with Flash Reduction on; every flash, glitch and pulse checks it.
 - Screen effects use pixi-filters v6 (`PIXI.filters`); centres are play-area pixels.
 
-When PixiJS isn't available, `endFrame()` is a no-op, the painted Canvas 2D backgrounds are used, and `Game.draw()` blits the offscreen canvas onto the overlay.
+When PixiJS isn't available, the draw code gets the offscreen canvas, the painted Canvas 2D backgrounds are used, and `Game.draw()` blits it onto the overlay.
 
 The art conventions (neon style rules, `_bake`/`_neon` split, sprite keys, adding art for new entities) are documented in `CLAUDE.md` → Art Style and in the header of `src/neon.js`.
 

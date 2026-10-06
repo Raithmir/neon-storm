@@ -22,6 +22,7 @@ const SOURCE_FILES = [
     'constants.js',
     'backdrops.js',
     'renderer.js',
+    'gpu-ctx.js',
     'config.js',
     'input.js',
     'audio.js',

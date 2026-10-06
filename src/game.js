@@ -741,15 +741,16 @@ const Game = {
                 const pctx = Renderer.getPlayCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(ScreenShake.offsetX, ScreenShake.offsetY);
+                const ectx = Renderer.getEntityCtx();
                 Background.draw(pctx);
-                Asteroids.draw(pctx);
-                Escort.draw(pctx);
-                PowerUps.draw(pctx);
-                Enemies.draw(pctx);
-                Player.draw(pctx);
-                if (Boss.active) Boss.draw(pctx);
-                Particles.draw(pctx);
-                Scoring.drawPopups(pctx);
+                Asteroids.draw(ectx);
+                Escort.draw(ectx);
+                PowerUps.draw(ectx);
+                Enemies.draw(ectx);
+                Player.draw(ectx);
+                if (Boss.active) Boss.draw(ectx);
+                Particles.draw(ectx);
+                Scoring.drawPopups(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
@@ -765,10 +766,11 @@ const Game = {
                 const pctx = Renderer.getPlayCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(0, 0);
+                const ectx = Renderer.getEntityCtx();
                 Background.draw(pctx);
-                Asteroids.draw(pctx);
-                Enemies.draw(pctx);
-                Particles.draw(pctx);
+                Asteroids.draw(ectx);
+                Enemies.draw(ectx);
+                Particles.draw(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {
@@ -781,11 +783,11 @@ const Game = {
             }
 
             case 'victory': {
-                const pctx = Renderer.getPlayCtx();
+                const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
                 Renderer.beginFrame();
                 Renderer.setShake(0, 0);
                 Background.draw(pctx);
-                Particles.draw(pctx);
+                Particles.draw(ectx);
                 if (Renderer.usePixi) {
                     Renderer.endFrame();
                 } else {

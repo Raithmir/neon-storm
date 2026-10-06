@@ -51,7 +51,8 @@ neon-storm/
 ├── src/                     — Source modules
 │   ├── constants.js         — Canvas setup, screen layout, dual-canvas sizing
 │   ├── backdrops.js         — GPU shader backgrounds for each level
-│   ├── renderer.js          — PixiJS pipeline + offscreen Canvas 2D bridge
+│   ├── renderer.js          — PixiJS pipeline (Canvas 2D fallback)
+│   ├── gpu-ctx.js           — Canvas 2D-shaped context that draws with Pixi objects
 │   ├── config.js            — Difficulty presets, GameConfig
 │   ├── input.js             — Keyboard + gamepad input system
 │   ├── audio.js             — Procedural SFX + mix (Web Audio API)
@@ -117,13 +118,13 @@ See `tools/sim/README.md` for the balance tools (weapon DPS, boss time-to-kill, 
 
 The game uses a **dual-canvas architecture** introduced in beta:
 
-1. **Offscreen Canvas 2D** (720×960) — All gameplay `.draw(ctx)` methods draw here using standard Canvas 2D API. No draw code was changed from the alpha.
-2. **PixiJS Application** — Takes the offscreen canvas as a texture, renders it as a GPU sprite. This enables GPU filters (bloom, blur, distortion) to be applied to the entire play area.
+1. **Gameplay drawing** — All gameplay `.draw(ctx)` methods use the standard Canvas 2D API. Since δ the context they get in Pixi mode is a `GpuCtx` (`gpu-ctx.js`), which turns those calls into Pixi sprites and graphics, so nothing is re-uploaded each frame. Without WebGL they draw to an offscreen Canvas 2D (720×960) instead.
+2. **PixiJS Application** — Renders the play area on the GPU, with filters (bloom, blur, distortion) over all of it.
 3. **Overlay Canvas 2D** (1920×1080) — Menus, HUD, transitions, and all non-gameplay UI draw here directly.
 
 Since γ, a full-screen shader backdrop sits under the play area, bullets and particles are native Pixi particles, and both canvases render at the display's pixel density (see `CLAUDE.md` for the details).
 
-The `Renderer` module (`renderer.js`) manages this pipeline. During gameplay, `Game.draw()` calls `Renderer.getPlayCtx()` to get the offscreen Canvas 2D context, passes it to all gameplay draw methods, then calls `Renderer.endFrame()` to upload and GPU-render. When PixiJS isn't available, the offscreen canvas is blitted directly onto the overlay canvas instead.
+The `Renderer` module (`renderer.js`) manages this pipeline. During gameplay, `Game.draw()` calls `Renderer.getEntityCtx()`, passes it to all gameplay draw methods, then calls `Renderer.endFrame()` to GPU-render. When PixiJS isn't available, that context is the offscreen canvas, which is blitted onto the overlay canvas instead.
 
 ### Module System
 
@@ -135,7 +136,7 @@ The game uses a **concatenation-based build** rather than ES modules. All source
 
 | Object | File | Purpose |
 |--------|------|---------|
-| `Renderer` | renderer.js | PixiJS pipeline + offscreen canvas bridge |
+| `Renderer` | renderer.js | PixiJS pipeline (+ Canvas 2D fallback) |
 | `GameConfig` | config.js | Current difficulty settings (mutable) |
 | `Input` | input.js | Keyboard/gamepad state |
 | `Audio` | audio.js | Sound effects |

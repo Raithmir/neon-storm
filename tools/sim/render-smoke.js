@@ -93,12 +93,12 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             Player.invincible = true; Player.invincibleTimer = 1e9;
             Player.primaryWeapon = ['spread', 'homing', 'laser'][run.lvl % 3];
             Player.primaryLevel = 4; Player.droneLevel = 3;
-            const pctx = Renderer.getPlayCtx();
+            const pctx = Renderer.getPlayCtx(), ectx = Renderer.getEntityCtx();
             const layers = () => {
                 Renderer.beginFrame();
-                Background.draw(pctx); Asteroids.draw(pctx); Escort.draw(pctx); PowerUps.draw(pctx);
-                Enemies.draw(pctx); Player.draw(pctx); if (Boss.active) Boss.draw(pctx);
-                Particles.draw(pctx); Scoring.drawPopups(pctx);
+                Background.draw(pctx); Asteroids.draw(ectx); Escort.draw(ectx); PowerUps.draw(ectx);
+                Enemies.draw(ectx); Player.draw(ectx); if (Boss.active) Boss.draw(ectx);
+                Particles.draw(ectx); Scoring.drawPopups(ectx);
             };
             const stats = { maxEnemies: 0, boss: null, bombs: 0 };
             for (let f = 0; f < 60 * 70; f++) {

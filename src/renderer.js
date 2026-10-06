@@ -2,17 +2,18 @@
 //  RENDERER — Canvas 2D glow + PixiJS GPU pipeline
 //
 //  Pixi path architecture:
-//    1. Gameplay draws to offCanvas (720×960) via Canvas 2D
-//    2. Glow halos draw to glowCanvas via addGlow()
-//    3. offCanvas  → gameSprite  (game content)
+//    1. Entities draw through a GpuCtx (gpu-ctx.js) into entityLayer as
+//       pooled Pixi sprites/graphics; the rest of the gameplay drawing still
+//       goes to offCanvas (720×960) via Canvas 2D → gameSprite
+//    2. Glow halos (addGlow) are particles rendered into _glowRT each frame
+//    3. _glowRT → _glowSprite + BlurFilter = real GPU bloom
 //    4. _starSlowLayer / _starFastLayer: TilingSprite GPU star fields
-//    5. glowCanvas → _glowSprite + BlurFilter = real GPU bloom
-//    6. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
-//    7. _explosionLayer: fireball PIXI.Sprites for big hits
-//    8. _laserBeamMesh: MeshRope for laser beam visual
-//    9. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
-//   10. _flashSprite sits on app.stage (above colour grade + bloom)
-//   11. app.stage carries chroma + CRT + glitch filters (screen-space)
+//    5. bulletLayer / particleLayer: native PIXI.ParticleContainers (additive)
+//    6. _explosionLayer: fireball PIXI.Sprites for big hits
+//    7. _laserBeamMesh: MeshRope for laser beam visual
+//    8. All above live in gameLayer, which carries ColorMatrixFilter + shockwave + godray
+//    9. _flashSprite sits on app.stage (above colour grade + bloom)
+//   10. app.stage carries chroma + CRT + glitch filters (screen-space)
 //
 //  Canvas 2D fallback: glowCanvas composited additively into
 //  compCanvas, then blitted onto overlay — identical to alpha build.
@@ -49,8 +50,7 @@ const Renderer = {
     _starScrollSlow: 0,
     _starScrollFast: 0,
 
-    // Bloom: glowCanvas uploaded with BlurFilter
-    _glowCanvasSource: null,
+    // Bloom: glow halos rendered to _glowRT, shown blurred by _glowSprite
     _glowSprite: null,
     _blurFilter: null,
 
@@ -155,18 +155,23 @@ const Renderer = {
             this.gameTexture = new PIXI.Texture(this._canvasSource);
             this.gameSprite = new PIXI.Sprite(this.gameTexture);
 
-            // --- GPU Bloom: glowCanvas → sprite with BlurFilter + additive blend ---
-            this._glowCanvasSource = new PIXI.CanvasSource({
-                resource: this.glowCanvas,
-                width: PLAY_W,
-                height: PLAY_H,
-            });
-            const glowTex = new PIXI.Texture(this._glowCanvasSource);
-            this._glowSprite = new PIXI.Sprite(glowTex);
+            // --- GPU Bloom: glow halos (_glowRT, see addGlow) → sprite with BlurFilter + additive blend ---
+            this._glowSprite = new PIXI.Sprite();
             this._blurFilter = new PIXI.BlurFilter({ strength: 8, quality: 3 });
             this._glowSprite.filters = [this._blurFilter];
             this._glowSprite.blendMode = 'add';
             this._glowSprite.alpha = 1.3;
+
+            // Glow halos are particles rendered into a texture each frame (no canvas upload)
+            this._glowParticles = new PIXI.ParticleContainer({
+                texture: PIXI.Texture.from(this._glowImg),
+                dynamicProperties: { vertex: true, position: true, rotation: false, color: true },
+                boundsArea: new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H),
+            });
+            this._glowRT = PIXI.RenderTexture.create({ width: PLAY_W, height: PLAY_H, resolution: 1 });
+            this._glowSprite.texture = this._glowRT;
+            this._glowPool = [];
+            this._glowCount = 0;
 
             // --- Shared FX sheet for native Pixi particles (see _createFxTextures) ---
             this.fx = this._createFxTextures();
@@ -207,7 +212,10 @@ const Renderer = {
             this.gameLayer = new PIXI.Container();
             this.gameLayer.filterArea = new PIXI.Rectangle(0, 0, PLAY_W, PLAY_H);
             this._initBackdrop();                           // 0. GPU shader background
-            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (all Canvas 2D drawing)
+            this.gameLayer.addChild(this.gameSprite);       // 1. Game canvas (Canvas 2D drawing not yet on the GPU)
+            this.entityLayer = new PIXI.Container();         // 1b. Entities drawn through GpuCtx
+            this.gameLayer.addChild(this.entityLayer);
+            this.gpu = new GpuCtx(this.entityLayer);
             this._initStarLayers();                         // 2-3. GPU star tiles (only without a backdrop)
             this.gameLayer.addChild(this._glowSprite);      // 4. Blurred glow bloom
             this.gameLayer.addChild(this.bulletShadowLayer); // 5. Enemy bullet shadows
@@ -763,12 +771,22 @@ const Renderer = {
 
     getPlayCtx() { return this.offCtx; },
 
+    // Entity drawing: a GpuCtx (Pixi objects) in Pixi mode, the offscreen canvas otherwise
+    getEntityCtx() { return this.usePixi && this.gpu ? this.gpu : this.offCtx; },
+
     beginFrame() {
-        const k = this.playScale;
-        this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
-        this.offCtx.clearRect(0, 0, this.offCanvas.width, this.offCanvas.height);
-        this.offCtx.setTransform(k, 0, 0, k, 0, 0);
-        this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        // With a shader backdrop nothing draws to the play canvas in Pixi mode
+        // (Background.draw is the only user), so skip clearing and uploading it
+        this._playCanvasUsed = !(this.usePixi && this.backdropActive);
+        if (this._playCanvasUsed) {
+            const k = this.playScale;
+            this.offCtx.setTransform(1, 0, 0, 1, 0, 0);
+            this.offCtx.clearRect(0, 0, this.offCanvas.width, this.offCanvas.height);
+            this.offCtx.setTransform(k, 0, 0, k, 0, 0);
+        }
+        if (this._glowParticles) this._glowCount = 0;
+        else this.glowCtx.clearRect(0, 0, PLAY_W, PLAY_H);
+        if (this.gpu) this.gpu.begin();
     },
 
     updateEffects(dt) {
@@ -876,8 +894,10 @@ const Renderer = {
             this._updateBackdrop(Math.min(0.1, frameMs / 1000));
             if (frameMs > 0) this._autoTune(frameMs);
             this._lastFrameTime = now;
-            this._canvasSource.update();
-            this._glowCanvasSource.update();
+            if (this.gpu) this.gpu.end();
+            this.gameSprite.visible = this._playCanvasUsed;
+            if (this._playCanvasUsed) this._canvasSource.update();
+            this._renderGlow();
             this.app.renderer.render(this.app.stage);
         } else {
             const c = this.compCtx;
@@ -929,11 +949,33 @@ const Renderer = {
 
     addGlow(x, y, color, size, alpha) {
         const hex = typeof color === 'number' ? color : this.colorToHex(color);
+        if (this._glowParticles) {
+            let p = this._glowPool[this._glowCount];
+            if (!p) {
+                p = new PIXI.Particle({ texture: this._glowParticles.texture, anchorX: 0.5, anchorY: 0.5 });
+                this._glowPool.push(p);
+            }
+            this._glowCount++;
+            p.x = x; p.y = y;
+            p.scaleX = p.scaleY = size * 2 / this._glowImg.width;
+            p.tint = hex;
+            p.alpha = alpha || 0.4;
+            return;
+        }
         const img = this._getTintedGlow(hex);
         const g = this.glowCtx;
         g.globalAlpha = alpha || 0.4;
         g.drawImage(img, x - size, y - size, size * 2, size * 2);
         g.globalAlpha = 1;
+    },
+
+    // This frame's glow halos → the texture the blurred bloom sprite shows
+    _renderGlow() {
+        const list = this._glowParticles.particleChildren;
+        list.length = 0;
+        for (let i = 0; i < this._glowCount; i++) list.push(this._glowPool[i]);
+        this._glowParticles.update();
+        this.app.renderer.render({ container: this._glowParticles, target: this._glowRT, clear: true });
     },
 
     colorToHex(cssColor) {

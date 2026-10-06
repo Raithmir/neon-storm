@@ -64,6 +64,7 @@ const Neon = {
         c.scale(this.BAKE_SCALE, this.BAKE_SCALE);
         drawFn(c, a, b, cArg, d);
         c.restore();
+        page.canvas.__gpuDirty = true;   // GpuCtx re-uploads the page on its next use
         this._sprites.set(key, spr);
         return spr;
     },
@@ -82,6 +83,7 @@ const Neon = {
     },
 
     flush() {
+        if (typeof GpuCtx !== 'undefined') for (const p of this._pages) GpuCtx.release(p.canvas);
         this._pages.length = 0;
         this._sprites.clear();
     },
