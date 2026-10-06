@@ -8,7 +8,7 @@
 
 ## Picking Up Where We Left Off
 
-**State (Oct 2026):** γ is feature-complete and live on `main` (https://raithmir.github.io/neon-storm/): neon graphics, shader backdrops, procedural soundtrack, upgraded SFX, save versioning, gamepad prompts. `main` and `gamma` are identical. **Next:** play-test γ and fix what turns up (step 2 below), then start δ with Renderer Phase 7.
+**State (Oct 2026):** γ is done and live on `main` (https://raithmir.github.io/neon-storm/): neon graphics, shader backdrops, procedural soundtrack, upgraded SFX, save versioning, gamepad prompts. **Next:** δ, starting with Renderer Phase 7.
 
 **Setting up on a new machine:**
 ```bash
@@ -22,8 +22,6 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 **How changes flow:** work on a feature branch → PR into `gamma` (later `delta`) → PR from that branch into `main`. CI runs on every PR (build + committed `dist/` must match `src/`, gameplay checks, render smoke test, audio check), so always run `node build.js` and commit `dist/`. Merging to `main` deploys to GitHub Pages. For δ, create a `delta` branch from `main` and bump the name/version everywhere it appears: the build output name (`build.js`, plus `tools/sim/harness.js`, `CLAUDE.md`, `README.md` and `tools/sim/README.md`, which refer to `dist/neon-storm-gamma.html`), `package.json`'s version, the title's γ and label in `menus.js`, and this file's title. `grep -rn gamma` finds them.
 
-**Before calling γ done:** change the title screen's "GAMMA BUILD — WORK IN PROGRESS" label (`Menu.drawTitle` in `menus.js`).
-
 **Decisions to revisit if wanted:**
 - The γ save migration resets high scores and level records (old ones are kept in storage as `highscores_v1` / `levelBests_v1`). Showing them as a "β scores" tab instead is a small change.
 - Music and SFX levels were matched by measurement, not by ear — tune them after play-testing (`MusicTracks` in `music.js`, volumes in `audio.js`; `node tools/sim/audio.js --wav` renders previews).
@@ -34,14 +32,14 @@ Read `CLAUDE.md` first (architecture, rules, where things live); `docs/neon-stor
 
 ## Roadmap
 
-### γ Gamma — finish (in progress)
+### γ Gamma — done
 
 1. ~~**Music and SFX**~~ — done: procedural soundtrack and upgraded SFX (see Audio). Tune by ear after play-testing.
-2. **Play-test fixes** — the gameplay review follow-ups below, plus anything found in γ's visuals and audio. Use Settings → SHOW FPS for performance reports.
+2. ~~**Play-test fixes**~~ — done: γ play-tested and accepted.
 3. ~~**Save-data versioning**~~ — done: `SAVE_VERSION` / `SaveData.migrate()` in `storage.js`; the γ step archives and resets score tables and keeps everything else.
 4. ~~**Gamepad button prompts**~~ — done: menus show [A]/[B]/D-PAD when a controller was used last.
 
-γ is feature-complete once the play-test fixes are in.
+γ shipped as v0.3.0.
 
 ### δ Delta — renderer and content (next)
 
@@ -93,10 +91,10 @@ The PixiJS pipeline is in place (Phase 1 complete). Phases 2–6 below are done.
 
 The gameplay/balance review and its three fix passes are complete (see `neon-storm-gameplay-review.md` §11–13; 31 regression checks in `tools/sim/checks.js`). What's left needs people or a real browser:
 
-- [ ] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
-- [ ] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
-- [ ] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
-- [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS)
+- [x] Human play-testing of the tuned balance — feel, bullet readability over the new shader backgrounds (especially levels 2 and 6), boss/mid-boss timer lengths
+- [x] Confirm Hardcore's difficulty curve (simulated runs now end in the first half of the campaign)
+- [x] Measure the bomb / death-bomb economy with real players (the simulation bot almost never bombs)
+- [ ] Profile rendering performance in a real browser, especially late Endless and HIGH quality at 4K (Settings → SHOW FPS) — now step 0 of Phase 7
 - [x] Save-data versioning: old saves get their high scores and per-level records archived (`highscores_v1`, `levelBests_v1`) and reset, since both changed meaning; everything else is kept (check `saveMigrationKeepsProgress`)
 
 ---
