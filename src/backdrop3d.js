@@ -999,4 +999,163 @@ void main() {
             };
         },
     },
+
+    // Level 4 — The Convoy: a night flight above the clouds. Two moonlit cloud
+    // decks stream past at different speeds; through the gaps a city glows far
+    // below, highways full of moving lights. A moon hangs ahead under a faint
+    // aurora, and the convoy's navigation lights blink in the distance.
+    sky: {
+        build() {
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, PLAY_W / PLAY_H, 1, 7000);
+            camera.position.set(0, 0, 0);
+            camera.rotation.x = -0.27;
+
+            const U = {
+                uTime: { value: 0 }, uScroll: { value: 0 }, uBoss: { value: 0 }, uSurge: { value: 0 },
+                uMoon: { value: new THREE.Vector3(0.12, 0.085, -1).normalize() },
+                uHaze: { value: B3D.col(0x0b1530) },
+            };
+            const rnd = B3D.rng(777);
+
+            // Sky: navy gradient, stars, aurora curtains, the moon with craters and halo
+            const sky = new THREE.Mesh(new THREE.SphereGeometry(6000, 48, 24), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform vec3 uMoon; uniform float uBoss; uniform vec3 uHaze;
+varying vec3 vW;
+void main() {
+    vec3 d = normalize(vW - cameraPosition);
+    float e = d.y;
+    vec3 col = mix(uHaze, vec3(0.006, 0.01, 0.03), smoothstep(-0.05, 0.45, e));
+    col = mix(col, vec3(0.1, 0.02, 0.06), uBoss * 0.4 * smoothstep(0.4, 0.0, e));
+    // Stars
+    vec2 sp = vec2(atan(d.x, -d.z), e) * 180.0;
+    float h = h21(floor(sp));
+    col += vec3(0.8, 0.85, 1.0) * step(0.94, h) * smoothstep(0.3, 0.0, length(fract(sp) - 0.5))
+         * smoothstep(0.05, 0.35, e) * (0.5 + 0.5 * sin(uTime * (1.0 + h * 4.0) + h * 20.0));
+    // Aurora: soft folded curtains low in the sky
+    float az = atan(d.x, -d.z);
+    float curtain = sin(az * 5.0 + fbm3(vec2(az * 2.0, uTime * 0.05)) * 4.0 + uTime * 0.1);
+    float ribbon = smoothstep(0.6, 1.0, curtain) * smoothstep(0.06, 0.16, e) * smoothstep(0.42, 0.2, e);
+    col += mix(vec3(0.05, 0.35, 0.25), vec3(0.15, 0.1, 0.4), smoothstep(0.1, 0.35, e)) * ribbon * 0.26
+         * (0.6 + 0.4 * fbm3(vec2(az * 20.0, e * 10.0 - uTime * 0.2)));
+    // Moon: disc with darker maria, a cool halo
+    float md = acos(clamp(dot(d, uMoon), -1.0, 1.0));
+    float R = 0.055;
+    vec2 mq = vec2(az - atan(uMoon.x, -uMoon.z), e - uMoon.y) / R;
+    float maria = fbm3(mq * 2.2 + 4.0);
+    float disc = smoothstep(R, R * 0.97, md);
+    vec3 moon = vec3(0.78, 0.82, 0.9) * (0.72 - 0.16 * smoothstep(0.4, 0.75, maria));
+    moon = mix(moon, vec3(0.9, 0.55, 0.5), uBoss * 0.4);
+    col = mix(col, moon * 0.8, disc);
+    col += vec3(0.35, 0.45, 0.7) * 0.4 * exp(-max(md - R, 0.0) * 16.0) * (1.0 - disc);
+    gl_FragColor = vec4(col, 1.0);
+}`, U, { side: THREE.BackSide, depthWrite: false }));
+            sky.renderOrder = -10;
+            scene.add(sky);
+
+            // City far below: districts of lights, highways with traffic
+            const city = new THREE.Mesh(new THREE.PlaneGeometry(16000, 16000), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uScroll; uniform vec3 uHaze;
+varying vec3 vW;
+void main() {
+    vec2 p = vec2(vW.x, vW.z - uScroll * 0.35);
+    float dist = length(vW - cameraPosition);
+    float district = smoothstep(0.42, 0.68, fbm3(p * 0.0011));
+    vec2 cell = floor(p / 18.0);
+    float h = h21(cell);
+    vec2 o = vec2(h21(cell + 1.7), h21(cell + 4.1)) * 0.6 + 0.2;
+    float lamp = step(1.0 - district * 0.55, h) * smoothstep(0.24, 0.0, length(fract(p / 18.0) - o));
+    vec3 lc = mix(vec3(1.0, 0.62, 0.28), vec3(0.75, 0.85, 1.0), step(0.7, h21(cell + 9.0)));
+    vec3 col = vec3(0.01, 0.012, 0.025) + vec3(0.06, 0.04, 0.03) * district;
+    col += lc * lamp * 0.55 * (0.7 + 0.3 * sin(uTime * 2.0 + h * 30.0));
+    // Highways: two winding roads with moving car lights
+    for (int i = 0; i < 2; i++) {
+        float fi = float(i);
+        float rx = sin(p.y * 0.0009 + fi * 2.1) * 900.0 + (fi - 0.5) * 1400.0;
+        float dx = abs(p.x - rx);
+        float road = smoothstep(9.0, 3.0, dx);
+        float cars = step(0.6, fract((p.y + uTime * (220.0 + fi * 80.0) * (fi > 0.5 ? -1.0 : 1.0)) / 40.0)) * smoothstep(5.0, 1.0, dx);
+        col += vec3(1.0, 0.55, 0.2) * road * 0.35 + vec3(1.0, 0.92, 0.8) * cars * 0.7;
+    }
+    col = mix(col, uHaze * 0.8, smoothstep(2500.0, 9000.0, dist));
+    gl_FragColor = vec4(col, 1.0);
+}`, U));
+            city.rotation.x = -Math.PI / 2;
+            city.position.set(0, -1600, -4000);
+            scene.add(city);
+
+            // Cloud decks: fbm coverage, moonlit where the cloud thins toward the moon
+            const cloud = (y, scale, speed, cover, alpha) => {
+                const m = new THREE.Mesh(new THREE.PlaneGeometry(14000, 14000), B3D.mat(B3D.VS_WORLD, `
+uniform float uTime; uniform float uScroll; uniform vec3 uMoon; uniform vec3 uHaze; uniform float uSurge;
+varying vec3 vW;
+void main() {
+    vec2 p = vec2(vW.x, vW.z - uScroll * ${speed.toFixed(2)}) * ${scale.toFixed(5)} + vec2(uTime * 0.01, 0.0);
+    // Billows plus finer detail, so the edges stay crisp at grazing angles
+    float d = fbm3(p) * 0.72 + fbm3(p * 3.7 + 9.0) * 0.28;
+    float d2 = fbm3(p + normalize(uMoon.xz) * 0.06) * 0.72 + fbm3((p + normalize(uMoon.xz) * 0.06) * 3.7 + 9.0) * 0.28;
+    float cov = smoothstep(${cover.toFixed(2)}, ${(cover + 0.14).toFixed(2)}, d);
+    float lit = clamp((d - d2) * 9.0 + 0.45, 0.0, 1.0);
+    float dist = length(vW - cameraPosition);
+    vec3 shadow = vec3(0.025, 0.035, 0.07), light = vec3(0.32, 0.38, 0.52);
+    vec3 col = mix(shadow, light, lit * lit) * (0.6 + 0.4 * cov);
+    col += vec3(0.1, 0.5, 0.6) * uSurge * 0.08;
+    float fade = smoothstep(7000.0, 2500.0, dist);
+    col = mix(uHaze * 1.2, col, fade);
+    gl_FragColor = vec4(col, cov * ${alpha.toFixed(2)} * mix(1.0, 0.85, 1.0 - fade));
+}`, U, { transparent: true, depthWrite: false }));
+                m.rotation.x = -Math.PI / 2;
+                m.position.set(0, y, -5000);
+                return m;
+            };
+            const low = cloud(-520, 0.0015, 0.6, 0.46, 0.94);
+            const high = cloud(-170, 0.0021, 1.0, 0.54, 0.75);
+            low.renderOrder = 1; high.renderOrder = 2;
+            scene.add(low, high);
+
+            // The convoy: aircraft navigation lights blinking far ahead
+            const NAV = 18;
+            const nGeo = new THREE.BufferGeometry();
+            const nPos = new Float32Array(NAV * 3), nSeed = new Float32Array(NAV);
+            for (let i = 0; i < NAV; i++) {
+                const grp = Math.floor(i / 3);
+                nPos.set([(grp - 2.5) * 160 + (i % 3 - 1) * 26, -80 + rnd() * 60, -1800 - grp * 220 - rnd() * 60], i * 3);
+                nSeed[i] = i % 3 === 1 ? 2 : i % 3;   // 0 red (port), 1 green, 2 white strobe
+            }
+            nGeo.setAttribute('position', new THREE.Float32BufferAttribute(nPos, 3));
+            nGeo.setAttribute('aKind', new THREE.Float32BufferAttribute(nSeed, 1));
+            const nav = new THREE.Points(nGeo, B3D.mat(`
+uniform float uTime;
+attribute float aKind;
+varying vec3 vC; varying float vA;
+void main() {
+    vec3 p = position;
+    p.z += sin(uTime * 0.3 + position.x) * 40.0;
+    vec4 mv = modelViewMatrix * vec4(p, 1.0);
+    vC = aKind < 0.5 ? vec3(1.0, 0.15, 0.1) : (aKind < 1.5 ? vec3(0.2, 1.0, 0.4) : vec3(1.0));
+    float strobe = aKind > 1.5 ? step(0.92, fract(uTime * 0.9 + position.x * 0.01)) : 0.6 + 0.4 * sin(uTime * 3.0 + position.x);
+    vA = strobe;
+    gl_PointSize = 5.0;
+    gl_Position = projectionMatrix * mv;
+}`, `
+varying vec3 vC; varying float vA;
+void main() {
+    float r = length(gl_PointCoord - 0.5) * 2.0;
+    gl_FragColor = vec4(vC * vA * exp(-r * r * 4.0) * 0.8, 1.0);
+}`, U, { transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+            B3D.always(nav);
+            scene.add(nav);
+
+            const SPEED = 160;
+            return {
+                scene, camera,
+                update(s) {
+                    U.uTime.value = s.t;
+                    U.uScroll.value = s.t * SPEED;
+                    U.uBoss.value = s.boss;
+                    U.uSurge.value = s.surge;
+                },
+            };
+        },
+    },
 };
