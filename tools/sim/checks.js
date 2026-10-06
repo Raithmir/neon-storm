@@ -396,19 +396,25 @@ const checks = {
 
     async asteroidRateIndependentOfFps(g) {
         const r = await g.ev(() => {
+            // Spawns are random: seed Math.random and sample 10 minutes so the check is deterministic, not flaky
+            const SECS = 600, rand = Math.random;
+            let seed = 12345;
+            Math.random = () => { seed = (seed + 0x6D2B79F5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+                t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
             const perSecond = (fps) => {
                 let spawned = 0;
                 Asteroids.clear(); Asteroids.activate();
-                for (let i = 0; i < fps * 120; i++) {
+                for (let i = 0; i < fps * SECS; i++) {
                     const list = Asteroids.list; const orig = list.push;
                     list.push = function (a) { if (a.y === -40) spawned++; return orig.apply(this, arguments); };
                     Asteroids.update(1 / fps);
                     list.push = orig;
                 }
                 Asteroids.clear();
-                return +(spawned / 120).toFixed(2);
+                return +(spawned / SECS).toFixed(2);
             };
-            return { perSec60Hz: perSecond(60), perSec144Hz: perSecond(144) };
+            try { return { perSec60Hz: perSecond(60), perSec144Hz: perSecond(144) }; }
+            finally { Math.random = rand; }
         });
         const ratio = r.perSec144Hz / r.perSec60Hz;
         return { section: '§6', expect: 'Asteroid spawn rate is the same at 60 Hz and 144 Hz (±25%)',
