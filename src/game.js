@@ -965,6 +965,7 @@ const Game = {
 
     draw() {
         ctx.clearRect(0, 0, SCREEN_W, SCREEN_H);
+        UI.beginFrame();
         HUD._drawn = false;
 
         switch (this.state) {

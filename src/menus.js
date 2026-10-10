@@ -4,7 +4,8 @@
 //  drawing and read by Game.update() for navigation, so keep the lists
 //  and their order in step with the handlers there.
 //  Each screen also has a portrait layout (Layout.portrait): one column at
-//  least 720 wide, above Layout.menuBottom() (the touch controls are below).
+//  least 720 wide, with rows big enough to tap. Every choice registers a
+//  touch target (UI.tap / the `tap` option of UI.item).
 // ============================================================
 const Menu = {
     selectedIndex: 0,
@@ -22,20 +23,24 @@ const Menu = {
         Neon.text(ctx, 'BULLET HELL SHOOTER', cx, P ? 244 : 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
 
         // The player's ship hovering over the grid, engines lit
-        const sy = (P ? 975 : 870) + (Renderer.calm() ? 0 : Math.sin(t * 2) * 6);
-        const f = Math.sin(t * 30) * 3;
-        Neon.flame(ctx, cx - 20, sy + 30, 9, 26 + f, Hangar.trailColor, 0.9);
-        Neon.flame(ctx, cx + 20, sy + 30, 9, 26 - f, Hangar.trailColor, 0.9);
-        UI.ship(ctx, cx, sy, 44);
+        // Portrait: taller rows to tap; the ship goes under the menu if there's room
+        const pw = P ? 600 : 500, step = P ? 84 : 50, top = P ? 290 : 296, ph = P ? 8 * step + 40 : 444;
+        const shipY = P ? top + ph + 190 : 870;
+        if (!P || shipY < Layout.menuBottom() - 60) {
+            const sy = shipY + (Renderer.calm() ? 0 : Math.sin(t * 2) * 6);
+            const f = Math.sin(t * 30) * 3;
+            Neon.flame(ctx, cx - 20, sy + 30, 9, 26 + f, Hangar.trailColor, 0.9);
+            Neon.flame(ctx, cx + 20, sy + 30, 9, 26 - f, Hangar.trailColor, 0.9);
+            UI.ship(ctx, cx, sy, 44);
+        }
 
         // Menu
         this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS MODES', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
         const rushLocked = !BossRush.unlocked() && !BossRush.practiceLevels().length;
-        // Portrait: taller rows, easier to hit with a thumb on the stick
-        const pw = P ? 560 : 500, step = P ? 60 : 50, top = P ? 290 : 296, ph = P ? 8 * step + 40 : 444;
         UI.panel(ctx, cx - pw / 2, top, pw, ph, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
-            UI.item(ctx, this.items[i], cx, top + 54 + i * step, i === this.selectedIndex, { w: pw - 60, disabled: i === 2 && rushLocked });
+            UI.item(ctx, this.items[i], cx, top + (P ? 66 : 54) + i * step, i === this.selectedIndex,
+                { w: pw - 60, size: P ? 30 : 24, disabled: i === 2 && rushLocked, tap: UI.menuTap(i), tapH: step });
         }
         const ly = top + ph + 24, lw = UI.w(1200);
         if (rushLocked && this.selectedIndex === 2) {
@@ -65,11 +70,12 @@ const Menu = {
         const colors = ['#00ff88', '#ffee33', '#ff3355', '#cc44ff', UI.DIM];
         const cx = SCREEN_W / 2;
         for (let i = 0; i < this.items.length; i++) {
-            const y = 270 + i * 120;
+            const P = Layout.portrait, ph = P ? 116 : 98;
+            const y = 270 + i * (P ? 146 : 120);
             const selected = i === this.selectedIndex;
             const pw = UI.w(660);
-            if (i < 4) UI.panel(ctx, cx - pw / 2, y - 52, pw, 98, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
-            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: 28 });
+            if (i < 4) UI.panel(ctx, cx - pw / 2, y - 52, pw, ph, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: P ? 32 : 28, tap: UI.menuTap(i), tapH: ph });
         }
         UI.hint(ctx, 'ESC TO GO BACK');
     },
@@ -77,6 +83,7 @@ const Menu = {
     // Results panel shared by game over and mission complete. Returns the y after the totals.
     _results(ctx, top, heading, headingColor, scoreColor, footerH) {
         const cx = SCREEN_W / 2;
+        if (Layout.portrait) footerH += HighScores.enteringInitials ? 80 : 60;
         const nB = EndRunBonus.bonuses.length;
         const subH = this._resultsSub ? this._resultsSub.length * 26 : 0;
         const h = 110 + subH + 104 + nB * 28 + (nB ? 22 : 0) + 84 + footerH;
@@ -124,9 +131,7 @@ const Menu = {
             HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
         } else {
             this.items = ['RETRY', 'MAIN MENU'];
-            for (let i = 0; i < this.items.length; i++) {
-                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 50, i === this.selectedIndex, { w: 380, size: 22 });
-            }
+            this._resultItems(ctx, endY);
         }
     },
 
@@ -143,11 +148,17 @@ const Menu = {
                 Campaign.isLevelAvailable(Game.currentLevelIndex + 1, GameConfig.difficulty === 'custom');
             this.items = hasNextLevel ? ['NEXT LEVEL', 'RETRY', 'MAIN MENU'] :
                 (Game.currentLevelIndex >= 4 ? ['CONTINUE...', 'MAIN MENU'] : ['RETRY', 'MAIN MENU']);
-            for (let i = 0; i < this.items.length; i++) {
-                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 48, i === this.selectedIndex, {
-                    w: 380, size: 22, color: this.items[i] === 'NEXT LEVEL' ? '#00ff88' : UI.CYAN,
-                });
-            }
+            this._resultItems(ctx, endY, 48);
+        }
+    },
+
+    // Choices under a results panel (Menu.items); portrait rows are taller to tap
+    _resultItems(ctx, endY, step) {
+        const P = Layout.portrait, st = P ? 80 : (step || 50);
+        for (let i = 0; i < this.items.length; i++) {
+            UI.item(ctx, this.items[i], SCREEN_W / 2, endY + (P ? 50 : 40) + i * st, i === this.selectedIndex, {
+                w: P ? 460 : 380, size: P ? 28 : 22, color: this.items[i] === 'NEXT LEVEL' ? '#00ff88' : UI.CYAN, tap: UI.menuTap(i), tapH: st,
+            });
         }
     },
 
@@ -209,7 +220,7 @@ const Menu = {
         UI.panel(ctx, cx - 320, cTop, 640, 380, UI.CYAN, { title: first ? 'CHOOSE YOUR WEAPON' : 'CHOOSE AN UPGRADE' });
         this.items = R.choices.map(c => c.label);
         R.choices.forEach((c, i) => {
-            UI.item(ctx, c.label, cx, cTop + 88 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26 });
+            UI.item(ctx, c.label, cx, cTop + 88 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26, tap: UI.menuTap(i), tapH: 104 });
         });
 
         if (P) {
@@ -278,7 +289,7 @@ const Menu = {
             const selected = i === this.selectedIndex;
             const locked = (i === 0 && !rush) || (i === 1 && !practice);
             if (i < 2) UI.panel(ctx, cx - pw / 2, y - 56, pw, ph, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
-            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: 30, disabled: locked });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: 30, disabled: locked, tap: UI.menuTap(i), tapH: i < 2 ? ph : undefined });
         }
         if (practice) UI.label(ctx, BossRush.practiceLevels().length + ' / ' + ALL_LEVELS.length + ' BOSSES BEATEN', cx, 300 + 2 * step + 90, UI.DIM, 15);
         UI.hint(ctx, '↑↓ SELECT  •  ENTER CONFIRM  •  ESC BACK');
@@ -314,10 +325,15 @@ const Menu = {
             const pad = P ? 36 : 50;
             Neon.text(ctx, label, lx + pad, y, sel ? '#ffffff' : UI.TEXT, 20, { align: 'left', halo: 0, weight: sel ? 'bold' : '' });
             const vc = i === 3 ? W[p.weapon].color : (sel ? UI.CYAN : UI.TEXT);
-            Neon.text(ctx, (sel ? '◀  ' : '') + value + (sel ? '  ▶' : ''), lx + lw - pad, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
+            const vText = (sel ? '◀  ' : '') + value + (sel ? '  ▶' : '');
+            Neon.text(ctx, vText, lx + lw - pad, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
+            // Touch: tapping a row steps its value on; its ◀ steps it back
+            UI.tap(lx + 20, y - 34, lw - 40, 52, { sel: () => { this.selectedIndex = i; }, press: 'right' });
+            const vw = ctx.measureText(vText).width;
+            UI.tap(lx + lw - pad - vw - 40, y - 34, 90, 52, { sel: () => { this.selectedIndex = i; }, press: 'left' });
         });
-        UI.item(ctx, 'START', lx + lw / 2, top + (P ? 530 : 545), this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88' });
-        UI.item(ctx, 'BACK', lx + lw / 2, top + (P ? 595 : 610), this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM });
+        UI.item(ctx, 'START', lx + lw / 2, top + (P ? 530 : 545), this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88', tap: UI.menuTap(6), tapH: 64 });
+        UI.item(ctx, 'BACK', lx + lw / 2, top + (P ? 595 : 610), this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM, tap: UI.menuTap(7), tapH: 64 });
 
         // The boss, and the best time for this boss on this difficulty
         const best = Campaign.practiceBests[p.difficulty + '_' + L.bossType];
@@ -342,7 +358,7 @@ const Menu = {
         UI.dim(ctx, 0.78);
         const cx = SCREEN_W / 2, p = BossRush.practice;
         const best = Campaign.practiceBests[p.difficulty + '_' + ALL_LEVELS[p.level].bossType];
-        UI.panel(ctx, cx - UI.w(720) / 2, 220, UI.w(720), 520, UI.CYAN);
+        UI.panel(ctx, cx - UI.w(720) / 2, 220, UI.w(720), Layout.portrait ? 640 : 520, UI.CYAN);
         Neon.text(ctx, 'BOSS DOWN', cx, 300, UI.CYAN, 58, { core: 0.45, halo: 0.55 });
         UI.label(ctx, BossRush.bossName() + ' — ' + p.difficulty.toUpperCase() + (p.phase > 1 ? '  •  FROM PHASE ' + p.phase : ''), cx, 345, UI.TEXT, 17);
         UI.label(ctx, 'TIME', cx, 400, UI.DIM, 15);
@@ -351,9 +367,7 @@ const Menu = {
         else if (best) UI.label(ctx, 'BEST ' + BossRush.formatTime(best), cx, 492, UI.DIM, 17);
         UI.label(ctx, 'DEATHS ' + Scoring.levelDeaths + '    BOMBS ' + Scoring.levelBombs, cx, 530, UI.TEXT, 16);
         this.items = ['RETRY', 'CHANGE SETUP', 'MAIN MENU'];
-        for (let i = 0; i < this.items.length; i++) {
-            UI.item(ctx, this.items[i], cx, 590 + i * 48, i === this.selectedIndex, { w: 380, size: 22 });
-        }
+        this._resultItems(ctx, 550, 48);
     },
 
     // --- Boss Rush results ---
@@ -370,9 +384,7 @@ const Menu = {
             HighScores.drawInitialEntry(ctx, SCREEN_W / 2, endY + 20);
         } else {
             this.items = ['PLAY AGAIN', 'MAIN MENU'];
-            for (let i = 0; i < this.items.length; i++) {
-                UI.item(ctx, this.items[i], SCREEN_W / 2, endY + 40 + i * 50, i === this.selectedIndex, { w: 380, size: 22 });
-            }
+            this._resultItems(ctx, endY);
         }
     },
 
@@ -387,6 +399,7 @@ const Menu = {
 
         ctx.globalAlpha = inK;
         const cx = SCREEN_W / 2;
+        UI.tap(0, 0, SCREEN_W, SCREEN_H, { press: 'confirm' });
         if (Layout.portrait) return this._drawBriefingPortrait(ctx, idx, lvl, t, inK);
         UI.label(ctx, 'LEVEL ' + (idx + 1) + ' / ' + Campaign.getLevelCount(), cx, 250, UI.MAGENTA, 18);
         Neon.text(ctx, lvl.name.toUpperCase(), cx, 312, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
@@ -467,9 +480,10 @@ const Menu = {
             const y = 250 + i * 76;
             const selected = i === Menu.selectedIndex;
             if (i === lvlCount) {
-                UI.item(ctx, 'BACK', cx, y + 20, selected, { w: 400, size: 20 });
+                UI.item(ctx, 'BACK', cx, y + 20, selected, { w: 400, size: 20, tap: UI.menuTap(i) });
                 continue;
             }
+            UI.tap(cx - pw / 2 + 20, y - 36, pw - 40, 72, UI.menuTap(i));
             const lvl = ALL_LEVELS[i];
             const available = Campaign.isLevelAvailable(i, false);
             const best = Campaign.getLevelBest(i, GameConfig.difficulty);
@@ -507,6 +521,7 @@ const Menu = {
         const startX = SCREEN_W / 2 - (P ? colW / 2 : colW), startY = 185;
         const shown = P ? this.achRowsShown() : Achievements.defs.length;
         if (P) {
+            UI.scroll = { step: rowH, by: n => { this.achScroll = Math.max(0, Math.min(this.achScroll + n, Achievements.defs.length - shown)); } };
             this.achScroll = Math.max(0, Math.min(this.achScroll, Achievements.defs.length - shown));
             const trackH = shown * rowH - 10, n = Achievements.defs.length;
             ctx.fillStyle = 'rgba(255,255,255,0.08)';
@@ -531,12 +546,12 @@ const Menu = {
             Neon.text(ctx, def.desc, x + 72, y + (P ? 56 : 48), done ? UI.TEXT : '#4a5468', 14, { align: 'left', halo: 0, weight: '' });
             Neon.text(ctx, (done ? '✓ ' : '') + def.reward + ' NC', x + colW - 26, y + (P ? 29 : 36), done ? '#00ff88' : '#4a5468', 15, { align: 'right', halo: 0 });
         });
-        UI.hint(ctx, P ? '↑↓ SCROLL  •  ESC / ENTER TO RETURN' : 'ESC / ENTER TO RETURN');
+        UI.hint(ctx, P ? '↑↓ SCROLL  •  ESC / ENTER TO RETURN' : 'ESC / ENTER TO RETURN', null, P ? 'DRAG TO SCROLL' : null);
     },
 
     // Portrait achievements: rows that fit above the hint, and the scroll position
     achScroll: 0,
-    achRowsShown() { return Math.floor((Layout.menuBottom() - 90 - 185) / 76); },
+    achRowsShown() { return Math.min(Achievements.defs.length, Math.floor((Layout.menuBottom() - 90 - 185) / 76)); },
 
     drawCampaignComplete(ctx) {
         UI.background(ctx, { dim: 0.35 });
@@ -563,7 +578,9 @@ const Menu = {
         }
         extra += UI.para(ctx, 'Thank you for playing Neon Storm \u03b3 \u2014 more to come!', cx, 600 + extra, tw, UI.DIM, 16, 28) - 628 - extra;
         const items = ['PLAY AGAIN', 'MAIN MENU'];
-        items.forEach((label, i) => UI.item(ctx, label, cx, 680 + extra + i * 54, i === Menu.selectedIndex, { w: 420, size: 22 }));
+        const st = Layout.portrait ? 80 : 54;
+        items.forEach((label, i) => UI.item(ctx, label, cx, 680 + extra + i * st, i === Menu.selectedIndex,
+            { w: 420, size: Layout.portrait ? 28 : 22, tap: UI.menuTap(i), tapH: st }));
         // Fireworks of shattered neon (small, calm-friendly)
         if (!Renderer.calm()) {
             for (let i = 0; i < 24; i++) {
@@ -589,14 +606,15 @@ const Menu = {
         // Portrait: the tabs in two rows of three, and narrower columns
         const P = Layout.portrait;
         if (P) {
-            UI.tabs(ctx, tabs.slice(0, 3), this.highScoreTab, SCREEN_W / 2, 176, colors.slice(0, 3), 220);
-            UI.tabs(ctx, tabs.slice(3), this.highScoreTab - 3, SCREEN_W / 2, 224, colors.slice(3), 220);
+            const pick = i => { this.highScoreTab = i; Audio.playMenuNav(); };
+            UI.tabs(ctx, tabs.slice(0, 3), this.highScoreTab, SCREEN_W / 2, 176, colors.slice(0, 3), 220, pick);
+            UI.tabs(ctx, tabs.slice(3), this.highScoreTab - 3, SCREEN_W / 2, 230, colors.slice(3), 220, i => pick(i + 3));
         } else {
-            UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
+            UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors, null, i => { this.highScoreTab = i; Audio.playMenuNav(); });
         }
 
         const color = colors[this.highScoreTab];
-        const pw = UI.w(840), px = SCREEN_W / 2 - pw / 2, top = P ? 260 : 240;
+        const pw = UI.w(840), px = SCREEN_W / 2 - pw / 2, top = P ? 270 : 240;
         UI.panel(ctx, px, top, pw, 620, color);
 
         const tabKey = tabKeys[this.highScoreTab];
@@ -641,24 +659,30 @@ const Menu = {
         }
 
         UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, Layout.menuBottom() - (P ? 90 : 110), '#ffaa00', 19);
-        UI.hint(ctx, '←→ CHANGE TAB    ESC BACK');
+        UI.hint(ctx, '←→ CHANGE TAB    ESC BACK', null, 'TAP A TAB');
     },
 
     drawPause(ctx) {
         UI.dim(ctx, 0.62);
         const cx = SCREEN_W / 2;
-        UI.panel(ctx, cx - 280, 330, 560, 330, UI.CYAN);
+        const P = Layout.portrait, step = P ? 84 : 56;
+        UI.panel(ctx, cx - 280, 330, 560, P ? 440 : 330, UI.CYAN);
         Neon.text(ctx, 'PAUSED', cx, 405, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
 
         if (Game.pauseConfirm) {
             const action = Game.pauseConfirm === 'restart' ? 'RESTART LEVEL' : 'QUIT TO MENU';
             Neon.text(ctx, 'ARE YOU SURE?', cx, 480, '#ffaa00', 26);
             UI.label(ctx, action, cx, 520, UI.TEXT, 19);
-            UI.label(ctx, UI.keys('ENTER = YES    ESC = NO'), cx, 600, UI.DIM, 16);
+            if (Input.lastDevice === 'touch') {
+                UI.item(ctx, 'YES', cx - 110, 610, false, { w: 200, size: 28, color: '#ffaa00', tap: { press: 'confirm' }, tapH: 80 });
+                UI.item(ctx, 'NO', cx + 110, 610, false, { w: 200, size: 28, tap: { press: 'back' }, tapH: 80 });
+            } else {
+                UI.label(ctx, UI.keys('ENTER = YES    ESC = NO'), cx, 600, UI.DIM, 16);
+            }
         } else {
             this.items = ['RESUME', 'RESTART', 'MAIN MENU'];
             for (let i = 0; i < this.items.length; i++) {
-                UI.item(ctx, this.items[i], cx, 480 + i * 56, i === this.selectedIndex, { w: 460, size: 24 });
+                UI.item(ctx, this.items[i], cx, (P ? 500 : 480) + i * step, i === this.selectedIndex, { w: 460, size: P ? 30 : 24, tap: UI.menuTap(i), tapH: step });
             }
         }
     }

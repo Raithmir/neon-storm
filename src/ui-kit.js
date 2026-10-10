@@ -9,6 +9,7 @@
 //    UI.panel()       translucent card with a neon frame and corner brackets
 //    UI.item()        menu entry; the selected one gets a highlight bar
 //    UI.hint()        footer key hints
+//    UI.tap()         touch target for this frame (touch.js hit-tests them)
 // ============================================================
 const UI = {
     CYAN: '#00ffff',
@@ -146,9 +147,34 @@ const UI = {
         ctx.globalAlpha = 1;
     },
 
-    hint(ctx, text, y) {
-        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || Layout.menuBottom() - 40, this.DIM, 15, { weight: '', halo: 0 });
+    // Footer key hints. On touch only `touchText` shows (menus are tapped, so
+    // most key hints mean nothing there)
+    hint(ctx, text, y, touchText) {
+        const t = Input.lastDevice === 'touch' ? touchText : this.keys(text);
+        if (t) Neon.text(ctx, t, SCREEN_W / 2, y || Layout.menuBottom() - 40, this.DIM, 15, { weight: '', halo: 0 });
     },
+
+    // --- Touch targets ---
+    // Screens register what can be tapped while they draw; Game.draw clears the
+    // list each frame. act: { sel() on touch-down (highlights the choice),
+    // run() on release, press: the Input action latched on release }.
+    // Later targets win where they overlap. A screen with a scrolling list sets
+    // `scroll` = { step (logical px per row), by(rows) } for drag-to-scroll.
+    _taps: [],
+    scroll: null,
+    beginFrame() { this._taps = []; this.scroll = null; },
+    tap(x, y, w, h, act) { this._taps.push({ x, y, w, h, act }); },
+    tapAt(x, y) {
+        for (let i = this._taps.length - 1; i >= 0; i--) {
+            const t = this._taps[i];
+            if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h) return t;
+        }
+        return null;
+    },
+    // The usual target: menu entry i of Menu.items (selects it, then confirms)
+    menuTap(i, press) { return { sel: () => { Menu.selectedIndex = i; }, press: press || 'confirm' }; },
+    // Portrait menus are tapped: rows at least this tall (~44 CSS px on a phone)
+    get ROW_MIN() { return Math.round(44 / Layout.scale); },
 
     // --- Portrait (phone) layout ---
 
@@ -185,9 +211,12 @@ const UI = {
     // Prompt text for the device in use: with a gamepad, key names become its
     // buttons (confirm is always A, back always B). Arrows read as the D-pad.
     keys(text) {
-        if (Input.lastDevice !== 'pad' && Input.lastDevice !== 'touch') return text;
+        if (Input.lastDevice === 'touch') {
+            return text.replace('PRESS ENTER OR FIRE', 'TAP').replace(/\bENTER\b/g, 'TAP').replace(/\bESC\b/g, 'BACK');
+        }
+        if (Input.lastDevice !== 'pad') return text;
         return text
-            .replace('ARROW KEYS / D-PAD', Input.lastDevice === 'touch' ? 'STICK' : 'D-PAD')
+            .replace('ARROW KEYS / D-PAD', 'D-PAD')
             .replace(/\bENTER\b/g, '[A]')
             .replace(/\bESC\b/g, '[B]');
     },
@@ -229,12 +258,16 @@ const UI = {
     },
 
     // Menu entry centred on cx. Selected entries get a glowing bar and chevrons.
-    // opts: { w, color, desc, disabled, size, right (text on the right) }
+    // opts: { w, color, desc, disabled, size, tap (a touch target act; tapH its height) }
     item(ctx, label, cx, y, selected, opts) {
         const o = opts || {};
         const w = o.w || 420;
         const color = o.color || this.CYAN;
         const size = this.fs(o.size || 24);
+        if (o.tap) {
+            const h = o.tapH || Math.max(this.ROW_MIN, size * 2.2);
+            this.tap(cx - w / 2, y - size * 0.3 - h / 2, w, h, o.tap);
+        }
         if (selected) {
             const pulse = Renderer.calm() ? 0.25 : 0.2 + Math.sin(this.time() * 4) * 0.06;
             const g = ctx.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
@@ -270,12 +303,14 @@ const UI = {
         }
     },
 
-    // Horizontal row of tabs; returns nothing. colors[] optional per tab, tabW their width.
-    tabs(ctx, labels, selectedIndex, cx, y, colors, tabW) {
+    // Horizontal row of tabs; returns nothing. colors[] optional per tab, tabW
+    // their width, onTap(i) makes them touch targets.
+    tabs(ctx, labels, selectedIndex, cx, y, colors, tabW, onTap) {
         const tw = tabW || 170;
         const x0 = cx - (labels.length * tw) / 2;
         for (let i = 0; i < labels.length; i++) {
             const x = x0 + i * tw + tw / 2;
+            if (onTap) this.tap(x - tw / 2, y - 30, tw, 50, { sel: () => onTap(i) });
             const sel = i === selectedIndex;
             const c = (colors && colors[i]) || this.CYAN;
             if (sel) {
