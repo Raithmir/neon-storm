@@ -117,7 +117,8 @@ const HUD = {
     _drawPortrait(ctx) {
         const x0 = PLAY_X, t = UI.time();
         const m = this._mission();
-        UI.label(ctx, m.label + '   ' + m.time, x0 + 16, 28, UI.DIM, 14, 'left');
+        // Touch draws a pause icon in the top-left corner (tap the strip to pause)
+        UI.label(ctx, m.label + '   ' + m.time, x0 + (Touch.visible() ? 70 : 16), 28, UI.DIM, 14, 'left');
         Neon.text(ctx, Scoring.score.toLocaleString(), x0 + 16, 74, '#ffffff', 40, { align: 'left', core: 0.2, halo: 0.35 });
 
         // Chain

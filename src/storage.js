@@ -189,9 +189,14 @@ const HighScores = {
     drawInitialEntry(ctx, x, y) {
         Neon.text(ctx, 'NEW HIGH SCORE!', x, y + 10, '#ffee33', 28, { core: 0.4 });
         UI.label(ctx, 'ENTER YOUR INITIALS', x, y + 40, UI.TEXT, 16);
+        const touch = Input.lastDevice === 'touch';
         for (let i = 0; i < 3; i++) {
             const cx = x - 56 + i * 56;
             const selected = i === this.initialCursor;
+            // Touch: the top half of a letter steps it up, the bottom half down
+            const pick = () => { this.initialCursor = i; };
+            UI.tap(cx - 28, y + 20, 56, 66, { sel: pick, press: 'up' });
+            UI.tap(cx - 28, y + 86, 56, 66, { sel: pick, press: 'down' });
             const c = selected ? UI.CYAN : UI.DIM;
             UI.panel(ctx, cx - 22, y + 58, 44, 56, c, { fill: selected ? 'rgba(0,255,255,0.08)' : 'rgba(6,2,18,0.6)' });
             Neon.text(ctx, this.currentInitials[i], cx, y + 100, selected ? '#ffffff' : UI.TEXT, 38, { halo: selected ? 0.5 : 0 });
@@ -200,7 +205,13 @@ const HighScores = {
                 Neon.text(ctx, '▼', cx, y + 132, UI.CYAN, 14, { halo: 0 });
             }
         }
-        UI.label(ctx, UI.keys('↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM'), x, y + 160, UI.DIM, 14);
+        if (touch) {
+            UI.label(ctx, 'TAP ▲ / ▼ TO CHANGE A LETTER', x, y + 160, UI.DIM, 14);
+            // OK submits: confirm on the last letter
+            UI.item(ctx, 'OK', x, y + 220, false, { w: 240, size: 28, color: '#00ff88', tap: { sel: () => { this.initialCursor = 2; }, press: 'confirm' }, tapH: 76 });
+        } else {
+            UI.label(ctx, UI.keys('↑↓ CHANGE   ←→ MOVE   ENTER CONFIRM'), x, y + 160, UI.DIM, 14);
+        }
     },
 
     drawBoard(ctx, difficulty, x, y, w) {
@@ -372,8 +383,9 @@ const Settings = {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'SETTINGS', 110);
         const cx = SCREEN_W / 2, P = Layout.portrait;
-        // Portrait: rows tighter, labels and values closer to the centre
-        const rowH = P ? 54 : 58, top = P ? 190 : 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30;
+        // Portrait: rows as tall as fit (for tapping), labels and values closer to the centre
+        const rowH = P ? Math.max(54, Math.min(72, Math.floor((Layout.menuBottom() - 300) / this.items.length))) : 58;
+        const top = P ? 190 : 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30;
         UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * rowH + 30, UI.CYAN);
 
         for (let i = 0; i < this.items.length; i++) {
@@ -382,10 +394,21 @@ const Settings = {
             const selected = i === this.selectedIndex;
             const valColor = selected ? UI.CYAN : UI.TEXT;
 
+            const pickRow = () => { this.selectedIndex = i; };
             if (item.type === 'action') {
-                UI.item(ctx, item.label, cx, y + 6, selected, { w: 520, size: 20 });
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 520, size: 20, tap: { sel: pickRow, press: 'confirm' }, tapH: rowH });
                 continue;
             }
+            const vx = P ? cx + 6 : cx + 20, barW = P ? 170 : 220;
+            // Touch: a row toggles / cycles; a slider jumps to where it's tapped
+            UI.tap(cx - pw / 2 + 20, y - 5 - rowH / 2, pw - 40, rowH, item.type === 'slider'
+                ? { sel: pickRow, run: p => {
+                    const f = Math.max(0, Math.min(1, (p.x - vx - 24) / barW));
+                    this.values[item.key] = Math.round(f * item.max / item.step) * item.step;
+                    this._apply();
+                    Audio.playMenuNav();
+                } }
+                : { sel: pickRow, press: 'confirm' });
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;
@@ -396,7 +419,6 @@ const Settings = {
             Neon.text(ctx, item.label, lx, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
                 { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
 
-            const vx = P ? cx + 6 : cx + 20, barW = P ? 170 : 220;
             if (item.type === 'slider') {
                 const val = this.values[item.key];
                 Neon.bar(ctx, vx + 24, y - 10, barW, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
@@ -526,7 +548,7 @@ const ControlsScreen = {
         const items = this.getItems();
         const P = Layout.portrait;
         // Portrait: the three columns pulled in to fit the panel
-        const top = 220, lineH = 50, pw = UI.w(880);
+        const top = 220, lineH = P ? Math.max(50, Math.min(64, Math.floor((Layout.menuBottom() - 440) / items.length))) : 50, pw = UI.w(880);
         const ax = P ? cx - 252 : cx - 260, kx = P ? cx - 10 : cx, gx = P ? cx + 248 : cx + 260;
         UI.panel(ctx, cx - pw / 2, top - 70, pw, items.length * lineH + 60, UI.CYAN);
         UI.label(ctx, 'ACTION', ax, top - 30, UI.DIM, 14);
@@ -537,10 +559,12 @@ const ControlsScreen = {
             const item = items[i];
             const y = top + i * lineH;
             const selected = i === this.selectedIndex;
+            const tap = { sel: () => { this.selectedIndex = i; }, press: 'confirm' };
             if (item.action === 'back' || item.action === 'reset') {
-                UI.item(ctx, item.label, cx, y + 6, selected, { w: 460, size: 20, color: item.action === 'reset' ? '#ffaa00' : UI.CYAN });
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 460, size: 20, color: item.action === 'reset' ? '#ffaa00' : UI.CYAN, tap, tapH: lineH });
                 continue;
             }
+            UI.tap(cx - pw / 2 + 20, y - 6 - lineH / 2, pw - 40, lineH, tap);
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;

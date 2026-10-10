@@ -104,16 +104,20 @@ const CustomDifficulty = {
         UI.title(ctx, 'CUSTOM DIFFICULTY', 90, '#cc44ff');
         UI.label(ctx, 'Scores will not be recorded to leaderboards', SCREEN_W / 2, 140, UI.DIM, 15);
         const cx = SCREEN_W / 2, P = Layout.portrait;
-        const top = 200, lineH = P ? 48 : 44, pw = UI.w(840), lx = P ? cx - 16 : cx - 30, vx = P ? cx + 10 : cx + 20;
+        const lineH = P ? Math.max(48, Math.min(66, Math.floor((Layout.menuBottom() - 300) / this.items.length))) : 44;
+        const top = 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30, vx = P ? cx + 10 : cx + 20;
         UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * lineH + 30, '#cc44ff');
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
             const y = top + i * lineH;
             const selected = i === this.selectedIndex;
+            // Touch: a row toggles / cycles (confirm steps a cycle forward)
+            const tap = { sel: () => { this.selectedIndex = i; }, press: 'confirm' };
             if (item.type === 'action') {
-                UI.item(ctx, item.label, cx, y + 6, selected, { w: 480, size: 20, color: item.key === 'start' ? '#00ff88' : UI.CYAN });
+                UI.item(ctx, item.label, cx, y + 6, selected, { w: 480, size: 20, color: item.key === 'start' ? '#00ff88' : UI.CYAN, tap, tapH: lineH });
                 continue;
             }
+            UI.tap(cx - pw / 2 + 20, y - 6 - lineH / 2, pw - 40, lineH, tap);
             if (selected) {
                 ctx.fillStyle = '#cc44ff';
                 ctx.globalAlpha = 0.14;
@@ -254,7 +258,8 @@ const Hangar = {
             for (let i = 0; i < this.categories.length; i++) {
                 const y = top + (P ? 72 : 90) + i * catStep;
                 const selected = i === this.categoryIndex;
-                UI.item(ctx, this.categories[i], lx + lw / 2, y, selected, { w: lw - 60, size: 26 });
+                UI.item(ctx, this.categories[i], lx + lw / 2, y, selected, { w: lw - 60, size: 26,
+                    tap: { sel: () => { this.categoryIndex = i; }, press: 'confirm' }, tapH: catStep - 8 });
                 if (i < 4) {
                     const eq = this.catalog[keys[i]].find(it => it.id === this.equipped[equipKeys[i]]);
                     UI.label(ctx, 'EQUIPPED: ' + (eq ? eq.name.toUpperCase() : '-'), lx + lw / 2, y + 30, selected ? UI.TEXT : UI.DIM, 14);
@@ -274,6 +279,7 @@ const Hangar = {
                 const selected = i === this.itemIndex;
                 const owned = this.unlocked[unlockKey].includes(item.id);
                 const isEquipped = this.equipped[equipKey] === item.id;
+                UI.tap(lx + 20, y - 36, lw - 40, itemStep - 16, { sel: () => { this.itemIndex = i; }, press: 'confirm' });
                 if (selected) {
                     ctx.fillStyle = item.color;
                     ctx.globalAlpha = 0.12;
@@ -482,8 +488,11 @@ const Tutorial = {
         UI.background(ctx, { dim: 0.6 });
         UI.title(ctx, 'HOW TO PLAY', 100);
         const page = this.pages[this.pageIndex];
-        const cx = SCREEN_W / 2, P = Layout.portrait, pw = UI.w(840);
-        UI.panel(ctx, cx - pw / 2, 170, pw, P ? Layout.menuBottom() - 300 : 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
+        const cx = SCREEN_W / 2, P = Layout.portrait, pw = UI.w(840), ph = P ? Layout.menuBottom() - 300 : 690;
+        UI.panel(ctx, cx - pw / 2, 170, pw, ph, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
+        // Touch: the right half of the page turns forward, the left half back
+        UI.tap(cx - pw / 2, 170, pw / 2, ph, { press: 'left' });
+        UI.tap(cx, 170, pw / 2, ph, { press: 'right' });
         Neon.text(ctx, page.title, cx, 250, UI.MAGENTA, 38, { core: 0.4 });
         let y = 320;
         const x0 = cx - pw / 2 + (P ? 36 : 80);
@@ -503,7 +512,7 @@ const Tutorial = {
         if (this.pageIndex > 0) nav.push('← PREV');
         nav.push(this.pageIndex < this.pages.length - 1 ? 'NEXT →' : 'ENTER TO FINISH');
         nav.push('ESC BACK');
-        UI.hint(ctx, nav.join('     '));
+        UI.hint(ctx, nav.join('     '), null, this.pageIndex < this.pages.length - 1 ? 'TAP RIGHT FOR NEXT  •  LEFT FOR PREVIOUS' : 'TAP RIGHT TO FINISH');
     }
 };
 // ============================================================

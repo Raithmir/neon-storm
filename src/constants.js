@@ -6,9 +6,10 @@
 // The play area is always PLAY_W × PLAY_H. The overlay's logical size and the
 // play area's place in it depend on the window (Layout.update):
 //   landscape: 1920×1080, the play area centred with HUD panels either side
-//   portrait:  as wide as the play area (or wider, if the window is short) and
-//              as tall as the window's shape; a HUD strip on top, the play
-//              area under it, and room for touch controls at the bottom
+//   portrait:  as wide as the play area (or wider, if the window is too short
+//              for HUD strip + play area) and as tall as the window's shape:
+//              a HUD strip on top, the play area full width under it. The
+//              touch buttons sit below it, over its bottom edge if need be
 // Draw code uses these names as before; they change only on a resize.
 const PLAY_W = 720;
 const PLAY_H = 960;
@@ -29,16 +30,12 @@ const Layout = {
     // Portrait whenever the window is clearly taller than wide
     _wantPortrait(W, H) { return H > W * 1.1; },
 
-    // CSS px kept free under the play area for the touch controls (touch.js
-    // sizes its buttons from the same unit)
-    controlsH(W, H) { return 5.8 * Math.max(28, Math.min(48, Math.min(W, H) / 10)); },
-
     update() {
         const W = window.innerWidth, H = window.innerHeight;
         const portrait = this._wantPortrait(W, H);
         let sw, sh, px, py, scale;
         if (portrait) {
-            scale = Math.min(W / PLAY_W, (H - this.controlsH(W, H)) / (this.HUD_TOP + PLAY_H));
+            scale = Math.min(W / PLAY_W, H / (this.HUD_TOP + PLAY_H));
             sw = W / scale; sh = H / scale;
             px = (sw - PLAY_W) / 2; py = this.HUD_TOP;
         } else {
@@ -58,9 +55,9 @@ const Layout = {
         HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
     },
 
-    // Bottom of the area menus lay out in: in portrait, everything below the
-    // play area is left to the touch controls
-    menuBottom() { return this.portrait ? PLAY_Y + PLAY_H : SCREEN_H; },
+    // Bottom of the area menus lay out in. Portrait keeps ~80 CSS px at the
+    // bottom for the touch BACK button (menus are tapped; nothing else is drawn over them)
+    menuBottom() { return this.portrait ? SCREEN_H - Math.round(80 / this.scale) : SCREEN_H; },
 };
 
 // Canvas 2D overlay — menus, HUD, transitions

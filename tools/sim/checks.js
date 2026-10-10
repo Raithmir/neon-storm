@@ -211,19 +211,73 @@ const checks = {
                 return {
                     portrait: Layout.portrait, screen: [SCREEN_W, SCREEN_H], play: [PLAY_X, PLAY_Y],
                     pixi: pixi && [Math.round(pixi.left), Math.round(pixi.top), Math.round(pixi.width), Math.round(pixi.height)],
-                    belowPlay: Math.round(window.innerHeight - (PLAY_Y + PLAY_H) * Layout.scale),
-                    controlsH: Math.round(Layout.controlsH(window.innerWidth, window.innerHeight)),
+                    fits: (PLAY_Y + PLAY_H) <= SCREEN_H,
                 };
             });
         };
-        const phone = await at(390, 844), short = await at(360, 640), land = await at(844, 390);
+        // A phone, one with its browser bars showing, a tablet, and a phone on its side
+        const phone = await at(390, 844), short = await at(390, 664), tablet = await at(768, 1024), land = await at(844, 390);
         await g.page.setViewportSize({ width: 1280, height: 720 });
         await g.ev(() => resizeCanvas());
-        const pass = phone.portrait && phone.play[0] === 0 && phone.pixi && phone.pixi[2] === 390 && phone.belowPlay >= phone.controlsH
-            && short.portrait && short.belowPlay >= short.controlsH - 1 && short.pixi[2] < 360
+        const full = r => r.portrait && r.play[0] === 0 && r.fits && r.pixi && r.pixi[2] === r.screenW;
+        phone.screenW = 390; short.screenW = 390;
+        const pass = full(phone) && full(short)
+            && tablet.portrait && tablet.fits && tablet.pixi[1] + tablet.pixi[3] <= 1024
             && !land.portrait && land.screen[0] === 1920 && land.screen[1] === 1080;
-        return { section: 'layout', expect: 'Portrait windows get the play area full width (or as wide as fits) with room under it for the touch controls; landscape keeps 1920×1080',
-            pass, evidence: { phone, short, land } };
+        return { section: 'layout', expect: 'Portrait phones get the play area full width under the HUD strip (the touch buttons may overlap its bottom edge); taller-than-wide windows that are too short fit it by height; landscape keeps 1920×1080',
+            pass, evidence: { phone, short, tablet, land } };
+    },
+
+    async touchMenuTaps(g) {
+        // Drawing is stubbed in checks, so draw the screen under test directly to register its targets
+        await g.page.setViewportSize({ width: 390, height: 844 });
+        const touch = (type, id, x, y) => g.ev(([type, id, x, y]) => window.dispatchEvent(
+            new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })), [type, id, x, y]);
+        const tapAt = async (p, moveBy = 0) => {
+            await touch('pointerdown', 7, p.x, p.y);
+            if (moveBy) await touch('pointermove', 7, p.x, p.y - moveBy);
+            await touch('pointerup', 7, p.x, p.y - moveBy);
+            await g.run(50);
+        };
+        // CSS centre of a registered target (or a point in it at fraction fx across)
+        const target = (i, fx = 0.5) => g.ev(([i, fx]) => {
+            const t = UI._taps[i], r = canvas.getBoundingClientRect();
+            return { x: r.left + (t.x + t.w * fx) * Layout.scale, y: r.top + (t.y + t.h / 2) * Layout.scale };
+        }, [i, fx]);
+        const r = {};
+        await g.ev(() => {
+            resizeCanvas(); Input.lastDevice = 'touch'; Settings.values.touchControls = 'auto';
+            Game.state = 'title'; Menu.selectedIndex = 0; UI.beginFrame(); Menu.drawTitle(ctx);
+        });
+        await tapAt(await target(6));                                   // SETTINGS
+        r.titleTap = await g.ev(() => Game.state);
+        await g.ev(() => { Settings.selectedIndex = 0; UI.beginFrame(); Settings.draw(ctx); });
+        const sfx = await g.ev(() => {                                  // the SFX slider row, 30% along its bar
+            const vx = SCREEN_W / 2 + 6, t = UI._taps[0], rc = canvas.getBoundingClientRect();
+            return { x: rc.left + (vx + 24 + 0.3 * 170) * Layout.scale, y: rc.top + (t.y + t.h / 2) * Layout.scale };
+        });
+        await tapAt(sfx);
+        r.sliderValue = await g.ev(() => Settings.values.sfxVolume);
+        await g.ev(() => { UI.beginFrame(); Settings.draw(ctx); });
+        await tapAt(await target(2), 40);                               // SCREEN SHAKE, dragged off: no tap
+        r.afterDrag = await g.ev(() => ({ state: Game.state, shake: Settings.values.screenShake }));
+        const back = await g.ev(() => { const b = Touch._backButton(); return { x: b.x, y: b.y }; });
+        await tapAt(back);
+        r.backTo = await g.ev(() => Game.state);
+        await g.ev(() => { Game.state = 'achievements'; Menu.achScroll = 0; UI.beginFrame(); Menu.drawAchievements(ctx); });
+        await tapAt({ x: 200, y: 600 }, 200);                           // drag up: scroll down the list
+        r.scrolled = await g.ev(() => Menu.achScroll);
+        await g.ev(() => { Game.startLevel(0, 'normal', false); WaveSystem.waves = []; });
+        await g.run(100);
+        await tapAt({ x: 200, y: 30 });                                 // the HUD strip
+        r.stripTap = await g.ev(() => Game.state);
+        await g.ev(() => { Settings.values.sfxVolume = 70; Settings._apply(); Input.lastDevice = 'keyboard'; Game.state = 'title'; });
+        await g.page.setViewportSize({ width: 1280, height: 720 });
+        await g.ev(() => resizeCanvas());
+        const pass = r.titleTap === 'settings' && r.sliderValue === 30 && r.afterDrag.state === 'settings' && r.afterDrag.shake === 'high'
+            && r.backTo === 'title' && r.scrolled >= 2 && r.stripTap === 'paused';
+        return { section: 'touch', expect: 'Portrait menus are tapped (a drag cancels the tap and scrolls lists), sliders jump to the tap, BACK goes back, and tapping the HUD strip pauses',
+            pass, evidence: r };
     },
 
     async casualPresetAutofire(g) {
