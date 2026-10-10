@@ -67,7 +67,7 @@ const MusicTracks = {
 };
 
 const Music = {
-    LOOKAHEAD: 0.2,     // seconds of notes scheduled ahead
+    LOOKAHEAD: 0.4,     // seconds of notes scheduled ahead (covers a main-thread hitch on a phone)
     players: [],        // playing tracks (the current one plus any fading out)
     current: null,
     _fx: null,

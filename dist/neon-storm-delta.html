@@ -7408,6 +7408,7 @@ const Renderer = {
             // Apply initial filter chain
             this._rebuildGameLayerFilters();
             this._rebuildFilterChain();
+            this._prewarmFilters();
 
             this.usePixi = true;
             this.ready = true;
@@ -7543,10 +7544,27 @@ const Renderer = {
                 resources: { bgUniforms: this._bgUniforms },
             });
             this._bgShaders[theme] = shader;
+            this._prewarmBackdrop(shader);
         }
         if (!this._bgMesh) this._bgMesh = new PIXI.Mesh({ geometry: this._bgGeometry, shader });
         else this._bgMesh.shader = shader;
         this.backdropTheme = theme;
+    },
+
+    // Compile a backdrop shader now (set during the briefing). With a 3D scene
+    // showing it stays hidden, so it would otherwise compile only when it takes
+    // over: when auto quality drops to LOW, which happens in the heaviest scene,
+    // usually the boss, on exactly the phones a compile stalls longest.
+    _prewarmBackdrop(shader) {
+        if (!this.app) return;
+        try {
+            if (!this._warmRT) this._warmRT = PIXI.RenderTexture.create({ width: 32, height: 32 });
+            const mesh = new PIXI.Mesh({ geometry: this._bgGeometry, shader });
+            this.app.renderer.render({ container: mesh, target: this._warmRT });
+            mesh.destroy();
+        } catch (e) {
+            console.warn('[Renderer] backdrop prewarm failed (it compiles on first use):', e);
+        }
     },
 
     // Per-frame uniforms: follows the level theme and reacts to bombs, bosses, Surge and bullet density
@@ -7686,6 +7704,35 @@ const Renderer = {
     // pixi-filters v6 (bundled by build.js) registers itself as PIXI.filters
     _filtersLib() {
         return (typeof PIXI !== 'undefined' && PIXI.filters && PIXI.filters.ShockwaveFilter) ? PIXI.filters : null;
+    },
+
+    // Compile every filter's shaders now, by rendering a tiny sprite through
+    // each of them once offscreen. Otherwise the god rays compile when the boss
+    // enters and the shockwave on the first bomb, and on phones a compile can
+    // block the main thread for long enough to starve the music scheduler.
+    _prewarmFilters() {
+        const filters = [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter,
+            this._glitchFilter, this._warpFilter, this._blurFilter, ...(this._shieldGlow || [])].filter(Boolean);
+        let rt = null, box = null;
+        try {
+            rt = PIXI.RenderTexture.create({ width: 32, height: 32 });
+            box = new PIXI.Container();
+            const s = new PIXI.Sprite(PIXI.Texture.WHITE);
+            s.width = s.height = 16; s.position.set(8, 8);
+            box.addChild(s);
+            for (const f of filters) {
+                const was = f.enabled;
+                f.enabled = true;
+                box.filters = [f];
+                this.app.renderer.render({ container: box, target: rt });
+                f.enabled = was;
+            }
+        } catch (e) {
+            console.warn('[Renderer] filter prewarm failed (effects still work, they compile on first use):', e);
+        } finally {
+            if (box) { box.filters = null; box.destroy({ children: true }); }
+            if (rt) rt.destroy(true);
+        }
     },
 
     _initShockwaveFilter() {
@@ -11213,10 +11260,18 @@ const Audio = {
     enabled: true,
 
     init() {
-        // Defer AudioContext creation to first user interaction (browser policy)
-        const createCtx = () => {
+        // Defer AudioContext creation to first user interaction (browser policy).
+        // Started by a touch (a phone or tablet): ask for bigger audio buffers.
+        // The default lowest latency leaves a busy phone's audio thread no slack,
+        // so it drops out; 'playback' adds a little SFX latency instead.
+        const createCtx = (e) => {
             if (this.ctx) return;
-            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            try {
+                this.ctx = new Ctx(e && e.type === 'touchstart' ? { latencyHint: 'playback' } : undefined);
+            } catch (err) {
+                this.ctx = new Ctx();
+            }
             this._buildMix();
             window.removeEventListener('click', createCtx);
             window.removeEventListener('keydown', createCtx);
@@ -11377,12 +11432,15 @@ const Audio = {
     // --- Player ---
 
     // Base shot: fires constantly, so it is short and soft (a triangle "pew" + a click)
+    // Base shot, ~8 a second while firing: a low muffled pop over a short kick
+    // (the old bright 1.5 kHz chirp grated at that rate)
     playShot() {
         if (!this._ok() || this._throttle('shot', 0.03)) return;
-        const t = this.ctx.currentTime, p = this._rPitch(0.12);
-        const out = this._createGain(0.32);
-        this._tone(t, out, { type: 'triangle', f: 1500 * p, f2: 650 * p, dur: 0.06, gain: 0.8 });
-        this._noise(t, out, { filter: 'highpass', f: 5000, dur: 0.015, gain: 0.25 });
+        const t = this.ctx.currentTime, p = this._rPitch(0.08);
+        const out = this._createGain(0.26);   // a little under the old chirp's level
+        this._tone(t, out, { type: 'triangle', f: 340 * p, f2: 160 * p, dur: 0.035, gain: 0.7, lp: 900 });    // pop
+        this._noise(t, out, { filter: 'bandpass', f: 700 * p, q: 1, dur: 0.02, gain: 0.4 });                  // its attack
+        this._tone(t, out, { type: 'sine', f: 140 * p, f2: 70 * p, dur: 0.045, gain: 0.6 });                  // kick
     },
 
     // Homing weapon: a missile whoosh
@@ -22692,7 +22750,7 @@ const MusicTracks = {
 };
 
 const Music = {
-    LOOKAHEAD: 0.2,     // seconds of notes scheduled ahead
+    LOOKAHEAD: 0.4,     // seconds of notes scheduled ahead (covers a main-thread hitch on a phone)
     players: [],        // playing tracks (the current one plus any fading out)
     current: null,
     _fx: null,

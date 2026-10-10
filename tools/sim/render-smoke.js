@@ -13,7 +13,8 @@
 // frames and a full frame (PixiJS render included) now and then. It then
 // repeats one level with Flash Reduction on, one on the Canvas 2D
 // fallback (no WebGL) and one with the shader backdrop instead of the 3D
-// scene. A level fails if its 3D scene broke and fell back. Takes a few minutes.
+// scene. A level fails if its 3D scene broke and fell back, or if a shader
+// program compiled during its boss fight. Takes a few minutes.
 
 const { launch, writeResult } = require('./harness');
 const { SCREENS, setLayout } = require('./screens');
@@ -75,11 +76,26 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
                 Enemies.draw(ectx); Player.draw(ectx); if (Boss.active) Boss.draw(ectx);
                 Particles.draw(ectx); Scoring.drawPopups(ectx);
             };
-            const stats = { maxEnemies: 0, boss: null, bombs: 0 };
+            const stats = { maxEnemies: 0, boss: null, bombs: 0, bossCompiles: 0 };
+            // Count shader compiles: none may happen once the boss is in (a compile can
+            // block a phone's main thread long enough to cut the music; see Renderer._prewarmFilters)
+            const gl = Renderer.usePixi && Renderer.app && Renderer.app.renderer.gl;
+            if (gl && !gl.__counted) {
+                const link = gl.linkProgram.bind(gl), source = gl.shaderSource.bind(gl);
+                let src = '';
+                gl.shaderSource = (sh, code) => { src = code; return source(sh, code); };
+                gl.linkProgram = p => {
+                    window.__links = (window.__links || 0) + 1;
+                    window.__linked = (window.__linked || []).concat((src.match(/uniform\s+\w+\s+(\w+)/g) || []).slice(0, 4).map(u => u.split(/\s+/).pop()).join(','));
+                    return link(p);
+                };
+                gl.__counted = true;
+            }
+            let links0 = 0;
             for (let f = 0; f < 60 * 70; f++) {
                 Input.keys['Space'] = true;
                 Player.x = 360 + Math.sin(f / 90) * 200;
-                if (f === 60 * 45) { Enemies.clear(); Boss.init(ALL_LEVELS[run.lvl].bossType); Boss.warningTimer = 0.5; }
+                if (f === 60 * 45) { Enemies.clear(); Boss.init(ALL_LEVELS[run.lvl].bossType); Boss.warningTimer = 0.5; links0 = window.__links || 0; }
                 if (f === 60 * 58) { Boss.phase = Boss.totalPhases; Boss.armor = []; }
                 if (f % 600 === 300 && Player.bombs > 0) { Player.bombs++; Input.keys['KeyB'] = true; stats.bombs++; }
                 Game.update(1 / 60);
@@ -98,6 +114,9 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             Settings.values.backdrop3d = true;
             if (run.fallback) Renderer.usePixi = true;
             if (Backdrop3D.broken) throw new Error('3D backdrop failed and fell back to the shader');
+            stats.bossCompiles = (window.__links || 0) - links0;
+            if (stats.bossCompiles > 0) throw new Error(stats.bossCompiles + ' shader program(s) compiled during the boss fight (stalls on phones; prewarm them): '
+                + window.__linked.slice(-stats.bossCompiles).map(u => '[' + u + ']').join(' '));
             return stats;
         }, run);
         results.levels[run.label] = { ok: r.ok, ...(r.out || {}), errors: r.errs };
