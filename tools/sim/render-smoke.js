@@ -86,6 +86,11 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
             for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }
             Input.lastDevice = 'keyboard'; Game.state = 'title';
         }],
+        ['touch controls', () => {
+            Input.lastDevice = 'touch';
+            for (const st of ['title', 'settings', 'paused', 'playing']) { Game.state = st; Game.draw(); }
+            Input.lastDevice = 'keyboard'; Game.state = 'title';
+        }],
     ];
     for (const [name, setup] of screens) {
         const src = setup.toString();

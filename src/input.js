@@ -8,7 +8,7 @@ const Input = {
     prevGamepadState: null,
     listeningForKey: null,    // Action name when waiting for key press
     listeningForButton: null, // Action name when waiting for gamepad button
-    lastDevice: 'keyboard',   // 'keyboard' | 'pad' — whichever was used last (for on-screen prompts)
+    lastDevice: 'keyboard',   // 'keyboard' | 'pad' | 'touch' — whichever was used last (for on-screen prompts)
 
     // Default key bindings
     defaultBindings: {
@@ -83,9 +83,11 @@ const Input = {
             this.keys[e.code] = false;
             e.preventDefault();
         });
+        Touch.init();
     },
 
     update() {
+        Touch.update();
         // Poll gamepad (fresh state for this frame)
         const gamepads = navigator.getGamepads ? navigator.getGamepads() : [];
         const gp = gamepads[0];
@@ -115,6 +117,7 @@ const Input = {
 
     // Call at END of frame to snapshot state for next frame's isPressed comparisons
     lateUpdate() {
+        Touch.lateUpdate();
         this.prevKeys = { ...this.keys };
         this.prevGamepadState = this.gamepadState ? {
             axes: [...this.gamepadState.axes],
@@ -124,6 +127,7 @@ const Input = {
 
     // Check if action is currently held
     isHeld(action) {
+        if (Touch.held[action]) return true;
         const keys = this.bindings[action];
         if (keys) {
             for (const k of keys) {
@@ -142,6 +146,7 @@ const Input = {
     isPressed(action) {
         // Don't process normal input while listening for rebind
         if (this.listeningForKey || this.listeningForButton) return false;
+        if (Touch.pressed[action]) return true;
 
         const keys = this.bindings[action];
         if (keys) {
@@ -173,6 +178,10 @@ const Input = {
             if (Math.abs(ax) > deadzone) x += ax;
             if (Math.abs(ay) > deadzone) y += ay;
         }
+
+        // Touch stick (analog)
+        x += Touch.move.x;
+        y += Touch.move.y;
 
         // Normalize
         const len = Math.sqrt(x * x + y * y);

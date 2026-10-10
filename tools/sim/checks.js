@@ -120,6 +120,37 @@ const checks = {
             pass: focused > 0, evidence: { shotsPerSec: free, shotsPerSecFocused: focused } };
     },
 
+    async touchStickForgiving(g) {
+        await startQuiet(g);
+        const r = await g.ev(() => {
+            Settings.values.touchControls = 'auto';
+            const ev = (type, id, x, y) => window.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
+            const R = Touch._radius(), y = window.innerHeight * 0.7;
+            const out = { R };
+            ev('pointerdown', 1, 100, y);
+            ev('pointermove', 1, window.innerWidth * 0.8, y); // slides far off to the right
+            Input.update();
+            out.farRight = { mx: +Touch.move.x.toFixed(2), owned: !!Touch.stick, fire: Input.isHeld('fire') };
+            ev('pointermove', 1, window.innerWidth * 0.8 - 1.5 * R, y); // reverses by less than the stick's width
+            Input.update();
+            out.reversed = +Touch.move.x.toFixed(2);
+            ev('pointerdown', 2, window.innerWidth - 4, window.innerHeight - 4); // corner: misses every button
+            Input.update();
+            out.cornerTap = Object.keys(Touch.held).filter(a => a !== 'fire');
+            out.stickKept = !!Touch.stick;
+            ev('pointerup', 2, 0, 0); ev('pointerup', 1, 0, 0);
+            Input.update();
+            out.released = { stick: !!Touch.stick, mx: Touch.move.x, fire: Input.isHeld('fire') };
+            out.device = Input.lastDevice;
+            Input.lastDevice = 'keyboard';
+            return out;
+        });
+        const pass = r.farRight.mx > 0.95 && r.farRight.owned && r.farRight.fire && r.reversed < -0.3
+            && r.cornerTap.length === 1 && r.stickKept && !r.released.stick && r.released.mx === 0 && !r.released.fire && r.device === 'touch';
+        return { section: 'touch', expect: 'The stick keeps its finger anywhere on screen, follows it past the rim (instant reversal), and missed button taps snap to the nearest',
+            pass, evidence: r };
+    },
+
     async casualPresetAutofire(g) {
         const r = await g.ev(() => {
             Settings.values.fireMode = 'manual';

@@ -35,7 +35,7 @@ See `tools/sim/README.md` for the weapon DPS, boss time-to-kill and bot play-thr
 
 ### Module System
 
-All 27 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
+All 28 source files in `src/` use **global scope** — no ES modules, no imports. They are concatenated by `build.js` in dependency order (defined in `SOURCE_FILES`). For `index.html` dev mode, they load via `<script>` tags in the same order. **Files can only reference globals from files listed above them in `SOURCE_FILES`.**
 
 ### Rendering Pipeline (Dual-Canvas)
 
@@ -85,6 +85,7 @@ Other states: settings, high_scores, hangar, tutorial
 | `Renderer` | renderer.js | PixiJS pipeline manager |
 | `GameConfig` | config.js | Live difficulty settings (mutated at level start) |
 | `Input` | input.js | Keyboard/gamepad polling |
+| `Touch` | touch.js | On-screen stick and buttons for touch screens; feeds `Input` |
 | `Audio` | audio.js | Procedural SFX via Web Audio API; the mix buses (SFX, music, compressor) |
 | `Music` | music.js | Procedural synthwave soundtrack, driven by game state each frame |
 | `Player` | player.js | Player ship state |
@@ -139,7 +140,7 @@ Saves are versioned: `SaveData.migrate()` (run first in `Game.init()`) upgrades 
 
 ### Prompts
 
-Menu hints go through `UI.keys()` (automatic in `UI.hint`): when `Input.lastDevice` is `'pad'`, ENTER/ESC become [A]/[B]. Wrap any new on-screen key names in `UI.keys()`.
+Menu hints go through `UI.keys()` (automatic in `UI.hint`): when `Input.lastDevice` is `'pad'` or `'touch'`, ENTER/ESC become [A]/[B] (the touch buttons are labelled to match). Wrap any new on-screen key names in `UI.keys()`.
 
 ### Boot Sequence (`main.js`)
 
