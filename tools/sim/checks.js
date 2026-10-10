@@ -247,6 +247,8 @@ const checks = {
         const r = {};
         await g.ev(() => {
             resizeCanvas(); Input.lastDevice = 'touch'; Settings.values.touchControls = 'auto';
+            // Synthetic taps aren't user gestures, so count the fullscreen requests instead
+            window.__fs = 0; document.documentElement.requestFullscreen = () => { window.__fs++; return Promise.resolve(); };
             Game.state = 'title'; Menu.selectedIndex = 0; UI.beginFrame(); Menu.drawTitle(ctx);
         });
         await tapAt(await target(6));                                   // SETTINGS
@@ -271,12 +273,17 @@ const checks = {
         await g.run(100);
         await tapAt({ x: 200, y: 30 });                                 // the HUD strip
         r.stripTap = await g.ev(() => Game.state);
+        r.fullscreenRequests = await g.ev(() => window.__fs);
+        await g.ev(() => { Settings.values.fullscreen = 'off'; window.__fs = 0; });
+        await tapAt({ x: 200, y: 30 });
+        r.fullscreenWhenOff = await g.ev(() => window.__fs);
+        await g.ev(() => { Settings.values.fullscreen = 'auto'; });
         await g.ev(() => { Settings.values.sfxVolume = 70; Settings._apply(); Input.lastDevice = 'keyboard'; Game.state = 'title'; });
         await g.page.setViewportSize({ width: 1280, height: 720 });
         await g.ev(() => resizeCanvas());
         const pass = r.titleTap === 'settings' && r.sliderValue === 30 && r.afterDrag.state === 'settings' && r.afterDrag.shake === 'high'
-            && r.backTo === 'title' && r.scrolled >= 2 && r.stripTap === 'paused';
-        return { section: 'touch', expect: 'Portrait menus are tapped (a drag cancels the tap and scrolls lists), sliders jump to the tap, BACK goes back, and tapping the HUD strip pauses',
+            && r.backTo === 'title' && r.scrolled >= 2 && r.stripTap === 'paused' && r.fullscreenRequests > 0 && r.fullscreenWhenOff === 0;
+        return { section: 'touch', expect: 'Portrait menus are tapped (a drag cancels the tap and scrolls lists), sliders jump to the tap, BACK goes back, tapping the HUD strip pauses, and taps ask for fullscreen unless FULLSCREEN is OFF',
             pass, evidence: r };
     },
 
