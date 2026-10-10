@@ -275,6 +275,7 @@ const Settings = {
         backdrop3d: true,         // three.js level backdrops (backdrop3d.js); off = shader backdrops
         touchControls: 'auto',    // 'auto' (shown once the screen is touched), 'on', 'off' — touch.js
         touchMove: 'drag',        // 'drag' (ship follows finger travel) or 'stick'
+        fullscreen: 'auto',       // 'auto' (touch screens go fullscreen on a tap — Touch._fullscreen) or 'off'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -292,6 +293,7 @@ const Settings = {
         { key: 'fireMode', label: 'FIRE MODE', type: 'cycle', options: ['manual', 'auto'] },
         { key: 'touchControls', label: 'TOUCH CONTROLS', type: 'cycle', options: ['auto', 'on', 'off'] },
         { key: 'touchMove', label: 'TOUCH MOVE', type: 'cycle', options: ['drag', 'stick'] },
+        { key: 'fullscreen', label: 'FULLSCREEN', type: 'cycle', options: ['auto', 'off'] },
         { key: 'controls', label: 'CONTROLS', type: 'action' },
         { key: 'back', label: 'BACK', type: 'action' }
     ],
@@ -314,6 +316,8 @@ const Settings = {
         Audio.sfxVolume = this.values.sfxVolume / 100;
         Audio.musicVolume = this.values.musicVolume / 100;
         GameConfig.fireMode = this.values.fireMode;
+        // FULLSCREEN OFF leaves fullscreen straight away
+        if (this.values.fullscreen === 'off' && document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
     },
 
     // Colorblind-safe enemy bullet color (replaces pink/red with high-contrast yellow)
@@ -384,7 +388,8 @@ const Settings = {
         UI.title(ctx, 'SETTINGS', 110);
         const cx = SCREEN_W / 2, P = Layout.portrait;
         // Portrait: rows as tall as fit (for tapping), labels and values closer to the centre
-        const rowH = P ? Math.max(54, Math.min(72, Math.floor((Layout.menuBottom() - 300) / this.items.length))) : 58;
+        const rowH = P ? Math.max(54, Math.min(72, Math.floor((Layout.menuBottom() - 300) / this.items.length)))
+            : Math.min(58, Math.floor(840 / this.items.length)); // landscape: the panel stays above the hint
         const top = P ? 190 : 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30;
         UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * rowH + 30, UI.CYAN);
 

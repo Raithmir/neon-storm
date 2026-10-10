@@ -24,6 +24,10 @@
 //    on the right goes to the nearest one, and a held button stays held when
 //    the thumb rolls off it.
 //  Pause: a button top-right in landscape; in portrait, tap the HUD strip.
+//  Fullscreen (Settings FULLSCREEN AUTO): a tap (touch release, which counts
+//  as a user gesture) enters fullscreen, hiding the browser and system bars;
+//  if the player leaves it, the next tap goes back in. Orientation isn't
+//  locked, so turning the phone still switches portrait / landscape.
 //
 //  Input reads Touch.held / Touch.pressed per action and Touch.move (analog);
 //  Player reads Touch.pending (drag travel still to cover, play-area px).
@@ -235,7 +239,14 @@ const Touch = {
         }
     },
 
+    _fullscreen() {
+        const el = document.documentElement;
+        if (Settings.values.fullscreen === 'off' || document.fullscreenElement || !el.requestFullscreen) return;
+        el.requestFullscreen({ navigationUI: 'hide' }).catch(() => {}); // refused (no gesture, iframe, iPhone): stay as is
+    },
+
     _up(e, released) {
+        if (released && e.pointerType === 'touch' && this.enabled()) this._fullscreen();
         const m = this.menuTouch;
         if (m && e.pointerId === m.id) {
             this.menuTouch = null;
