@@ -841,7 +841,7 @@ const Renderer = {
         const k = Math.max(1, Math.min(q.cap, Math.round(want * 4) / 4));
 
         // Overlay canvas (menus, HUD)
-        if (Math.round(SCREEN_W * k) !== canvas.width) {
+        if (Math.round(SCREEN_W * k) !== canvas.width || Math.round(SCREEN_H * k) !== canvas.height) {
             canvas.width = Math.round(SCREEN_W * k);
             canvas.height = Math.round(SCREEN_H * k);
         }

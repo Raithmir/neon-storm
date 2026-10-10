@@ -6606,28 +6606,75 @@ void main() {
 //  NEON STORM — Core Constants & Canvas Setup
 // ============================================================
 
-// --- Screen / Layout Constants ---
-const SCREEN_W = 1920;
-const SCREEN_H = 1080;
+// --- Screen / Layout ---
+// The play area is always PLAY_W × PLAY_H. The overlay's logical size and the
+// play area's place in it depend on the window (Layout.update):
+//   landscape: 1920×1080, the play area centred with HUD panels either side
+//   portrait:  as wide as the play area (or wider, if the window is short) and
+//              as tall as the window's shape; a HUD strip on top, the play
+//              area under it, and room for touch controls at the bottom
+// Draw code uses these names as before; they change only on a resize.
 const PLAY_W = 720;
 const PLAY_H = 960;
-const PLAY_X = (SCREEN_W - PLAY_W) / 2;
-const PLAY_Y = (SCREEN_H - PLAY_H) / 2;
-const HUD_LEFT_W = PLAY_X;
-const HUD_RIGHT_X = PLAY_X + PLAY_W;
-const HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
+let SCREEN_W = 1920;
+let SCREEN_H = 1080;
+let PLAY_X = (SCREEN_W - PLAY_W) / 2;
+let PLAY_Y = (SCREEN_H - PLAY_H) / 2;
+let HUD_LEFT_W = PLAY_X;
+let HUD_RIGHT_X = PLAY_X + PLAY_W;
+let HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
+
+const Layout = {
+    portrait: false,
+    scale: 1,            // CSS px per logical px
+    version: 0,          // bumps when the logical layout changes (caches rebake)
+    HUD_TOP: 150,        // portrait: height of the HUD strip above the play area
+
+    // Portrait whenever the window is clearly taller than wide
+    _wantPortrait(W, H) { return H > W * 1.1; },
+
+    // CSS px kept free under the play area for the touch controls (touch.js
+    // sizes its buttons from the same unit)
+    controlsH(W, H) { return 5.8 * Math.max(28, Math.min(48, Math.min(W, H) / 10)); },
+
+    update() {
+        const W = window.innerWidth, H = window.innerHeight;
+        const portrait = this._wantPortrait(W, H);
+        let sw, sh, px, py, scale;
+        if (portrait) {
+            scale = Math.min(W / PLAY_W, (H - this.controlsH(W, H)) / (this.HUD_TOP + PLAY_H));
+            sw = W / scale; sh = H / scale;
+            px = (sw - PLAY_W) / 2; py = this.HUD_TOP;
+        } else {
+            sw = 1920; sh = 1080;
+            scale = Math.min(W / sw, H / sh);
+            px = (sw - PLAY_W) / 2; py = (sh - PLAY_H) / 2;
+        }
+        // Whole logical px keep the overlay canvas crisp
+        sw = Math.round(sw); sh = Math.round(sh);
+        if (portrait !== this.portrait || sw !== SCREEN_W || sh !== SCREEN_H) this.version++;
+        this.portrait = portrait;
+        this.scale = scale;
+        SCREEN_W = sw; SCREEN_H = sh;
+        PLAY_X = Math.round(px); PLAY_Y = py;
+        HUD_LEFT_W = PLAY_X;
+        HUD_RIGHT_X = PLAY_X + PLAY_W;
+        HUD_RIGHT_W = SCREEN_W - HUD_RIGHT_X;
+    },
+
+    // Bottom of the area menus lay out in: in portrait, everything below the
+    // play area is left to the touch controls
+    menuBottom() { return this.portrait ? PLAY_Y + PLAY_H : SCREEN_H; },
+};
 
 // Canvas 2D overlay — menus, HUD, transitions
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-canvas.width = SCREEN_W;
-canvas.height = SCREEN_H;
 
 // Scale canvases to fit window
 function resizeCanvas() {
-    const scaleX = window.innerWidth / SCREEN_W;
-    const scaleY = window.innerHeight / SCREEN_H;
-    const scale = Math.min(scaleX, scaleY);
+    Layout.update();
+    const scale = Layout.scale;
     canvas.style.width = (SCREEN_W * scale) + 'px';
     canvas.style.height = (SCREEN_H * scale) + 'px';
 
@@ -6639,14 +6686,12 @@ function resizeCanvas() {
     if (typeof Renderer !== 'undefined' && Renderer.ready) Renderer.applyResolution(scale);
 }
 window.addEventListener('resize', resizeCanvas);
-// Safe initial sizing (Renderer not yet available — just size the overlay canvas)
-(function() {
-    const scaleX = window.innerWidth / SCREEN_W;
-    const scaleY = window.innerHeight / SCREEN_H;
-    const scale = Math.min(scaleX, scaleY);
-    canvas.style.width = (SCREEN_W * scale) + 'px';
-    canvas.style.height = (SCREEN_H * scale) + 'px';
-})();
+// Safe initial sizing (Renderer is not defined yet — just size the overlay canvas)
+Layout.update();
+canvas.style.width = (SCREEN_W * Layout.scale) + 'px';
+canvas.style.height = (SCREEN_H * Layout.scale) + 'px';
+canvas.width = SCREEN_W;
+canvas.height = SCREEN_H;
 
 
 // === backdrops.js ===
@@ -7914,7 +7959,7 @@ const Renderer = {
         const k = Math.max(1, Math.min(q.cap, Math.round(want * 4) / 4));
 
         // Overlay canvas (menus, HUD)
-        if (Math.round(SCREEN_W * k) !== canvas.width) {
+        if (Math.round(SCREEN_W * k) !== canvas.width || Math.round(SCREEN_H * k) !== canvas.height) {
             canvas.width = Math.round(SCREEN_W * k);
             canvas.height = Math.round(SCREEN_H * k);
         }
@@ -10739,7 +10784,7 @@ const Input = {
 // ============================================================
 //  TOUCH CONTROLS
 //  Movement plus buttons on the right, drawn on their own full-window canvas
-//  (#touch-ui) so they also fit the letterbox in portrait.
+//  (#touch-ui). In portrait they sit under the play area (Layout.controlsH).
 //
 //  Two ways to move in play (Settings TOUCH MOVE); menus always use the stick:
 //  - DRAG (default): a finger anywhere off the buttons moves the ship by the
@@ -10827,15 +10872,20 @@ const Touch = {
         return typeof Game !== 'undefined' && Game.state === 'playing' ? 'play' : 'menu';
     },
 
-    // Sizes scale with the short side of the window: u ≈ 39 px on a phone in landscape
-    _unit() { return Math.max(28, Math.min(window.innerWidth, window.innerHeight) / 10); },
+    // Sizes scale with the short side of the window: u ≈ 39 px on a phone
+    _unit() { return Math.max(28, Math.min(48, Math.min(window.innerWidth, window.innerHeight) / 10)); }, // as Layout.controlsH
     _radius() { return this._unit() * 1.5; },
     _dragMode() { return this._mode() === 'play' && Settings.values.touchMove !== 'stick'; },
     dragging() { return !!this.drag; },
 
+    // Portrait: top of the strip under the play area, CSS px
+    _belowPlay() { return (PLAY_Y + PLAY_H) * Layout.scale; },
+
     _buttons() {
         const W = window.innerWidth, H = window.innerHeight, u = this._unit();
         const at = (rx, ry) => ({ x: W - rx * u, y: H - ry * u });
+        // Landscape: top-right corner; portrait: under the play area on the left, clear of the HUD
+        const pause = Layout.portrait ? { x: 1.0 * u, y: this._belowPlay() + 0.9 * u } : { x: W - 1.0 * u, y: 1.0 * u };
         if (this._mode() === 'menu') {
             return [
                 { action: 'confirm', label: 'A', r: 1.15 * u, color: '#00ff88', ...at(2.0, 2.0) },
@@ -10847,7 +10897,7 @@ const Touch = {
                 { action: 'bomb', label: 'BOMB', r: 1.15 * u, color: '#ff3366', ...at(2.0, 2.0) },
                 { action: 'dash', label: 'DASH', r: 0.85 * u, color: '#ffcc00', ...at(4.6, 1.3) },
                 { action: 'surge', label: 'SURGE', r: 0.85 * u, color: '#cc44ff', ...at(1.3, 4.6) },
-                { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', x: W - 1.0 * u, y: 1.0 * u },
+                { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', ...pause },
             ];
         }
         return [
@@ -10855,7 +10905,7 @@ const Touch = {
             { action: 'bomb', label: 'BOMB', r: 0.85 * u, color: '#ff3366', ...at(4.6, 1.3) },
             { action: 'dash', label: 'DASH', r: 0.85 * u, color: '#ffcc00', ...at(1.3, 4.6) },
             { action: 'surge', label: 'SURGE', r: 0.85 * u, color: '#cc44ff', ...at(4.0, 4.0) },
-            { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', x: W - 1.0 * u, y: 1.0 * u },
+            { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', ...pause },
         ];
     },
 
@@ -11011,7 +11061,8 @@ const Touch = {
                 g.globalAlpha = 0.35;
                 g.fillStyle = '#00e5ff';
                 g.font = Math.round(0.36 * u) + "px 'Share Tech Mono', monospace";
-                g.fillText('DRAG ANYWHERE TO MOVE', Math.min(W / 2, 4.5 * u), H - 1.2 * u);
+                if (Layout.portrait) g.fillText('DRAG ANYWHERE TO MOVE', W / 2, this._belowPlay() + 0.75 * u);
+                else g.fillText('DRAG ANYWHERE TO MOVE', Math.min(W / 2, 4.5 * u), H - 1.2 * u);
             }
             this._drawButtons(g, u, W, H);
             return;
@@ -11043,12 +11094,6 @@ const Touch = {
             g.fillText(b.label, b.x, b.y);
         }
 
-        if (H > W) {
-            g.globalAlpha = 0.6;
-            g.fillStyle = '#8899bb';
-            g.font = Math.round(0.4 * u) + "px 'Share Tech Mono', monospace";
-            g.fillText('ROTATE FOR A BIGGER VIEW', W / 2, 1.0 * u);
-        }
         g.globalAlpha = 1;
     },
 
@@ -11885,9 +11930,10 @@ const Settings = {
     draw(ctx) {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'SETTINGS', 110);
-        const cx = SCREEN_W / 2;
-        const rowH = 58, top = 200;
-        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * rowH + 30, UI.CYAN);
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        // Portrait: rows tighter, labels and values closer to the centre
+        const rowH = P ? 54 : 58, top = P ? 190 : 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30;
+        UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * rowH + 30, UI.CYAN);
 
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
@@ -11902,21 +11948,21 @@ const Settings = {
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;
-                ctx.fillRect(cx - 400, y - 26, 800, 42);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, pw - 40, 42);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 400, y - 26, 3, 42);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, 3, 42);
             }
-            Neon.text(ctx, item.label, cx - 30, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
+            Neon.text(ctx, item.label, lx, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
                 { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
 
-            const vx = cx + 20;
+            const vx = P ? cx + 6 : cx + 20, barW = P ? 170 : 220;
             if (item.type === 'slider') {
                 const val = this.values[item.key];
-                Neon.bar(ctx, vx + 24, y - 10, 220, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
-                Neon.text(ctx, val + '%', vx + 270, y + 2, valColor, 18, { align: 'left', halo: 0 });
+                Neon.bar(ctx, vx + 24, y - 10, barW, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
+                Neon.text(ctx, val + '%', vx + barW + 50, y + 2, valColor, 18, { align: 'left', halo: 0 });
                 if (selected) {
                     Neon.text(ctx, '◂', vx + 8, y + 2, UI.CYAN, 18, { halo: 0 });
-                    Neon.text(ctx, '▸', vx + 340, y + 2, UI.CYAN, 18, { halo: 0 });
+                    Neon.text(ctx, '▸', vx + barW + 120, y + 2, UI.CYAN, 18, { halo: 0 });
                 }
             } else if (item.type === 'cycle') {
                 const val = this.values[item.key].toString().toUpperCase();
@@ -12037,11 +12083,14 @@ const ControlsScreen = {
         UI.title(ctx, 'CONTROLS', 100);
         const cx = SCREEN_W / 2;
         const items = this.getItems();
-        const top = 220, lineH = 50;
-        UI.panel(ctx, cx - 440, top - 70, 880, items.length * lineH + 60, UI.CYAN);
-        UI.label(ctx, 'ACTION', cx - 260, top - 30, UI.DIM, 14);
-        UI.label(ctx, 'KEYBOARD', cx, top - 30, UI.DIM, 14);
-        UI.label(ctx, 'GAMEPAD', cx + 260, top - 30, UI.DIM, 14);
+        const P = Layout.portrait;
+        // Portrait: the three columns pulled in to fit the panel
+        const top = 220, lineH = 50, pw = UI.w(880);
+        const ax = P ? cx - 252 : cx - 260, kx = P ? cx - 10 : cx, gx = P ? cx + 248 : cx + 260;
+        UI.panel(ctx, cx - pw / 2, top - 70, pw, items.length * lineH + 60, UI.CYAN);
+        UI.label(ctx, 'ACTION', ax, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'KEYBOARD', kx, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'GAMEPAD', gx, top - 30, UI.DIM, 14);
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
@@ -12054,29 +12103,30 @@ const ControlsScreen = {
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;
-                ctx.fillRect(cx - 420, y - 26, 840, 40);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, pw - 40, 40);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 420, y - 26, 3, 40);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, 3, 40);
             }
-            Neon.text(ctx, item.label, cx - 260, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
+            Neon.text(ctx, item.label, ax, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
             const listenKey = this.mode === 'rebind_key' && selected;
             const listenBtn = this.mode === 'rebind_button' && selected;
-            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), cx, y,
+            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), kx, y,
                 listenKey ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenKey ? 0.4 : 0, weight: '' });
-            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), cx + 260, y,
+            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), gx, y,
                 listenBtn ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenBtn ? 0.4 : 0, weight: '' });
         }
 
+        const bottom = Layout.menuBottom(), fy = bottom - (P ? 120 : 90), tw = UI.w(1200);
         if (this.mode === 'rebind_key') {
-            UI.label(ctx, 'Press any key to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
+            UI.para(ctx, 'Press any key to bind, or ESC to cancel', cx, fy, tw, '#ffee33', 16, 26);
         } else if (this.mode === 'rebind_button') {
-            UI.label(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
+            UI.para(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, fy, tw, '#ffee33', 16, 26);
         } else {
-            UI.label(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, SCREEN_H - 90, UI.DIM, 15);
+            UI.para(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, fy, tw, UI.DIM, 15, 26);
         }
-        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, SCREEN_H - 62,
+        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, bottom - 62,
             Input.gamepadState ? '#00ff88' : UI.DIM, 14);
-        UI.hint(ctx, 'ESC BACK', SCREEN_H - 34);
+        UI.hint(ctx, 'ESC BACK', bottom - 34);
     }
 };
 
@@ -12410,9 +12460,9 @@ const CustomDifficulty = {
         UI.background(ctx, { dim: 0.6 });
         UI.title(ctx, 'CUSTOM DIFFICULTY', 90, '#cc44ff');
         UI.label(ctx, 'Scores will not be recorded to leaderboards', SCREEN_W / 2, 140, UI.DIM, 15);
-        const cx = SCREEN_W / 2;
-        const top = 200, lineH = 44;
-        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * lineH + 30, '#cc44ff');
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        const top = 200, lineH = P ? 48 : 44, pw = UI.w(840), lx = P ? cx - 16 : cx - 30, vx = P ? cx + 10 : cx + 20;
+        UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * lineH + 30, '#cc44ff');
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
             const y = top + i * lineH;
@@ -12424,18 +12474,18 @@ const CustomDifficulty = {
             if (selected) {
                 ctx.fillStyle = '#cc44ff';
                 ctx.globalAlpha = 0.14;
-                ctx.fillRect(cx - 400, y - 24, 800, 36);
+                ctx.fillRect(cx - pw / 2 + 20, y - 24, pw - 40, 36);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 400, y - 24, 3, 36);
+                ctx.fillRect(cx - pw / 2 + 20, y - 24, 3, 36);
             }
-            Neon.text(ctx, item.label, cx - 30, y, selected ? '#ffffff' : UI.DIM, selected ? 18 : 17, { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
+            Neon.text(ctx, item.label, lx, y, selected ? '#ffffff' : UI.DIM, selected ? 18 : 17, { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
             const val = item.key === 'startLevel' ? this.startLevel : this._getVal(item);
             if (item.type === 'toggle') {
-                Neon.text(ctx, val ? 'ON' : 'OFF', cx + 20, y, val ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: selected ? 0.3 : 0 });
+                Neon.text(ctx, val ? 'ON' : 'OFF', vx, y, val ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: selected ? 0.3 : 0 });
             } else if (item.type === 'cycle') {
                 const idx = item.options.indexOf(val);
                 const display = (item.labels ? item.labels[idx] : String(val) + (item.suffix || '')).toUpperCase();
-                Neon.text(ctx, selected ? '◂  ' + display + '  ▸' : display, cx + 20, y, selected ? UI.CYAN : UI.TEXT, 17, { align: 'left', halo: selected ? 0.3 : 0 });
+                Neon.text(ctx, selected ? '◂  ' + display + '  ▸' : display, vx, y, selected ? UI.CYAN : UI.TEXT, 17, { align: 'left', halo: selected ? 0.3 : 0 });
             }
         }
         UI.hint(ctx, '↑↓ SELECT   ←→ ADJUST   ENTER CONFIRM   ESC BACK');
@@ -12547,8 +12597,10 @@ const Hangar = {
         UI.title(ctx, 'HANGAR', 100);
         Neon.text(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, 158, '#ffaa00', 20, { halo: 0.3 });
 
-        const cx = SCREEN_W / 2;
-        const lx = cx - 600, lw = 540, top = 210, ph = 640;
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        // Portrait: the list above, the preview under it
+        const lw = UI.w(540), lx = P ? cx - lw / 2 : cx - 600, top = P ? 196 : 210, ph = P ? 560 : 640;
+        const catStep = P ? 92 : 100, itemStep = P ? 82 : 108;
         const inItems = this.mode !== 'categories';
         UI.panel(ctx, lx, top, lw, ph, UI.CYAN, { title: inItems ? this.categories[this.categoryIndex] : 'CATEGORIES' });
 
@@ -12557,7 +12609,7 @@ const Hangar = {
             const keys = ['skins', 'trails', 'bullets', 'explosions'];
             const equipKeys = ['skin', 'trail', 'bullet', 'explosion'];
             for (let i = 0; i < this.categories.length; i++) {
-                const y = top + 90 + i * 100;
+                const y = top + (P ? 72 : 90) + i * catStep;
                 const selected = i === this.categoryIndex;
                 UI.item(ctx, this.categories[i], lx + lw / 2, y, selected, { w: lw - 60, size: 26 });
                 if (i < 4) {
@@ -12575,16 +12627,16 @@ const Hangar = {
             const equipKey = this._getEquipKey();
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
-                const y = top + 80 + i * 108;
+                const y = top + (P ? 64 : 80) + i * itemStep;
                 const selected = i === this.itemIndex;
                 const owned = this.unlocked[unlockKey].includes(item.id);
                 const isEquipped = this.equipped[equipKey] === item.id;
                 if (selected) {
                     ctx.fillStyle = item.color;
                     ctx.globalAlpha = 0.12;
-                    ctx.fillRect(lx + 20, y - 36, lw - 40, 84);
+                    ctx.fillRect(lx + 20, y - 36, lw - 40, itemStep - 16);
                     ctx.globalAlpha = 1;
-                    ctx.fillRect(lx + 20, y - 36, 3, 84);
+                    ctx.fillRect(lx + 20, y - 36, 3, itemStep - 16);
                 }
                 // Swatch
                 ctx.save();
@@ -12615,14 +12667,15 @@ const Hangar = {
         }
 
         // Preview
-        const px = cx + 60, pw = 540;
-        UI.panel(ctx, px, top, pw, ph, previewItem ? previewItem.color : UI.DIM, { title: 'PREVIEW', fill: 'rgba(3, 1, 12, 0.85)' });
+        const pw = lw, px = P ? lx : cx + 60;
+        const pTop = P ? top + ph + 16 : top, pH = P ? Layout.menuBottom() - 70 - pTop : ph;
+        UI.panel(ctx, px, pTop, pw, pH, previewItem ? previewItem.color : UI.DIM, { title: 'PREVIEW', fill: 'rgba(3, 1, 12, 0.85)' });
         if (previewItem) {
             ctx.save();
-            ctx.beginPath(); ctx.rect(px + 2, top + 28, pw - 4, ph - 30); ctx.clip();
-            this._drawPreview(ctx, previewCat, previewItem, px + pw / 2, top + 30 + (ph - 30) / 2, pw, ph - 30);
+            ctx.beginPath(); ctx.rect(px + 2, pTop + 28, pw - 4, pH - 30); ctx.clip();
+            this._drawPreview(ctx, previewCat, previewItem, px + pw / 2, pTop + 30 + (pH - 30) / 2, pw, pH - 30);
             ctx.restore();
-            UI.label(ctx, previewItem.name.toUpperCase(), px + pw / 2, top + ph - 24, previewItem.color, 18);
+            UI.label(ctx, previewItem.name.toUpperCase(), px + pw / 2, pTop + pH - 24, previewItem.color, 18);
         }
         UI.hint(ctx, '↑↓ SELECT   ENTER CONFIRM   ESC BACK');
     },
@@ -12786,17 +12839,22 @@ const Tutorial = {
         UI.background(ctx, { dim: 0.6 });
         UI.title(ctx, 'HOW TO PLAY', 100);
         const page = this.pages[this.pageIndex];
-        const cx = SCREEN_W / 2;
-        UI.panel(ctx, cx - 420, 170, 840, 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
+        const cx = SCREEN_W / 2, P = Layout.portrait, pw = UI.w(840);
+        UI.panel(ctx, cx - pw / 2, 170, pw, P ? Layout.menuBottom() - 300 : 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
         Neon.text(ctx, page.title, cx, 250, UI.MAGENTA, 38, { core: 0.4 });
         let y = 320;
+        const x0 = cx - pw / 2 + (P ? 36 : 80);
         for (const line of page.lines) {
             const indent = line.startsWith('  ');
-            Neon.text(ctx, line.trim(), cx - 340 + (indent ? 40 : 0), y, indent ? UI.CYAN : UI.TEXT, 20, { align: 'left', halo: 0, weight: indent ? 'bold' : '' });
-            y += 36;
+            const x = x0 + (indent ? 40 : 0);
+            // Portrait: a line too long for the panel wraps
+            for (const part of P && line.trim() ? UI.wrap(ctx, line.trim(), cx + pw / 2 - 30 - x, 20, indent ? 'bold' : '') : [line.trim()]) {
+                Neon.text(ctx, part, x, y, indent ? UI.CYAN : UI.TEXT, 20, { align: 'left', halo: 0, weight: indent ? 'bold' : '' });
+                y += 36;
+            }
         }
         for (let i = 0; i < this.pages.length; i++) {
-            UI.pip(ctx, cx + (i - (this.pages.length - 1) / 2) * 30, SCREEN_H - 110, 6, UI.CYAN, i === this.pageIndex);
+            UI.pip(ctx, cx + (i - (this.pages.length - 1) / 2) * 30, Layout.menuBottom() - 110, 6, UI.CYAN, i === this.pageIndex);
         }
         const nav = [];
         if (this.pageIndex > 0) nav.push('← PREV');
@@ -13053,8 +13111,19 @@ const Neon = {
     text(ctx, str, x, y, color, size, opts) {
         const o = opts || {};
         const a = ctx.globalAlpha;
-        ctx.font = (o.weight === undefined ? 'bold ' : o.weight + ' ') + size + 'px ' + this.FONT;
-        ctx.textAlign = o.align || 'center';
+        const weight = o.weight === undefined ? 'bold ' : o.weight + ' ';
+        const align = o.align || 'center';
+        // Portrait overlay (a phone held upright): keep small text readable,
+        // and shrink a line that would run off the screen
+        const fit = Layout.portrait && ctx.canvas === canvas;
+        if (fit) size = UI.fs(size);
+        ctx.font = weight + size + 'px ' + this.FONT;
+        if (fit) {
+            const room = (align === 'center' ? 2 * Math.min(x, SCREEN_W - x) : align === 'left' ? SCREEN_W - x : x) - 16;
+            const w = ctx.measureText(str).width;
+            if (w > room) { size = Math.floor(size * room / w); ctx.font = weight + size + 'px ' + this.FONT; }
+        }
+        ctx.textAlign = align;
         ctx.textBaseline = o.baseline || 'alphabetic';
         ctx.lineJoin = 'round';
         const halo = o.halo !== undefined ? o.halo : 0.35;
@@ -13166,6 +13235,7 @@ const UI = {
         const c = document.createElement('canvas');
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
+        c._layout = Layout.version;
         const g = c.getContext('2d');
         g.scale(k, k);
         const horizon = SCREEN_H * 0.62;
@@ -13232,7 +13302,7 @@ const UI = {
     // grid scrolling toward the viewer. opts.dim darkens it for busy screens.
     background(ctx, opts) {
         const o = opts || {};
-        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale || this._bgCache._layout !== Layout.version) this._bgCache = this._bakeBackground();
         ctx.drawImage(this._bgCache, 0, 0, SCREEN_W, SCREEN_H);
         const horizon = SCREEN_H * 0.62;
         const cx = SCREEN_W / 2;
@@ -13284,7 +13354,39 @@ const UI = {
     },
 
     hint(ctx, text, y) {
-        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || SCREEN_H - 40, this.DIM, 15, { weight: '', halo: 0 });
+        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || Layout.menuBottom() - 40, this.DIM, 15, { weight: '', halo: 0 });
+    },
+
+    // --- Portrait (phone) layout ---
+
+    // Smallest text size on the portrait overlay: 22 logical px (~12 CSS px on a
+    // typical phone), more where the overlay is scaled down further (short phones)
+    get TEXT_MIN() { return Math.max(22, Math.round(11 / Layout.scale)); },
+    // Text size as drawn: in portrait nothing goes below TEXT_MIN (idempotent)
+    fs(size) { return Layout.portrait ? Math.max(size, this.TEXT_MIN) : size; },
+    // Width for a centred block: `w` in landscape, capped to the screen in portrait
+    w(w) { return Layout.portrait ? Math.min(w, SCREEN_W - 32) : w; },
+
+    // Split text into lines no wider than maxW at this size (as Neon.text draws it)
+    wrap(ctx, text, maxW, size, weight) {
+        ctx.font = (weight === undefined ? 'bold ' : weight + ' ') + this.fs(size) + 'px ' + Neon.FONT;
+        const lines = [];
+        let line = '';
+        for (const word of String(text).split(' ')) {
+            const next = line ? line + ' ' + word : word;
+            if (line && ctx.measureText(next).width > maxW) { lines.push(line); line = word; } else line = next;
+        }
+        if (line) lines.push(line);
+        return lines;
+    },
+
+    // Wrapped paragraph; returns the y below it
+    para(ctx, text, x, y, maxW, color, size, lineH, align) {
+        for (const line of this.wrap(ctx, text, maxW, size, '')) {
+            Neon.text(ctx, line, x, y, color, size, { weight: '', halo: 0, align: align || 'center' });
+            y += lineH;
+        }
+        return y;
     },
 
     // Prompt text for the device in use: with a gamepad, key names become its
@@ -13339,7 +13441,7 @@ const UI = {
         const o = opts || {};
         const w = o.w || 420;
         const color = o.color || this.CYAN;
-        const size = o.size || 24;
+        const size = this.fs(o.size || 24);
         if (selected) {
             const pulse = Renderer.calm() ? 0.25 : 0.2 + Math.sin(this.time() * 4) * 0.06;
             const g = ctx.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
@@ -13369,13 +13471,15 @@ const UI = {
         });
         ctx.globalAlpha = 1;
         if (o.desc) {
-            Neon.text(ctx, o.desc, cx, y + size * 0.95, selected ? this.TEXT : this.DIM, 14, { weight: '', halo: 0 });
+            // Portrait: a description too wide for the entry wraps onto a second line
+            const lines = Layout.portrait ? this.wrap(ctx, o.desc, w - 24, 14, '') : [o.desc];
+            lines.forEach((line, i) => Neon.text(ctx, line, cx, y + size * 0.95 + i * this.fs(14) * 1.2, selected ? this.TEXT : this.DIM, 14, { weight: '', halo: 0 }));
         }
     },
 
-    // Horizontal row of tabs; returns nothing. colors[] optional per tab.
-    tabs(ctx, labels, selectedIndex, cx, y, colors) {
-        const tw = 170;
+    // Horizontal row of tabs; returns nothing. colors[] optional per tab, tabW their width.
+    tabs(ctx, labels, selectedIndex, cx, y, colors, tabW) {
+        const tw = tabW || 170;
         const x0 = cx - (labels.length * tw) / 2;
         for (let i = 0; i < labels.length; i++) {
             const x = x0 + i * tw + tw / 2;
@@ -20085,9 +20189,11 @@ const Background = {
 // === hud.js ===
 // ============================================================
 //  HUD RENDERER
-//  Two side panels either side of the play area, built from UI kit cards:
+//  Landscape: two side panels either side of the play area, built from UI kit cards:
 //    left:  pilot (lives, bombs, shield), armament (weapon, drones), Surge, dash
 //    right: score, chain, run stats, mission (level, time, escort), controls
+//  Portrait: one strip above the play area (Layout.HUD_TOP) with the same
+//  essentials, shield and escort bars under it (_drawPortrait)
 // ============================================================
 const HUD = {
     _bg: null,          // canvas behind the overlay holding the static panel backgrounds
@@ -20107,8 +20213,10 @@ const HUD = {
         }
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
+        c._layout = Layout.version;
         const g = c.getContext('2d');
         g.setTransform(k, 0, 0, k, 0, 0);
+        if (Layout.portrait) return this._bakePortrait(g);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -20132,6 +20240,32 @@ const HUD = {
         }
     },
 
+    // Portrait: the whole screen is panel (the play area covers its part), with
+    // glowing edges around the play area
+    _bakePortrait(g) {
+        const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
+        grad.addColorStop(0, '#07020f');
+        grad.addColorStop(1, '#10031f');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        g.fillStyle = 'rgba(255, 43, 214, 0.035)';
+        for (let y = 0; y < SCREEN_H; y += 4) g.fillRect(0, y, SCREEN_W, 1);
+        for (const [y, dir] of [[PLAY_Y, -1], [PLAY_Y + PLAY_H, 1]]) {
+            const glow = g.createLinearGradient(0, y, 0, y + dir * 30);
+            glow.addColorStop(0, 'rgba(255, 43, 214, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 43, 214, 0)');
+            g.fillStyle = glow;
+            g.fillRect(0, dir < 0 ? y - 30 : y, SCREEN_W, 30);
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(0, y - 1, SCREEN_W, 2);
+        }
+        if (PLAY_X > 0) {
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(PLAY_X - 1, PLAY_Y, 2, PLAY_H);
+            g.fillRect(PLAY_X + PLAY_W - 1, PLAY_Y, 2, PLAY_H);
+        }
+    },
+
     // Called by Game.draw after every frame: the background shows only under the HUD
     showBackground(on) {
         const c = this._bg;
@@ -20146,11 +20280,111 @@ const HUD = {
     },
 
     draw(ctx) {
-        if (!this._bg || this._bg._scale !== Renderer.uiScale) this._bakeBackground();
+        if (!this._bg || this._bg._scale !== Renderer.uiScale || this._bg._layout !== Layout.version) this._bakeBackground();
         this._drawn = true;
-        this._drawLeft(ctx);
-        this._drawRight(ctx);
+        if (Layout.portrait) {
+            this._drawPortrait(ctx);
+        } else {
+            this._drawLeft(ctx);
+            this._drawRight(ctx);
+        }
         this._drawDanger(ctx);
+    },
+
+    // Mission line: level / wave / boss, and the clock
+    _mission() {
+        const rush = BossRush.active, isEndless = Game.currentLevelIndex === -1;
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const time = Math.floor(clock / 60) + ':' + Math.floor(clock % 60).toString().padStart(2, '0');
+        const label = rush ? (BossRush.practice ? 'PRACTICE' : 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length)
+            : isEndless ? 'WAVE ' + EndlessMode.wave : 'LEVEL ' + (Game.currentLevelIndex + 1);
+        return { label, time };
+    },
+
+    // Portrait strip: row 1 mission + score | chain | lives + bombs,
+    // row 2 weapon + drones | Surge | dash; shield and escort under the play area
+    _drawPortrait(ctx) {
+        const x0 = PLAY_X, t = UI.time();
+        const m = this._mission();
+        UI.label(ctx, m.label + '   ' + m.time, x0 + 16, 28, UI.DIM, 14, 'left');
+        Neon.text(ctx, Scoring.score.toLocaleString(), x0 + 16, 74, '#ffffff', 40, { align: 'left', core: 0.2, halo: 0.35 });
+
+        // Chain
+        const mult = Scoring.multiplier;
+        const chainColor = mult >= 5 ? '#ffee33' : mult >= 3 ? '#ff8800' : UI.CYAN;
+        const chx = x0 + 268, chw = 210;
+        if (Scoring.chain > 0) {
+            Neon.text(ctx, Scoring.chain + '', chx, 60, chainColor, 34, { align: 'left', core: 0.3 });
+            Neon.text(ctx, mult + 'x', chx + chw, 60, chainColor, 34, { align: 'right', core: 0.4 });
+            const timerPct = Scoring.chainTimer / (Scoring.chainTimerMax / GameConfig.chainTimerSpeed);
+            Neon.bar(ctx, chx, 72, chw, 6, timerPct, timerPct > 0.3 ? '#00ff88' : '#ff3355', 0);
+        } else {
+            UI.label(ctx, 'CHAIN', chx + chw / 2, 60, '#4a5468', 14);
+        }
+
+        // Lives and bombs, right-aligned
+        const right = x0 + PLAY_W - 16;
+        const lives = Math.min(Player.lives, 6);
+        for (let i = 0; i < lives; i++) UI.ship(ctx, right - 10 - i * 30, 26, 10);
+        if (Player.lives > 6) UI.label(ctx, '+' + (Player.lives - 6), right - 6 * 30 - 4, 34, UI.CYAN, 14, 'right');
+        if (GameConfig.bombs.enabled) {
+            for (let i = 0; i < Player.bombs; i++) {
+                const bx = right - 10 - i * 28, by = 64;
+                ctx.save(); ctx.translate(bx, by);
+                Neon.path(ctx, Neon.polygon(6, Math.PI / 6), 9, true);
+                ctx.fillStyle = '#ff8800'; ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1;
+                Neon.stroke(ctx, '#ff8800', 0.9, false);
+                ctx.restore();
+                Neon.light(ctx, bx, by, 2.2, '#ffcc66', 1);
+            }
+        }
+
+        // Row 2: weapon and drones
+        const weaponColors = { none: '#8899aa', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
+        const weaponNames = { none: 'BASE SHOT', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
+        const wc = weaponColors[Player.primaryWeapon] || '#8899aa';
+        Neon.text(ctx, weaponNames[Player.primaryWeapon] || 'BASE SHOT', x0 + 16, 114, wc, 14, { align: 'left', halo: 0.2 });
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x0 + 24 + i * 18, 134, 6, wc, i < Player.primaryLevel);
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x0 + 128 + i * 18, 134, 6, '#cc44ff', i < Player.droneLevel);
+
+        // Surge
+        if (GameConfig.graze.enabled) {
+            const pct = Scoring.surgeCharge / Scoring.surgeMax;
+            const ready = pct >= 1 && !Scoring.surgeActive;
+            const sc = Scoring.surgeActive ? '#ffffff' : (ready ? '#ffee33' : UI.CYAN);
+            const sx = x0 + 240, sw = 240;
+            let msg = Math.floor(pct * 100) + '%';
+            if (Scoring.surgeActive) msg = Scoring.surgeDuration.toFixed(1) + 's';
+            else if (ready) msg = 'READY';
+            UI.label(ctx, 'SURGE', sx, 114, sc, 14, 'left');
+            ctx.globalAlpha = ready && !Renderer.calm() ? 0.7 + Math.sin(t * 6) * 0.3 : 1;
+            Neon.text(ctx, msg, sx + sw, 114, ready || Scoring.surgeActive ? sc : UI.TEXT, 14, { align: 'right', halo: ready ? 0.4 : 0 });
+            ctx.globalAlpha = 1;
+            Neon.bar(ctx, sx, 124, sw, 14, Scoring.surgeActive ? Scoring.surgeDuration / Scoring.surgeMaxDuration : pct, sc, 10);
+        }
+
+        // Dash
+        if (GameConfig.dash.enabled) {
+            const ready = Player.dashCooldown <= 0, cd = GameConfig.dash.cooldown || 1;
+            const dx = x0 + 504, dw = PLAY_W - 520;
+            UI.label(ctx, 'DASH', dx, 114, ready ? '#00ff88' : UI.DIM, 14, 'left');
+            Neon.text(ctx, ready ? 'READY' : Player.dashCooldown.toFixed(1) + 's', dx + dw, 114, ready ? '#00ff88' : UI.DIM, 14, { align: 'right', halo: ready ? 0.3 : 0 });
+            Neon.bar(ctx, dx, 126, dw, 10, ready ? 1 : 1 - Player.dashCooldown / cd, ready ? '#00ff88' : '#4a5a70', 0);
+        }
+
+        // Under the play area: shield and escort
+        let by = PLAY_Y + PLAY_H + 36;
+        if (Player.maxShieldHp > 0) {
+            UI.label(ctx, 'SHIELD', x0 + 16, by, UI.DIM, 14, 'left');
+            Neon.bar(ctx, x0 + 120, by - 14, 220, 14, Player.shieldHp / Player.maxShieldHp,
+                Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff', Player.maxShieldHp);
+            by += 34;
+        }
+        if (Escort.active && Escort.alive) {
+            const ePct = Escort.hp / Escort.maxHp;
+            UI.label(ctx, 'AURORA', x0 + 16, by, '#44ff88', 14, 'left');
+            Neon.bar(ctx, x0 + 120, by - 14, 220, 12, ePct, ePct > 0.3 ? '#44ff88' : '#ff3355', 10);
+        }
     },
 
     _drawLeft(ctx) {
@@ -20390,6 +20624,8 @@ const FpsMeter = {
 //  Screens are drawn with the UI kit (ui-kit.js). `items` is set while
 //  drawing and read by Game.update() for navigation, so keep the lists
 //  and their order in step with the handlers there.
+//  Each screen also has a portrait layout (Layout.portrait): one column at
+//  least 720 wide, above Layout.menuBottom() (the touch controls are below).
 // ============================================================
 const Menu = {
     selectedIndex: 0,
@@ -20400,14 +20636,14 @@ const Menu = {
         const t = UI.time();
 
         // Logo
-        const cx = SCREEN_W / 2;
+        const cx = SCREEN_W / 2, P = Layout.portrait;
         const bob = Renderer.calm() ? 0 : Math.sin(t * 1.3) * 4;
-        Neon.text(ctx, 'NEON STORM', cx - 26, 200 + bob, UI.CYAN, 110, { core: 0.5, halo: 0.55 });
-        Neon.text(ctx, 'δ', cx + 350, 150 + bob, UI.MAGENTA, 56, { core: 0.4 });
-        Neon.text(ctx, 'BULLET HELL SHOOTER', cx, 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
+        Neon.text(ctx, 'NEON STORM', cx - (P ? 20 : 26), 200 + bob, UI.CYAN, P ? 88 : 110, { core: 0.5, halo: 0.55 });
+        Neon.text(ctx, 'δ', cx + (P ? 276 : 350), (P ? 158 : 150) + bob, UI.MAGENTA, P ? 46 : 56, { core: 0.4 });
+        Neon.text(ctx, 'BULLET HELL SHOOTER', cx, P ? 244 : 250, UI.MAGENTA, 20, { weight: '', halo: 0.3, core: 0 });
 
         // The player's ship hovering over the grid, engines lit
-        const sy = 870 + (Renderer.calm() ? 0 : Math.sin(t * 2) * 6);
+        const sy = (P ? 975 : 870) + (Renderer.calm() ? 0 : Math.sin(t * 2) * 6);
         const f = Math.sin(t * 30) * 3;
         Neon.flame(ctx, cx - 20, sy + 30, 9, 26 + f, Hangar.trailColor, 0.9);
         Neon.flame(ctx, cx + 20, sy + 30, 9, 26 - f, Hangar.trailColor, 0.9);
@@ -20416,18 +20652,21 @@ const Menu = {
         // Menu
         this.items = ['NEW GAME', 'ENDLESS MODE', 'BOSS MODES', 'HANGAR', 'HIGH SCORES', 'ACHIEVEMENTS', 'SETTINGS', 'HOW TO PLAY'];
         const rushLocked = !BossRush.unlocked() && !BossRush.practiceLevels().length;
-        UI.panel(ctx, cx - 250, 296, 500, 444, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
+        // Portrait: taller rows, easier to hit with a thumb on the stick
+        const pw = P ? 560 : 500, step = P ? 60 : 50, top = P ? 290 : 296, ph = P ? 8 * step + 40 : 444;
+        UI.panel(ctx, cx - pw / 2, top, pw, ph, UI.CYAN, { fill: 'rgba(6, 2, 20, 0.6)' });
         for (let i = 0; i < this.items.length; i++) {
-            UI.item(ctx, this.items[i], cx, 350 + i * 50, i === this.selectedIndex, { w: 440, disabled: i === 2 && rushLocked });
+            UI.item(ctx, this.items[i], cx, top + 54 + i * step, i === this.selectedIndex, { w: pw - 60, disabled: i === 2 && rushLocked });
         }
+        const ly = top + ph + 24, lw = UI.w(1200);
         if (rushLocked && this.selectedIndex === 2) {
-            UI.label(ctx, 'DEFEAT A BOSS TO UNLOCK BOSS PRACTICE', cx, 764, '#ffaa00', 15);
+            UI.para(ctx, 'DEFEAT A BOSS TO UNLOCK BOSS PRACTICE', cx, ly, lw, '#ffaa00', 15, 26);
         } else if (SaveData.migrated) {
-            UI.label(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, 764, '#ffdd44', 14);
-            UI.label(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, 786, UI.DIM, 13);
+            const y = UI.para(ctx, 'SAVE UPDATED FOR γ — HIGH SCORES AND LEVEL RECORDS RESET FOR THE NEW SCORING', cx, ly, lw, '#ffdd44', 14, 26);
+            UI.para(ctx, 'YOUR UNLOCKS, CREDITS, COSMETICS AND ACHIEVEMENTS ARE KEPT', cx, y - 4, lw, UI.DIM, 13, 26);
         }
-        UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', SCREEN_H - 48);
-        UI.label(ctx, 'DELTA BUILD — WORK IN PROGRESS', SCREEN_W / 2, SCREEN_H - 22, UI.MAGENTA, 13);
+        UI.hint(ctx, 'ARROW KEYS / D-PAD TO SELECT  •  ENTER TO CONFIRM', Layout.menuBottom() - 48);
+        UI.label(ctx, 'DELTA BUILD — WORK IN PROGRESS', SCREEN_W / 2, Layout.menuBottom() - 22, UI.MAGENTA, 13);
     },
 
     drawDifficultySelect(ctx) {
@@ -20449,8 +20688,9 @@ const Menu = {
         for (let i = 0; i < this.items.length; i++) {
             const y = 270 + i * 120;
             const selected = i === this.selectedIndex;
-            if (i < 4) UI.panel(ctx, cx - 330, y - 52, 660, 98, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
-            UI.item(ctx, this.items[i], cx, y, selected, { w: 600, color: colors[i], desc: descs[i], size: 28 });
+            const pw = UI.w(660);
+            if (i < 4) UI.panel(ctx, cx - pw / 2, y - 52, pw, 98, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: 28 });
         }
         UI.hint(ctx, 'ESC TO GO BACK');
     },
@@ -20461,7 +20701,8 @@ const Menu = {
         const nB = EndRunBonus.bonuses.length;
         const subH = this._resultsSub ? this._resultsSub.length * 26 : 0;
         const h = 110 + subH + 104 + nB * 28 + (nB ? 22 : 0) + 84 + footerH;
-        UI.panel(ctx, cx - 360, top, 720, h, headingColor);
+        const pw = UI.w(720);
+        UI.panel(ctx, cx - pw / 2, top, pw, h, headingColor);
         Neon.text(ctx, heading, cx, top + 72, headingColor, 58, { core: 0.45, halo: 0.55 });
         let y = top + 110;
         if (this._resultsSub) {
@@ -20531,48 +20772,87 @@ const Menu = {
         }
     },
 
-    // Right-hand THREAT panel: a boss drawn in neon with its name and phase count
-    _drawThreat(ctx, bossType, t) {
-        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+    // THREAT panel: a boss drawn in neon with its name and phase count. By default
+    // the right-hand panel; `box` { cx, top, w, h, scale } places it elsewhere.
+    _drawThreat(ctx, bossType, t, box) {
+        const b = box || { cx: PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2, top: 260, w: 440, h: 440, scale: 1.7 };
+        const rx = b.cx;
         const def = BossTypes[bossType] || BossTypes.architect;
-        UI.panel(ctx, rx - 220, 260, 440, 440, '#ff2255', { title: 'THREAT' });
+        UI.panel(ctx, rx - b.w / 2, b.top, b.w, b.h, '#ff2255', { title: 'THREAT' });
         const fake = Object.create(Boss);
         fake.moveTimer = t; fake.phase = 1; fake.x = rx; fake.bossType = bossType;
         ctx.save();
-        ctx.translate(rx, 470);
-        ctx.scale(1.7, 1.7);
+        ctx.translate(rx, b.top + b.h * 0.477);
+        ctx.scale(b.scale, b.scale);
         const draw = Boss._neon[bossType] || Boss._neon.architect;
         draw.call(fake, ctx, Boss.radius, def.colors[0], false);
         ctx.restore();
-        Neon.text(ctx, def.name, rx, 650, '#ff2255', 26, { core: 0.35 });
-        UI.label(ctx, def.phases + ' PHASES', rx, 680, UI.DIM, 15);
+        Neon.text(ctx, def.name, rx, b.top + b.h - 50, '#ff2255', 26, { core: 0.35 });
+        UI.label(ctx, def.phases + ' PHASES', rx, b.top + b.h - 20, UI.DIM, 15);
+    },
+
+    // Darken everything around the play area (briefings: the backdrop plays inside it)
+    _aroundPlay(ctx, inner) {
+        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
+        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
+        ctx.fillStyle = side;
+        ctx.fillRect(0, 0, SCREEN_W, PLAY_Y);
+        ctx.fillRect(0, PLAY_Y + PLAY_H, SCREEN_W, SCREEN_H - PLAY_Y - PLAY_H);
+        ctx.fillRect(0, PLAY_Y, PLAY_X, PLAY_H);
+        ctx.fillRect(PLAY_X + PLAY_W, PLAY_Y, SCREEN_W - PLAY_X - PLAY_W, PLAY_H);
+        ctx.fillStyle = inner;
+        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
     },
 
     // --- Boss Rush intermission: the next boss's backdrop, the run so far, a choice ---
     drawRushIntermission(ctx) {
         const t = Game.briefingTimer;
         const inK = Math.min(1, t * 2);
-        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
-        ctx.fillStyle = side;
-        ctx.fillRect(0, 0, PLAY_X, SCREEN_H);
-        ctx.fillRect(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H);
-        ctx.fillStyle = 'rgba(3, 0, 10, 0.5)';
-        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
+        this._aroundPlay(ctx, 'rgba(3, 0, 10, 0.5)');
 
         ctx.globalAlpha = inK;
-        const cx = SCREEN_W / 2, R = BossRush, n = R.order.length;
+        const cx = SCREEN_W / 2, R = BossRush, n = R.order.length, P = Layout.portrait;
         const first = R.stage === 0 && R.splits.length === 0;
-        UI.label(ctx, 'BOSS RUSH  •  BOSS ' + (R.stage + 1) + ' / ' + n, cx, 250, UI.MAGENTA, 18);
-        Neon.text(ctx, R.bossName(), cx, 312, '#ff2255', 50, { core: 0.45, halo: 0.55 });
-        UI.label(ctx, 'TIME ' + R.formatTime(R.time), cx, 352, UI.TEXT, 17);
+        const hy = P ? 200 : 250;
+        UI.label(ctx, 'BOSS RUSH  •  BOSS ' + (R.stage + 1) + ' / ' + n, cx, hy, UI.MAGENTA, 18);
+        Neon.text(ctx, R.bossName(), cx, hy + 62, '#ff2255', 50, { core: 0.45, halo: 0.55 });
+        UI.label(ctx, 'TIME ' + R.formatTime(R.time), cx, hy + 102, UI.TEXT, 17);
 
         // The choice
-        UI.panel(ctx, cx - 320, 392, 640, 380, UI.CYAN, { title: first ? 'CHOOSE YOUR WEAPON' : 'CHOOSE AN UPGRADE' });
+        const P_ = Player;
+        const wName = P_.primaryWeapon === 'none' ? 'BASE SHOT' : R.WEAPONS[P_.primaryWeapon].name + ' LV' + P_.primaryLevel;
+        const cTop = P ? 360 : 392;
+        if (P) {
+            // Portrait: the loadout as one line above the choice
+            UI.label(ctx, (first ? 'NO WEAPON YET' : wName) + '  •  DRONES LV' + P_.droneLevel + '  •  LIVES ' + P_.lives
+                + (GameConfig.bombs.enabled ? '  •  BOMBS ' + P_.bombs : ''), cx, cTop - 14, UI.DIM, 15);
+        }
+        UI.panel(ctx, cx - 320, cTop, 640, 380, UI.CYAN, { title: first ? 'CHOOSE YOUR WEAPON' : 'CHOOSE AN UPGRADE' });
         this.items = R.choices.map(c => c.label);
         R.choices.forEach((c, i) => {
-            UI.item(ctx, c.label, cx, 480 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26 });
+            UI.item(ctx, c.label, cx, cTop + 88 + i * 104, i === this.selectedIndex, { w: 580, color: c.color, desc: c.desc, size: 26 });
         });
+
+        if (P) {
+            // Portrait: bosses and the threat side by side under the choice
+            const top = cTop + 400, h = Layout.menuBottom() - 70 - top, half = (PLAY_W - 48) / 2;
+            const lx = PLAY_X + 16;
+            UI.panel(ctx, lx, top, half, h, UI.MAGENTA, { title: 'BOSSES' });
+            const rowH = Math.min(46, (h - 50) / n);
+            for (let i = 0; i < n; i++) {
+                const L = ALL_LEVELS[R.order[i]];
+                const def = BossTypes[L.bossType] || BossTypes.architect;
+                const y = top + 58 + i * rowH;
+                const cur = i === R.stage, done = i < R.splits.length;
+                UI.pip(ctx, lx + 22, y - 7, 6, cur ? '#ff2255' : UI.MAGENTA, cur || done);
+                Neon.text(ctx, done ? R.formatTime(R.splits[i]) : def.name, lx + 40, y, cur ? '#ffffff' : (done ? '#00ff88' : UI.DIM), 16,
+                    { align: 'left', halo: cur ? 0.35 : 0, weight: cur ? 'bold' : '' });
+            }
+            this._drawThreat(ctx, R.level().bossType, t, { cx: lx + half + 16 + half / 2, top, w: half, h, scale: 0.95 });
+            ctx.globalAlpha = 1;
+            UI.hint(ctx, '↑↓ CHOOSE  •  ENTER TO LAUNCH  •  ESC TO QUIT');
+            return;
+        }
 
         // The run so far (left): bosses with their split times, then the loadout
         const lx = PLAY_X / 2;
@@ -20589,10 +20869,8 @@ const Menu = {
         }
         const ly = 330 + n * 56 + 20;
         UI.panel(ctx, lx - 220, ly, 440, 150, UI.CYAN, { title: 'LOADOUT' });
-        const P = Player;
-        const wName = P.primaryWeapon === 'none' ? 'BASE SHOT' : R.WEAPONS[P.primaryWeapon].name + ' LV' + P.primaryLevel;
         UI.label(ctx, first ? 'WEAPON — CHOOSE BELOW' : wName, lx - 190, ly + 62, UI.TEXT, 17, 'left');
-        UI.label(ctx, 'DRONES LV' + P.droneLevel + '    LIVES ' + P.lives + (GameConfig.bombs.enabled ? '    BOMBS ' + P.bombs : ''),
+        UI.label(ctx, 'DRONES LV' + P_.droneLevel + '    LIVES ' + P_.lives + (GameConfig.bombs.enabled ? '    BOMBS ' + P_.bombs : ''),
             lx - 190, ly + 100, UI.DIM, 15, 'left');
 
         this._drawThreat(ctx, R.level().bossType, t);
@@ -20614,14 +20892,16 @@ const Menu = {
             '',
         ];
         const colors = ['#ff2255', UI.CYAN, UI.DIM];
+        // Portrait: the descriptions wrap to two lines, so the cards are taller
+        const P = Layout.portrait, pw = UI.w(760), step = P ? 180 : 150, ph = P ? 140 : 110;
         for (let i = 0; i < 3; i++) {
-            const y = 300 + i * 150;
+            const y = 300 + i * step;
             const selected = i === this.selectedIndex;
             const locked = (i === 0 && !rush) || (i === 1 && !practice);
-            if (i < 2) UI.panel(ctx, cx - 380, y - 56, 760, 110, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
-            UI.item(ctx, this.items[i], cx, y, selected, { w: 700, color: colors[i], desc: descs[i], size: 30, disabled: locked });
+            if (i < 2) UI.panel(ctx, cx - pw / 2, y - 56, pw, ph, colors[i], { fill: selected ? 'rgba(10, 4, 30, 0.85)' : 'rgba(6, 2, 18, 0.55)' });
+            UI.item(ctx, this.items[i], cx, y, selected, { w: pw - 60, color: colors[i], desc: descs[i], size: 30, disabled: locked });
         }
-        if (practice) UI.label(ctx, BossRush.practiceLevels().length + ' / ' + ALL_LEVELS.length + ' BOSSES BEATEN', cx, 690, UI.DIM, 15);
+        if (practice) UI.label(ctx, BossRush.practiceLevels().length + ' / ' + ALL_LEVELS.length + ' BOSSES BEATEN', cx, 300 + 2 * step + 90, UI.DIM, 15);
         UI.hint(ctx, '↑↓ SELECT  •  ENTER CONFIRM  •  ESC BACK');
     },
 
@@ -20640,30 +20920,42 @@ const Menu = {
             ['WEAPON LEVEL', 'LV' + p.weaponLevel],
             ['DRONES', p.drones ? 'LV' + p.drones : 'NONE'],
         ];
-        const lx = 260, lw = 760, top = 200;
-        UI.panel(ctx, lx, top, lw, 660, UI.CYAN, { title: 'SETUP' });
+        const P = Layout.portrait;
+        const lw = UI.w(760), lx = P ? (SCREEN_W - lw) / 2 : 260, top = P ? 170 : 200;
+        UI.panel(ctx, lx, top, lw, P ? 640 : 660, UI.CYAN, { title: 'SETUP' });
         this.items = rows.map(r => r[0]).concat(['START', 'BACK']);
         rows.forEach(([label, value], i) => {
-            const y = top + 80 + i * 70;
+            const y = top + 80 + i * (P ? 68 : 70);
             const sel = i === this.selectedIndex;
             if (sel) {
                 ctx.fillStyle = UI.CYAN; ctx.globalAlpha = 0.1;
                 ctx.fillRect(lx + 20, y - 30, lw - 40, 46);
                 ctx.globalAlpha = 1;
             }
-            Neon.text(ctx, label, lx + 50, y, sel ? '#ffffff' : UI.TEXT, 20, { align: 'left', halo: 0, weight: sel ? 'bold' : '' });
+            const pad = P ? 36 : 50;
+            Neon.text(ctx, label, lx + pad, y, sel ? '#ffffff' : UI.TEXT, 20, { align: 'left', halo: 0, weight: sel ? 'bold' : '' });
             const vc = i === 3 ? W[p.weapon].color : (sel ? UI.CYAN : UI.TEXT);
-            Neon.text(ctx, (sel ? '◀  ' : '') + value + (sel ? '  ▶' : ''), lx + lw - 50, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
+            Neon.text(ctx, (sel ? '◀  ' : '') + value + (sel ? '  ▶' : ''), lx + lw - pad, y, vc, 20, { align: 'right', halo: sel ? 0.3 : 0 });
         });
-        UI.item(ctx, 'START', lx + lw / 2, top + 545, this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88' });
-        UI.item(ctx, 'BACK', lx + lw / 2, top + 610, this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM });
+        UI.item(ctx, 'START', lx + lw / 2, top + (P ? 530 : 545), this.selectedIndex === 6, { w: 400, size: 28, color: '#00ff88' });
+        UI.item(ctx, 'BACK', lx + lw / 2, top + (P ? 595 : 610), this.selectedIndex === 7, { w: 400, size: 22, color: UI.DIM });
 
         // The boss, and the best time for this boss on this difficulty
-        this._drawThreat(ctx, L.bossType, UI.time());
-        const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
         const best = Campaign.practiceBests[p.difficulty + '_' + L.bossType];
-        UI.label(ctx, best ? 'BEST ' + BossRush.formatTime(best) : 'NO BEST TIME YET', rx, 740, best ? '#00ff88' : UI.DIM, 18);
-        UI.label(ctx, 'NO CREDITS OR HIGH SCORES IN PRACTICE', rx, 776, UI.DIM, 13);
+        const bestText = best ? 'BEST ' + BossRush.formatTime(best) : 'NO BEST TIME YET';
+        if (P) {
+            // Portrait: threat on the left under the setup, best time beside it
+            const ty = top + 660, th = Layout.menuBottom() - 70 - ty, half = lw / 2 - 8;
+            this._drawThreat(ctx, L.bossType, UI.time(), { cx: lx + half / 2, top: ty, w: half, h: th, scale: 0.85 });
+            const rx = lx + lw - half / 2;
+            UI.label(ctx, bestText, rx, ty + th / 2 - 20, best ? '#00ff88' : UI.DIM, 18);
+            UI.para(ctx, 'NO CREDITS OR HIGH SCORES IN PRACTICE', rx, ty + th / 2 + 20, half - 20, UI.DIM, 13, 26);
+        } else {
+            this._drawThreat(ctx, L.bossType, UI.time());
+            const rx = PLAY_X + PLAY_W + (SCREEN_W - PLAY_X - PLAY_W) / 2;
+            UI.label(ctx, bestText, rx, 740, best ? '#00ff88' : UI.DIM, 18);
+            UI.label(ctx, 'NO CREDITS OR HIGH SCORES IN PRACTICE', rx, 776, UI.DIM, 13);
+        }
         UI.hint(ctx, '↑↓ SELECT  •  ←→ CHANGE  •  ENTER START  •  ESC BACK');
     },
 
@@ -20671,7 +20963,7 @@ const Menu = {
         UI.dim(ctx, 0.78);
         const cx = SCREEN_W / 2, p = BossRush.practice;
         const best = Campaign.practiceBests[p.difficulty + '_' + ALL_LEVELS[p.level].bossType];
-        UI.panel(ctx, cx - 360, 220, 720, 520, UI.CYAN);
+        UI.panel(ctx, cx - UI.w(720) / 2, 220, UI.w(720), 520, UI.CYAN);
         Neon.text(ctx, 'BOSS DOWN', cx, 300, UI.CYAN, 58, { core: 0.45, halo: 0.55 });
         UI.label(ctx, BossRush.bossName() + ' — ' + p.difficulty.toUpperCase() + (p.phase > 1 ? '  •  FROM PHASE ' + p.phase : ''), cx, 345, UI.TEXT, 17);
         UI.label(ctx, 'TIME', cx, 400, UI.DIM, 15);
@@ -20711,18 +21003,12 @@ const Menu = {
         const lvl = ALL_LEVELS[idx];
         const t = Game.briefingTimer;
         const inK = Math.min(1, t * 2);
-        // Side panels
-        const side = ctx.createLinearGradient(0, 0, 0, SCREEN_H);
-        side.addColorStop(0, '#06020f'); side.addColorStop(1, '#12052a');
-        ctx.fillStyle = side;
-        ctx.fillRect(0, 0, PLAY_X, SCREEN_H);
-        ctx.fillRect(PLAY_X + PLAY_W, 0, SCREEN_W - PLAY_X - PLAY_W, SCREEN_H);
-        // Let the backdrop show through, darkened for the text
-        ctx.fillStyle = 'rgba(3, 0, 10, 0.45)';
-        ctx.fillRect(PLAY_X, PLAY_Y, PLAY_W, PLAY_H);
+        // Panels around the play area; the backdrop shows through, darkened for the text
+        this._aroundPlay(ctx, 'rgba(3, 0, 10, 0.45)');
 
         ctx.globalAlpha = inK;
         const cx = SCREEN_W / 2;
+        if (Layout.portrait) return this._drawBriefingPortrait(ctx, idx, lvl, t, inK);
         UI.label(ctx, 'LEVEL ' + (idx + 1) + ' / ' + Campaign.getLevelCount(), cx, 250, UI.MAGENTA, 18);
         Neon.text(ctx, lvl.name.toUpperCase(), cx, 312, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
         UI.panel(ctx, cx - 320, 360, 640, 190, UI.CYAN, { title: 'BRIEFING' });
@@ -20758,13 +21044,46 @@ const Menu = {
         ctx.globalAlpha = 1;
     },
 
+    // Portrait briefing: campaign progress in the strip above, then the level,
+    // the briefing and the threat stacked in the play area
+    _drawBriefingPortrait(ctx, idx, lvl, t, inK) {
+        const cx = SCREEN_W / 2, n = Campaign.getLevelCount();
+        UI.label(ctx, 'LEVEL ' + (idx + 1) + ' / ' + n, cx, 52, UI.MAGENTA, 18);
+        for (let i = 0; i < n; i++) {
+            const cur = i === idx, done = i < idx;
+            UI.pip(ctx, cx + (i - (n - 1) / 2) * 56, 100, cur ? 10 : 7, cur ? UI.CYAN : UI.MAGENTA, cur || done);
+        }
+        Neon.text(ctx, lvl.name.toUpperCase(), cx, PLAY_Y + 100, UI.CYAN, 54, { core: 0.45, halo: 0.55 });
+
+        // The briefing, wrapped to the panel and typed out
+        const pw = 640, lines = [];
+        for (const line of (Game.briefingText || '').split('\n')) lines.push(...UI.wrap(ctx, line, pw - 60, 20, ''));
+        const top = PLAY_Y + 140, lh = 36, ph = 60 + lines.length * lh;
+        UI.panel(ctx, cx - pw / 2, top, pw, ph, UI.CYAN, { title: 'BRIEFING' });
+        let chars = Renderer.calm() ? 1e9 : Math.floor(t * 70);
+        lines.forEach((line, i) => {
+            Neon.text(ctx, line.slice(0, Math.max(0, chars)), cx, top + 64 + i * lh, UI.TEXT, 20, { weight: '', halo: 0 });
+            chars -= line.length;
+        });
+
+        const ty = top + ph + 30;
+        this._drawThreat(ctx, lvl.bossType, t, { cx, top: ty, w: 440, h: Math.min(380, PLAY_Y + PLAY_H - 130 - ty), scale: 1.2 });
+
+        ctx.globalAlpha = inK * (Renderer.calm() ? 1 : 0.7 + Math.sin(t * 5) * 0.3);
+        Neon.text(ctx, UI.keys('PRESS ENTER OR FIRE TO LAUNCH'), cx, PLAY_Y + PLAY_H - 70, '#ffffff', 22, { halo: 0.3 });
+        ctx.globalAlpha = inK;
+        Neon.bar(ctx, cx - 180, PLAY_Y + PLAY_H - 44, 360, 4, Math.min(1, t / 8), UI.CYAN, 0);
+        ctx.globalAlpha = 1;
+    },
+
     drawLevelSelect(ctx) {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'SELECT LEVEL', 110);
         UI.label(ctx, 'DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), SCREEN_W / 2, 160, UI.TEXT, 17);
         const cx = SCREEN_W / 2;
         const lvlCount = Campaign.getLevelCount();
-        UI.panel(ctx, cx - 400, 200, 800, lvlCount * 76 + 40, UI.CYAN);
+        const pw = UI.w(800), hw = pw / 2 - 50; // hw: text inset from the centre
+        UI.panel(ctx, cx - pw / 2, 200, pw, lvlCount * 76 + 40, UI.CYAN);
         for (let i = 0; i <= lvlCount; i++) {
             const y = 250 + i * 76;
             const selected = i === Menu.selectedIndex;
@@ -20778,20 +21097,20 @@ const Menu = {
             if (selected) {
                 ctx.fillStyle = available ? UI.CYAN : UI.DIM;
                 ctx.globalAlpha = 0.12;
-                ctx.fillRect(cx - 380, y - 32, 760, 60);
+                ctx.fillRect(cx - pw / 2 + 20, y - 32, pw - 40, 60);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 380, y - 32, 3, 60);
+                ctx.fillRect(cx - pw / 2 + 20, y - 32, 3, 60);
             }
-            Neon.text(ctx, (i + 1) + '  ' + (lvl ? lvl.name.toUpperCase() : '') + (available ? '' : '   [LOCKED]'), cx - 350, y + 4,
+            Neon.text(ctx, (i + 1) + '  ' + (lvl ? lvl.name.toUpperCase() : '') + (available ? '' : '   [LOCKED]'), cx - hw, y + 4,
                 !available ? '#3a4458' : selected ? '#ffffff' : UI.TEXT, selected ? 24 : 21, { align: 'left', halo: selected && available ? 0.3 : 0, weight: selected ? 'bold' : '' });
             if (best && available) {
-                Neon.text(ctx, best.score.toLocaleString(), cx + 350, y - 2, selected ? '#ffee33' : '#bbaa55', 20, { align: 'right', halo: 0 });
+                Neon.text(ctx, best.score.toLocaleString(), cx + hw, y - 2, selected ? '#ffee33' : '#bbaa55', 20, { align: 'right', halo: 0 });
                 const extras = [];
                 if (best.maxChain > 0) extras.push('CHAIN ' + best.maxChain);
                 if (best.perfect) extras.push('★ PERFECT');
-                UI.label(ctx, extras.join('   '), cx + 350, y + 20, UI.DIM, 13, 'right');
+                UI.label(ctx, extras.join('   '), cx + hw, y + 22, UI.DIM, 13, 'right');
             } else if (available) {
-                UI.label(ctx, 'NO RECORD', cx + 350, y + 4, UI.DIM, 15, 'right');
+                UI.label(ctx, 'NO RECORD', cx + hw, y + 4, UI.DIM, 15, 'right');
             }
         }
         UI.hint(ctx, 'ESC BACK');
@@ -20803,11 +21122,24 @@ const Menu = {
         const prog = Achievements.getProgress();
         UI.label(ctx, prog.unlocked + ' / ' + prog.total + ' UNLOCKED', SCREEN_W / 2, 140, UI.TEXT, 17);
         Neon.bar(ctx, SCREEN_W / 2 - 200, 154, 400, 5, prog.unlocked / Math.max(1, prog.total), '#ffaa00', 0);
-        const cols = 2, colW = 560, rowH = 70;
-        const startX = SCREEN_W / 2 - colW, startY = 185;
+        // Portrait: one column that scrolls (Menu.achScroll, rows), with a scrollbar
+        const P = Layout.portrait;
+        const cols = P ? 1 : 2, colW = P ? UI.w(720) : 560, rowH = P ? 76 : 70;
+        const startX = SCREEN_W / 2 - (P ? colW / 2 : colW), startY = 185;
+        const shown = P ? this.achRowsShown() : Achievements.defs.length;
+        if (P) {
+            this.achScroll = Math.max(0, Math.min(this.achScroll, Achievements.defs.length - shown));
+            const trackH = shown * rowH - 10, n = Achievements.defs.length;
+            ctx.fillStyle = 'rgba(255,255,255,0.08)';
+            ctx.fillRect(startX + colW + 4, startY, 4, trackH);
+            ctx.fillStyle = '#ffaa00';
+            ctx.fillRect(startX + colW + 4, startY + trackH * this.achScroll / n, 4, trackH * shown / n);
+        }
         Achievements.defs.forEach((def, i) => {
+            const row = P ? i - this.achScroll : Math.floor(i / cols);
+            if (row < 0 || row >= shown) return;
             const x = startX + (i % cols) * colW;
-            const y = startY + Math.floor(i / cols) * rowH;
+            const y = startY + row * rowH;
             const done = Achievements.isUnlocked(def.id);
             UI.panel(ctx, x + 8, y, colW - 16, rowH - 10, done ? '#ffaa00' : '#3a4458', { fill: done ? 'rgba(40, 20, 0, 0.55)' : 'rgba(6, 2, 18, 0.55)' });
             ctx.font = '24px sans-serif';
@@ -20816,12 +21148,16 @@ const Menu = {
             ctx.fillStyle = '#ffffff';
             ctx.fillText(def.icon, x + 42, y + 40);
             ctx.globalAlpha = 1;
-            Neon.text(ctx, def.name, x + 72, y + 27, done ? '#ffaa00' : UI.DIM, 17, { align: 'left', halo: done ? 0.25 : 0 });
-            Neon.text(ctx, def.desc, x + 72, y + 48, done ? UI.TEXT : '#4a5468', 14, { align: 'left', halo: 0, weight: '' });
-            Neon.text(ctx, (done ? '✓ ' : '') + def.reward + ' NC', x + colW - 26, y + 36, done ? '#00ff88' : '#4a5468', 15, { align: 'right', halo: 0 });
+            Neon.text(ctx, def.name, x + 72, y + (P ? 29 : 27), done ? '#ffaa00' : UI.DIM, 17, { align: 'left', halo: done ? 0.25 : 0 });
+            Neon.text(ctx, def.desc, x + 72, y + (P ? 56 : 48), done ? UI.TEXT : '#4a5468', 14, { align: 'left', halo: 0, weight: '' });
+            Neon.text(ctx, (done ? '✓ ' : '') + def.reward + ' NC', x + colW - 26, y + (P ? 29 : 36), done ? '#00ff88' : '#4a5468', 15, { align: 'right', halo: 0 });
         });
-        UI.hint(ctx, 'ESC / ENTER TO RETURN');
+        UI.hint(ctx, P ? '↑↓ SCROLL  •  ESC / ENTER TO RETURN' : 'ESC / ENTER TO RETURN');
     },
+
+    // Portrait achievements: rows that fit above the hint, and the scroll position
+    achScroll: 0,
+    achRowsShown() { return Math.floor((Layout.menuBottom() - 90 - 185) / 76); },
 
     drawCampaignComplete(ctx) {
         UI.background(ctx, { dim: 0.35 });
@@ -20829,7 +21165,9 @@ const Menu = {
         const cx = SCREEN_W / 2;
         const isSecret = Game.currentLevelIndex === 5;
         const color = isSecret ? '#ff2bd6' : '#ffee33';
-        UI.panel(ctx, cx - 460, 150, 920, 660, color);
+        // Portrait: the long lines wrap, pushing what follows down (`extra`)
+        const pw = UI.w(920), tw = pw - 60;
+        UI.panel(ctx, cx - pw / 2, 150, pw, Layout.portrait ? 720 : 660, color);
         Neon.text(ctx, isSecret ? 'SIGNAL TERMINATED' : 'CAMPAIGN COMPLETE', cx, 250, color, 60, { core: 0.5, halo: 0.6 });
         const sub = isSecret
             ? ['You silenced the relay. The void is quiet...', 'For now.']
@@ -20838,19 +21176,20 @@ const Menu = {
         UI.label(ctx, 'DIFFICULTY: ' + GameConfig.difficulty.toUpperCase(), cx, 400, UI.DIM, 16);
         Neon.text(ctx, 'TOTAL SCORE  ' + Scoring.score.toLocaleString(), cx, 450, UI.CYAN, 32, { core: 0.4 });
         UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, cx, 490, '#ffaa00', 19);
+        let extra = 0;
         if (!isSecret && !Campaign.secretUnlocked) {
-            UI.label(ctx, 'Something else is out there... beat all levels on Normal to find it.', cx, 545, '#5a6478', 16);
+            extra = UI.para(ctx, 'Something else is out there... beat all levels on Normal to find it.', cx, 545, tw, '#5a6478', 16, 28) - 573;
         } else if (!isSecret && Campaign.secretUnlocked) {
             Neon.text(ctx, 'SECRET LEVEL UNLOCKED: SIGNAL LOST', cx, 545, '#ff2bd6', 19, { halo: 0.4 });
         }
-        UI.label(ctx, 'Thank you for playing Neon Storm \u03b3 \u2014 more to come!', cx, 600, UI.DIM, 16);
+        extra += UI.para(ctx, 'Thank you for playing Neon Storm \u03b3 \u2014 more to come!', cx, 600 + extra, tw, UI.DIM, 16, 28) - 628 - extra;
         const items = ['PLAY AGAIN', 'MAIN MENU'];
-        items.forEach((label, i) => UI.item(ctx, label, cx, 680 + i * 54, i === Menu.selectedIndex, { w: 420, size: 22 }));
+        items.forEach((label, i) => UI.item(ctx, label, cx, 680 + extra + i * 54, i === Menu.selectedIndex, { w: 420, size: 22 }));
         // Fireworks of shattered neon (small, calm-friendly)
         if (!Renderer.calm()) {
             for (let i = 0; i < 24; i++) {
                 const a = i * 2.4 + t * 0.4;
-                const r = 520 + Math.sin(t * 0.7 + i) * 40;
+                const r = (Layout.portrait ? 380 : 520) + Math.sin(t * 0.7 + i) * 40;
                 const x = cx + Math.cos(a) * r, y = 480 + Math.sin(a) * r * 0.55;
                 ctx.globalAlpha = 0.5 + 0.5 * Math.sin(t * 2 + i);
                 UI.pip(ctx, x, y, 4, i % 2 ? UI.CYAN : UI.MAGENTA, true);
@@ -20868,10 +21207,17 @@ const Menu = {
         const tabs = ['CASUAL', 'NORMAL', 'HARDCORE', 'ENDLESS', 'BOSS RUSH', 'SESSION'];
         const tabKeys = ['casual', 'normal', 'hardcore', 'endless', 'bossrush', 'session'];
         const colors = ['#00ff88', '#ffee33', '#ff3355', '#ff8800', '#ff2255', '#cc44ff'];
-        UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
+        // Portrait: the tabs in two rows of three, and narrower columns
+        const P = Layout.portrait;
+        if (P) {
+            UI.tabs(ctx, tabs.slice(0, 3), this.highScoreTab, SCREEN_W / 2, 176, colors.slice(0, 3), 220);
+            UI.tabs(ctx, tabs.slice(3), this.highScoreTab - 3, SCREEN_W / 2, 224, colors.slice(3), 220);
+        } else {
+            UI.tabs(ctx, tabs, this.highScoreTab, SCREEN_W / 2, 200, colors);
+        }
 
         const color = colors[this.highScoreTab];
-        const px = SCREEN_W / 2 - 420, pw = 840, top = 240;
+        const pw = UI.w(840), px = SCREEN_W / 2 - pw / 2, top = P ? 260 : 240;
         UI.panel(ctx, px, top, pw, 620, color);
 
         const tabKey = tabKeys[this.highScoreTab];
@@ -20881,9 +21227,11 @@ const Menu = {
             UI.label(ctx, session ? 'NO SCORES THIS SESSION' : 'NO SCORES YET', SCREEN_W / 2, top + 300, UI.DIM, 20);
         } else {
             const isEndless = tabKey === 'endless', isRush = tabKey === 'bossrush';
+            const X = P ? (session ? [20, 56, 130, 330, 500] : [20, 56, 130, 316, 414, 530])
+                : (session ? [40, 100, 200, 460, 620] : [40, 100, 200, 440, 560, 680]);
             const cols = session
-                ? [['#', 40], ['NAME', 100], ['SCORE', 200], ['INFO', 460], ['MODE', 620]]
-                : [['#', 40], ['NAME', 100], ['SCORE', 200], ['CHAIN', 440], [isEndless ? 'WAVE' : (isRush ? 'TIME' : 'LEVEL'), 560], ['DATE', 680]];
+                ? [['#', X[0]], ['NAME', X[1]], ['SCORE', X[2]], ['INFO', X[3]], ['MODE', X[4]]]
+                : [['#', X[0]], ['NAME', X[1]], ['SCORE', X[2]], ['CHAIN', X[3]], [isEndless ? 'WAVE' : (isRush ? 'TIME' : 'LEVEL'), X[4]], ['DATE', X[5]]];
             for (const [h, x] of cols) UI.label(ctx, h, px + x, top + 48, UI.DIM, 14, 'left');
             rows.forEach((entry, i) => {
                 const ey = top + 90 + i * 50;
@@ -20895,25 +21243,25 @@ const Menu = {
                 const big = i < 3 ? 22 : 19;
                 const cell = (text, x, col, size) => Neon.text(ctx, text, px + x, ey, col || c, size || big,
                     { align: 'left', halo: i < 3 ? 0.25 : 0, weight: i < 3 ? 'bold' : '' });
-                cell((i + 1).toString(), 40);
-                cell(entry.initials, 100);
-                cell(entry.score.toLocaleString(), 200);
+                cell((i + 1).toString(), X[0]);
+                cell(entry.initials, X[1]);
+                cell(entry.score.toLocaleString(), X[2]);
                 if (session) {
                     cell(entry.mode === 'endless' ? 'W' + (entry.wave || '?')
                         : entry.mode === 'bossrush' ? 'RUSH ' + (entry.won ? BossRush.formatTime(entry.time || 0) : (entry.bosses || 0) + '/' + (entry.of || '?'))
-                        : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), 460, UI.DIM, 17);
-                    cell((entry.difficulty || '').toUpperCase(), 620, UI.DIM, 17);
+                        : 'L' + (entry.levelReached || '?') + (entry.won ? ' ✓' : ''), X[3], UI.DIM, 17);
+                    cell((entry.difficulty || '').toUpperCase(), X[4], UI.DIM, 17);
                 } else {
-                    cell((entry.maxChain || 0).toString(), 440);
+                    cell((entry.maxChain || 0).toString(), X[3]);
                     cell(isEndless ? 'W' + (entry.wave || '?')
                         : isRush ? (entry.won ? BossRush.formatTime(entry.time || 0) + ' ✓' : (entry.bosses || 0) + '/' + (entry.of || '?'))
-                        : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), 560);
-                    cell(entry.date || '', 680, UI.DIM, 16);
+                        : (entry.levelReached || '?') + '/6' + (entry.won ? ' ✓' : ''), X[4]);
+                    cell(entry.date || '', X[5], UI.DIM, 16);
                 }
             });
         }
 
-        UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, SCREEN_H - 110, '#ffaa00', 19);
+        UI.label(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, Layout.menuBottom() - (P ? 90 : 110), '#ffaa00', 19);
         UI.hint(ctx, '←→ CHANGE TAB    ESC BACK');
     },
 
@@ -21557,6 +21905,9 @@ const Game = {
                 break;
 
             case 'achievements':
+                // Portrait shows one scrolling column (Menu.drawAchievements clamps the scroll)
+                if (Input.isPressed('down')) Menu.achScroll++;
+                if (Input.isPressed('up')) Menu.achScroll = Math.max(0, Menu.achScroll - 1);
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
                     Menu.selectedIndex = 5;

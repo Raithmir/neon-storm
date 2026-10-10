@@ -243,8 +243,19 @@ const Neon = {
     text(ctx, str, x, y, color, size, opts) {
         const o = opts || {};
         const a = ctx.globalAlpha;
-        ctx.font = (o.weight === undefined ? 'bold ' : o.weight + ' ') + size + 'px ' + this.FONT;
-        ctx.textAlign = o.align || 'center';
+        const weight = o.weight === undefined ? 'bold ' : o.weight + ' ';
+        const align = o.align || 'center';
+        // Portrait overlay (a phone held upright): keep small text readable,
+        // and shrink a line that would run off the screen
+        const fit = Layout.portrait && ctx.canvas === canvas;
+        if (fit) size = UI.fs(size);
+        ctx.font = weight + size + 'px ' + this.FONT;
+        if (fit) {
+            const room = (align === 'center' ? 2 * Math.min(x, SCREEN_W - x) : align === 'left' ? SCREEN_W - x : x) - 16;
+            const w = ctx.measureText(str).width;
+            if (w > room) { size = Math.floor(size * room / w); ctx.font = weight + size + 'px ' + this.FONT; }
+        }
+        ctx.textAlign = align;
         ctx.textBaseline = o.baseline || 'alphabetic';
         ctx.lineJoin = 'round';
         const halo = o.halo !== undefined ? o.halo : 0.35;

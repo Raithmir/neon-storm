@@ -16,6 +16,7 @@
 // scene. A level fails if its 3D scene broke and fell back. Takes a few minutes.
 
 const { launch, writeResult } = require('./harness');
+const { SCREENS, setLayout } = require('./screens');
 
 // Network noise from loading web fonts under file:// is not a game error
 const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
@@ -38,69 +39,20 @@ const IGNORE = [/Failed to load resource/i, /net::ERR_/i];
         return { ok, errs, out };
     };
 
-    // --- Every screen (one full draw each) ---
-    const screens = [
-        ['title', () => { Game.state = 'title'; }],
-        ['difficulty_select', () => { Game.state = 'difficulty_select'; }],
-        ['settings', () => { Game.state = 'settings'; }],
-        ['controls', () => { Game.state = 'controls'; }],
-        ['high_scores', () => { Game.state = 'high_scores'; for (let t = 0; t < 5; t++) { Menu.highScoreTab = t; Game.draw(); } }],
-        ['achievements', () => { Game.state = 'achievements'; }],
-        ['custom_difficulty', () => { CustomDifficulty.init(); Game.state = 'custom_difficulty'; }],
-        ['hangar', () => {
-            Game.state = 'hangar';
-            Hangar.mode = 'categories';
-            for (let c = 0; c < 5; c++) { Hangar.categoryIndex = c; Game.draw(); }
-            Hangar.mode = 'items';
-            for (let c = 0; c < 4; c++) {
-                Hangar.categoryIndex = c;
-                const n = Hangar.catalog[Hangar._getCatalogKey()].length;
-                for (let i = 0; i < n; i++) { Hangar.itemIndex = i; Game.draw(); }
-            }
-            Hangar.mode = 'categories';
-        }],
-        ['tutorial', () => { Game.state = 'tutorial'; for (let p = 0; p < Tutorial.pages.length; p++) { Tutorial.pageIndex = p; Game.draw(); } }],
-        ['level_select', () => { Game.state = 'level_select'; }],
-        ['briefing', () => { Game.showBriefing(0); for (let i = 0; i < 10; i++) { Game.briefingTimer = i * 0.5; Game.draw(); } }],
-        ['paused', () => { Game.startLevel(0, 'normal', false); Game.state = 'paused'; }],
-        ['game_over', () => { EndRunBonus.calculate(false, 0, 10, 10, 60, false); Game.state = 'game_over'; }],
-        ['victory', () => { EndRunBonus.calculate(true, 2, 10, 10, 60, true); Game.state = 'victory'; }],
-        ['campaign_complete', () => { Game.state = 'campaign_complete'; }],
-        ['title (boss rush locked)', () => { Campaign.campaignCleared = false; Game.state = 'title'; Menu.selectedIndex = 2; }],
-        ['rush_intermission (weapon pick)', () => { Campaign.campaignCleared = true; Game.startBossRush('normal'); }],
-        ['rush_intermission (upgrade)', () => {
-            BossRush.apply(BossRush.choices[0]); BossRush.splits = [62.4]; BossRush.time = 62.4; BossRush.stage = 1;
-            BossRush.rollChoices(); Game._showRushIntermission();
-        }],
-        ['rush game_over', () => { Game.state = 'game_over'; }],
-        ['rush_complete', () => {
-            BossRush.splits = [62, 71, 80, 55, 90]; BossRush.time = 358; BossRush.bonuses(true); Game.state = 'rush_complete';
-        }],
-        ['high_scores (boss rush tab)', () => { Game.state = 'high_scores'; Menu.highScoreTab = 4; BossRush.active = false; }],
-        ['boss_menu', () => { Campaign.bossesDefeated = ['architect', 'furnace']; Game.state = 'boss_menu'; }],
-        ['practice_setup', () => { Game._openPracticeSetup(); }],
-        ['practice game_over', () => { Game.startPractice(Game._practice); Game.state = 'game_over'; }],
-        ['practice_complete', () => { BossRush.time = 64.2; Game._practiceNewBest = true; Game.state = 'practice_complete'; }],
-        ['gamepad prompts', () => {
-            Input.lastDevice = 'pad';
-            for (const st of ['title', 'settings', 'hangar', 'tutorial', 'high_scores']) { Game.state = st; Game.draw(); }
-            Input.lastDevice = 'keyboard'; Game.state = 'title';
-        }],
-        ['touch controls', () => {
-            Input.lastDevice = 'touch';
-            for (const st of ['title', 'settings', 'paused', 'playing']) { Game.state = st; Game.draw(); }
-            Input.lastDevice = 'keyboard'; Game.state = 'title';
-        }],
-    ];
-    for (const [name, setup] of screens) {
-        const src = setup.toString();
-        const r = await step('screen ' + name, (src) => {
-            Menu.selectedIndex = 0;
-            (new Function('return (' + src + ')'))()();
-            Game.draw();
-        }, src);
-        results.screens[name] = r.ok;
+    // --- Every screen (one full draw each), in the landscape and the portrait layout ---
+    for (const layout of ['landscape', 'portrait']) {
+        await setLayout(g, layout);
+        for (const [name, setup] of SCREENS) {
+            const src = setup.toString();
+            const r = await step('screen ' + name + (layout === 'portrait' ? ' (portrait)' : ''), (src) => {
+                Menu.selectedIndex = 0;
+                (new Function('return (' + src + ')'))()();
+                Game.draw();
+            }, src);
+            results.screens[name + ' ' + layout] = r.ok;
+        }
     }
+    await setLayout(g, 'landscape');
 
     // --- Every level through its boss (plus Flash Reduction and the Canvas 2D fallback) ---
     const runs = [0, 1, 2, 3, 4, 5].map(l => ({ lvl: l, label: 'level ' + (l + 1) }));

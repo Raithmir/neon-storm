@@ -1,8 +1,10 @@
 // ============================================================
 //  HUD RENDERER
-//  Two side panels either side of the play area, built from UI kit cards:
+//  Landscape: two side panels either side of the play area, built from UI kit cards:
 //    left:  pilot (lives, bombs, shield), armament (weapon, drones), Surge, dash
 //    right: score, chain, run stats, mission (level, time, escort), controls
+//  Portrait: one strip above the play area (Layout.HUD_TOP) with the same
+//  essentials, shield and escort bars under it (_drawPortrait)
 // ============================================================
 const HUD = {
     _bg: null,          // canvas behind the overlay holding the static panel backgrounds
@@ -22,8 +24,10 @@ const HUD = {
         }
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
+        c._layout = Layout.version;
         const g = c.getContext('2d');
         g.setTransform(k, 0, 0, k, 0, 0);
+        if (Layout.portrait) return this._bakePortrait(g);
         const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
         grad.addColorStop(0, '#07020f');
         grad.addColorStop(1, '#10031f');
@@ -47,6 +51,32 @@ const HUD = {
         }
     },
 
+    // Portrait: the whole screen is panel (the play area covers its part), with
+    // glowing edges around the play area
+    _bakePortrait(g) {
+        const grad = g.createLinearGradient(0, 0, 0, SCREEN_H);
+        grad.addColorStop(0, '#07020f');
+        grad.addColorStop(1, '#10031f');
+        g.fillStyle = grad;
+        g.fillRect(0, 0, SCREEN_W, SCREEN_H);
+        g.fillStyle = 'rgba(255, 43, 214, 0.035)';
+        for (let y = 0; y < SCREEN_H; y += 4) g.fillRect(0, y, SCREEN_W, 1);
+        for (const [y, dir] of [[PLAY_Y, -1], [PLAY_Y + PLAY_H, 1]]) {
+            const glow = g.createLinearGradient(0, y, 0, y + dir * 30);
+            glow.addColorStop(0, 'rgba(255, 43, 214, 0.35)');
+            glow.addColorStop(1, 'rgba(255, 43, 214, 0)');
+            g.fillStyle = glow;
+            g.fillRect(0, dir < 0 ? y - 30 : y, SCREEN_W, 30);
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(0, y - 1, SCREEN_W, 2);
+        }
+        if (PLAY_X > 0) {
+            g.fillStyle = '#ff2bd6';
+            g.fillRect(PLAY_X - 1, PLAY_Y, 2, PLAY_H);
+            g.fillRect(PLAY_X + PLAY_W - 1, PLAY_Y, 2, PLAY_H);
+        }
+    },
+
     // Called by Game.draw after every frame: the background shows only under the HUD
     showBackground(on) {
         const c = this._bg;
@@ -61,11 +91,111 @@ const HUD = {
     },
 
     draw(ctx) {
-        if (!this._bg || this._bg._scale !== Renderer.uiScale) this._bakeBackground();
+        if (!this._bg || this._bg._scale !== Renderer.uiScale || this._bg._layout !== Layout.version) this._bakeBackground();
         this._drawn = true;
-        this._drawLeft(ctx);
-        this._drawRight(ctx);
+        if (Layout.portrait) {
+            this._drawPortrait(ctx);
+        } else {
+            this._drawLeft(ctx);
+            this._drawRight(ctx);
+        }
         this._drawDanger(ctx);
+    },
+
+    // Mission line: level / wave / boss, and the clock
+    _mission() {
+        const rush = BossRush.active, isEndless = Game.currentLevelIndex === -1;
+        const clock = rush ? BossRush.time : WaveSystem.levelTimer;
+        const time = Math.floor(clock / 60) + ':' + Math.floor(clock % 60).toString().padStart(2, '0');
+        const label = rush ? (BossRush.practice ? 'PRACTICE' : 'BOSS ' + (BossRush.stage + 1) + '/' + BossRush.order.length)
+            : isEndless ? 'WAVE ' + EndlessMode.wave : 'LEVEL ' + (Game.currentLevelIndex + 1);
+        return { label, time };
+    },
+
+    // Portrait strip: row 1 mission + score | chain | lives + bombs,
+    // row 2 weapon + drones | Surge | dash; shield and escort under the play area
+    _drawPortrait(ctx) {
+        const x0 = PLAY_X, t = UI.time();
+        const m = this._mission();
+        UI.label(ctx, m.label + '   ' + m.time, x0 + 16, 28, UI.DIM, 14, 'left');
+        Neon.text(ctx, Scoring.score.toLocaleString(), x0 + 16, 74, '#ffffff', 40, { align: 'left', core: 0.2, halo: 0.35 });
+
+        // Chain
+        const mult = Scoring.multiplier;
+        const chainColor = mult >= 5 ? '#ffee33' : mult >= 3 ? '#ff8800' : UI.CYAN;
+        const chx = x0 + 268, chw = 210;
+        if (Scoring.chain > 0) {
+            Neon.text(ctx, Scoring.chain + '', chx, 60, chainColor, 34, { align: 'left', core: 0.3 });
+            Neon.text(ctx, mult + 'x', chx + chw, 60, chainColor, 34, { align: 'right', core: 0.4 });
+            const timerPct = Scoring.chainTimer / (Scoring.chainTimerMax / GameConfig.chainTimerSpeed);
+            Neon.bar(ctx, chx, 72, chw, 6, timerPct, timerPct > 0.3 ? '#00ff88' : '#ff3355', 0);
+        } else {
+            UI.label(ctx, 'CHAIN', chx + chw / 2, 60, '#4a5468', 14);
+        }
+
+        // Lives and bombs, right-aligned
+        const right = x0 + PLAY_W - 16;
+        const lives = Math.min(Player.lives, 6);
+        for (let i = 0; i < lives; i++) UI.ship(ctx, right - 10 - i * 30, 26, 10);
+        if (Player.lives > 6) UI.label(ctx, '+' + (Player.lives - 6), right - 6 * 30 - 4, 34, UI.CYAN, 14, 'right');
+        if (GameConfig.bombs.enabled) {
+            for (let i = 0; i < Player.bombs; i++) {
+                const bx = right - 10 - i * 28, by = 64;
+                ctx.save(); ctx.translate(bx, by);
+                Neon.path(ctx, Neon.polygon(6, Math.PI / 6), 9, true);
+                ctx.fillStyle = '#ff8800'; ctx.globalAlpha = 0.25; ctx.fill(); ctx.globalAlpha = 1;
+                Neon.stroke(ctx, '#ff8800', 0.9, false);
+                ctx.restore();
+                Neon.light(ctx, bx, by, 2.2, '#ffcc66', 1);
+            }
+        }
+
+        // Row 2: weapon and drones
+        const weaponColors = { none: '#8899aa', spread: '#ff8c00', homing: '#00ff88', laser: '#4488ff' };
+        const weaponNames = { none: 'BASE SHOT', spread: 'SPREAD', homing: 'HOMING', laser: 'LASER' };
+        const wc = weaponColors[Player.primaryWeapon] || '#8899aa';
+        Neon.text(ctx, weaponNames[Player.primaryWeapon] || 'BASE SHOT', x0 + 16, 114, wc, 14, { align: 'left', halo: 0.2 });
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x0 + 24 + i * 18, 134, 6, wc, i < Player.primaryLevel);
+        for (let i = 0; i < 5; i++) UI.pip(ctx, x0 + 128 + i * 18, 134, 6, '#cc44ff', i < Player.droneLevel);
+
+        // Surge
+        if (GameConfig.graze.enabled) {
+            const pct = Scoring.surgeCharge / Scoring.surgeMax;
+            const ready = pct >= 1 && !Scoring.surgeActive;
+            const sc = Scoring.surgeActive ? '#ffffff' : (ready ? '#ffee33' : UI.CYAN);
+            const sx = x0 + 240, sw = 240;
+            let msg = Math.floor(pct * 100) + '%';
+            if (Scoring.surgeActive) msg = Scoring.surgeDuration.toFixed(1) + 's';
+            else if (ready) msg = 'READY';
+            UI.label(ctx, 'SURGE', sx, 114, sc, 14, 'left');
+            ctx.globalAlpha = ready && !Renderer.calm() ? 0.7 + Math.sin(t * 6) * 0.3 : 1;
+            Neon.text(ctx, msg, sx + sw, 114, ready || Scoring.surgeActive ? sc : UI.TEXT, 14, { align: 'right', halo: ready ? 0.4 : 0 });
+            ctx.globalAlpha = 1;
+            Neon.bar(ctx, sx, 124, sw, 14, Scoring.surgeActive ? Scoring.surgeDuration / Scoring.surgeMaxDuration : pct, sc, 10);
+        }
+
+        // Dash
+        if (GameConfig.dash.enabled) {
+            const ready = Player.dashCooldown <= 0, cd = GameConfig.dash.cooldown || 1;
+            const dx = x0 + 504, dw = PLAY_W - 520;
+            UI.label(ctx, 'DASH', dx, 114, ready ? '#00ff88' : UI.DIM, 14, 'left');
+            Neon.text(ctx, ready ? 'READY' : Player.dashCooldown.toFixed(1) + 's', dx + dw, 114, ready ? '#00ff88' : UI.DIM, 14, { align: 'right', halo: ready ? 0.3 : 0 });
+            Neon.bar(ctx, dx, 126, dw, 10, ready ? 1 : 1 - Player.dashCooldown / cd, ready ? '#00ff88' : '#4a5a70', 0);
+        }
+
+        // Under the play area: shield and escort
+        let by = PLAY_Y + PLAY_H + 36;
+        if (Player.maxShieldHp > 0) {
+            UI.label(ctx, 'SHIELD', x0 + 16, by, UI.DIM, 14, 'left');
+            Neon.bar(ctx, x0 + 120, by - 14, 220, 14, Player.shieldHp / Player.maxShieldHp,
+                Player.shieldFlashTimer > 0 ? '#ffffff' : '#4488ff', Player.maxShieldHp);
+            by += 34;
+        }
+        if (Escort.active && Escort.alive) {
+            const ePct = Escort.hp / Escort.maxHp;
+            UI.label(ctx, 'AURORA', x0 + 16, by, '#44ff88', 14, 'left');
+            Neon.bar(ctx, x0 + 120, by - 14, 220, 12, ePct, ePct > 0.3 ? '#44ff88' : '#ff3355', 10);
+        }
     },
 
     _drawLeft(ctx) {

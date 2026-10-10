@@ -202,6 +202,30 @@ const checks = {
             pass, evidence: r };
     },
 
+    async portraitLayout(g) {
+        const at = async (w, h) => {
+            await g.page.setViewportSize({ width: w, height: h });
+            return g.ev(() => {
+                resizeCanvas();
+                const pixi = Renderer.pixiCanvas ? Renderer.pixiCanvas.getBoundingClientRect() : null;
+                return {
+                    portrait: Layout.portrait, screen: [SCREEN_W, SCREEN_H], play: [PLAY_X, PLAY_Y],
+                    pixi: pixi && [Math.round(pixi.left), Math.round(pixi.top), Math.round(pixi.width), Math.round(pixi.height)],
+                    belowPlay: Math.round(window.innerHeight - (PLAY_Y + PLAY_H) * Layout.scale),
+                    controlsH: Math.round(Layout.controlsH(window.innerWidth, window.innerHeight)),
+                };
+            });
+        };
+        const phone = await at(390, 844), short = await at(360, 640), land = await at(844, 390);
+        await g.page.setViewportSize({ width: 1280, height: 720 });
+        await g.ev(() => resizeCanvas());
+        const pass = phone.portrait && phone.play[0] === 0 && phone.pixi && phone.pixi[2] === 390 && phone.belowPlay >= phone.controlsH
+            && short.portrait && short.belowPlay >= short.controlsH - 1 && short.pixi[2] < 360
+            && !land.portrait && land.screen[0] === 1920 && land.screen[1] === 1080;
+        return { section: 'layout', expect: 'Portrait windows get the play area full width (or as wide as fits) with room under it for the touch controls; landscape keeps 1920×1080',
+            pass, evidence: { phone, short, land } };
+    },
+
     async casualPresetAutofire(g) {
         const r = await g.ev(() => {
             Settings.values.fireMode = 'manual';

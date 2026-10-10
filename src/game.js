@@ -616,6 +616,9 @@ const Game = {
                 break;
 
             case 'achievements':
+                // Portrait shows one scrolling column (Menu.drawAchievements clamps the scroll)
+                if (Input.isPressed('down')) Menu.achScroll++;
+                if (Input.isPressed('up')) Menu.achScroll = Math.max(0, Menu.achScroll - 1);
                 if (Input.isPressed('back') || Input.isPressed('confirm')) {
                     this.state = 'title';
                     Menu.selectedIndex = 5;
