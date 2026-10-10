@@ -29,6 +29,7 @@ const SOURCE_FILES = [
     'backdrop3d.js',
     'config.js',
     'input.js',
+    'touch.js',
     'audio.js',
     'storage.js',
     'ui-systems.js',
@@ -127,12 +128,12 @@ async function build() {
     const html = '<!DOCTYPE html>\n'
         + '<html lang="en">\n<head>\n'
         + '<meta charset="UTF-8">\n'
-        + '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n'
+        + '<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">\n'
         + '<title>NEON STORM \u03b3</title>\n'
         + '<style>\n'
         + "@import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');\n"
         + '* { margin: 0; padding: 0; box-sizing: border-box; }\n'
-        + "body { background: #0a0612; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: 'Share Tech Mono', 'Consolas', 'Monaco', 'Courier New', monospace; }\n"
+        + "body { background: #0a0612; overflow: hidden; display: flex; justify-content: center; align-items: center; height: 100vh; touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; font-family: 'Share Tech Mono', 'Consolas', 'Monaco', 'Courier New', monospace; }\n"
         + '#game-container { position: relative; }\n'
         + '#pixi-play { position: absolute; z-index: 1; pointer-events: none; }\n'
         + '#game { position: relative; z-index: 2; display: block; }\n'

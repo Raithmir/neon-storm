@@ -152,9 +152,9 @@ const UI = {
     // Prompt text for the device in use: with a gamepad, key names become its
     // buttons (confirm is always A, back always B). Arrows read as the D-pad.
     keys(text) {
-        if (Input.lastDevice !== 'pad') return text;
+        if (Input.lastDevice !== 'pad' && Input.lastDevice !== 'touch') return text;
         return text
-            .replace('ARROW KEYS / D-PAD', 'D-PAD')
+            .replace('ARROW KEYS / D-PAD', Input.lastDevice === 'touch' ? 'STICK' : 'D-PAD')
             .replace(/\bENTER\b/g, '[A]')
             .replace(/\bESC\b/g, '[B]');
     },

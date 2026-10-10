@@ -1136,5 +1136,6 @@ const Game = {
         Transition.draw(ctx);
         FpsMeter.draw(ctx);
         HUD.showBackground(HUD._drawn);
+        Touch.draw();
     }
 };
