@@ -9,10 +9,18 @@ const Audio = {
     enabled: true,
 
     init() {
-        // Defer AudioContext creation to first user interaction (browser policy)
-        const createCtx = () => {
+        // Defer AudioContext creation to first user interaction (browser policy).
+        // Started by a touch (a phone or tablet): ask for bigger audio buffers.
+        // The default lowest latency leaves a busy phone's audio thread no slack,
+        // so it drops out; 'playback' adds a little SFX latency instead.
+        const createCtx = (e) => {
             if (this.ctx) return;
-            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            try {
+                this.ctx = new Ctx(e && e.type === 'touchstart' ? { latencyHint: 'playback' } : undefined);
+            } catch (err) {
+                this.ctx = new Ctx();
+            }
             this._buildMix();
             window.removeEventListener('click', createCtx);
             window.removeEventListener('keydown', createCtx);

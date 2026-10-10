@@ -293,6 +293,7 @@ const Renderer = {
             // Apply initial filter chain
             this._rebuildGameLayerFilters();
             this._rebuildFilterChain();
+            this._prewarmFilters();
 
             this.usePixi = true;
             this.ready = true;
@@ -428,10 +429,27 @@ const Renderer = {
                 resources: { bgUniforms: this._bgUniforms },
             });
             this._bgShaders[theme] = shader;
+            this._prewarmBackdrop(shader);
         }
         if (!this._bgMesh) this._bgMesh = new PIXI.Mesh({ geometry: this._bgGeometry, shader });
         else this._bgMesh.shader = shader;
         this.backdropTheme = theme;
+    },
+
+    // Compile a backdrop shader now (set during the briefing). With a 3D scene
+    // showing it stays hidden, so it would otherwise compile only when it takes
+    // over: when auto quality drops to LOW, which happens in the heaviest scene,
+    // usually the boss, on exactly the phones a compile stalls longest.
+    _prewarmBackdrop(shader) {
+        if (!this.app) return;
+        try {
+            if (!this._warmRT) this._warmRT = PIXI.RenderTexture.create({ width: 32, height: 32 });
+            const mesh = new PIXI.Mesh({ geometry: this._bgGeometry, shader });
+            this.app.renderer.render({ container: mesh, target: this._warmRT });
+            mesh.destroy();
+        } catch (e) {
+            console.warn('[Renderer] backdrop prewarm failed (it compiles on first use):', e);
+        }
     },
 
     // Per-frame uniforms: follows the level theme and reacts to bombs, bosses, Surge and bullet density
@@ -571,6 +589,35 @@ const Renderer = {
     // pixi-filters v6 (bundled by build.js) registers itself as PIXI.filters
     _filtersLib() {
         return (typeof PIXI !== 'undefined' && PIXI.filters && PIXI.filters.ShockwaveFilter) ? PIXI.filters : null;
+    },
+
+    // Compile every filter's shaders now, by rendering a tiny sprite through
+    // each of them once offscreen. Otherwise the god rays compile when the boss
+    // enters and the shockwave on the first bomb, and on phones a compile can
+    // block the main thread for long enough to starve the music scheduler.
+    _prewarmFilters() {
+        const filters = [this._colorGrade, this._chromaFilter, this._crtFilter, this._shockwaveFilter, this._godrayFilter,
+            this._glitchFilter, this._warpFilter, this._blurFilter, ...(this._shieldGlow || [])].filter(Boolean);
+        let rt = null, box = null;
+        try {
+            rt = PIXI.RenderTexture.create({ width: 32, height: 32 });
+            box = new PIXI.Container();
+            const s = new PIXI.Sprite(PIXI.Texture.WHITE);
+            s.width = s.height = 16; s.position.set(8, 8);
+            box.addChild(s);
+            for (const f of filters) {
+                const was = f.enabled;
+                f.enabled = true;
+                box.filters = [f];
+                this.app.renderer.render({ container: box, target: rt });
+                f.enabled = was;
+            }
+        } catch (e) {
+            console.warn('[Renderer] filter prewarm failed (effects still work, they compile on first use):', e);
+        } finally {
+            if (box) { box.filters = null; box.destroy({ children: true }); }
+            if (rt) rt.destroy(true);
+        }
     },
 
     _initShockwaveFilter() {
