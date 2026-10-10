@@ -1,7 +1,7 @@
 // ============================================================
 //  TOUCH CONTROLS
 //  Movement plus buttons on the right, drawn on their own full-window canvas
-//  (#touch-ui) so they also fit the letterbox in portrait.
+//  (#touch-ui). In portrait they sit under the play area (Layout.controlsH).
 //
 //  Two ways to move in play (Settings TOUCH MOVE); menus always use the stick:
 //  - DRAG (default): a finger anywhere off the buttons moves the ship by the
@@ -89,15 +89,20 @@ const Touch = {
         return typeof Game !== 'undefined' && Game.state === 'playing' ? 'play' : 'menu';
     },
 
-    // Sizes scale with the short side of the window: u ≈ 39 px on a phone in landscape
-    _unit() { return Math.max(28, Math.min(window.innerWidth, window.innerHeight) / 10); },
+    // Sizes scale with the short side of the window: u ≈ 39 px on a phone
+    _unit() { return Math.max(28, Math.min(48, Math.min(window.innerWidth, window.innerHeight) / 10)); }, // as Layout.controlsH
     _radius() { return this._unit() * 1.5; },
     _dragMode() { return this._mode() === 'play' && Settings.values.touchMove !== 'stick'; },
     dragging() { return !!this.drag; },
 
+    // Portrait: top of the strip under the play area, CSS px
+    _belowPlay() { return (PLAY_Y + PLAY_H) * Layout.scale; },
+
     _buttons() {
         const W = window.innerWidth, H = window.innerHeight, u = this._unit();
         const at = (rx, ry) => ({ x: W - rx * u, y: H - ry * u });
+        // Landscape: top-right corner; portrait: under the play area on the left, clear of the HUD
+        const pause = Layout.portrait ? { x: 1.0 * u, y: this._belowPlay() + 0.9 * u } : { x: W - 1.0 * u, y: 1.0 * u };
         if (this._mode() === 'menu') {
             return [
                 { action: 'confirm', label: 'A', r: 1.15 * u, color: '#00ff88', ...at(2.0, 2.0) },
@@ -109,7 +114,7 @@ const Touch = {
                 { action: 'bomb', label: 'BOMB', r: 1.15 * u, color: '#ff3366', ...at(2.0, 2.0) },
                 { action: 'dash', label: 'DASH', r: 0.85 * u, color: '#ffcc00', ...at(4.6, 1.3) },
                 { action: 'surge', label: 'SURGE', r: 0.85 * u, color: '#cc44ff', ...at(1.3, 4.6) },
-                { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', x: W - 1.0 * u, y: 1.0 * u },
+                { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', ...pause },
             ];
         }
         return [
@@ -117,7 +122,7 @@ const Touch = {
             { action: 'bomb', label: 'BOMB', r: 0.85 * u, color: '#ff3366', ...at(4.6, 1.3) },
             { action: 'dash', label: 'DASH', r: 0.85 * u, color: '#ffcc00', ...at(1.3, 4.6) },
             { action: 'surge', label: 'SURGE', r: 0.85 * u, color: '#cc44ff', ...at(4.0, 4.0) },
-            { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', x: W - 1.0 * u, y: 1.0 * u },
+            { action: 'pause', label: 'II', r: 0.6 * u, color: '#8899bb', ...pause },
         ];
     },
 
@@ -273,7 +278,8 @@ const Touch = {
                 g.globalAlpha = 0.35;
                 g.fillStyle = '#00e5ff';
                 g.font = Math.round(0.36 * u) + "px 'Share Tech Mono', monospace";
-                g.fillText('DRAG ANYWHERE TO MOVE', Math.min(W / 2, 4.5 * u), H - 1.2 * u);
+                if (Layout.portrait) g.fillText('DRAG ANYWHERE TO MOVE', W / 2, this._belowPlay() + 0.75 * u);
+                else g.fillText('DRAG ANYWHERE TO MOVE', Math.min(W / 2, 4.5 * u), H - 1.2 * u);
             }
             this._drawButtons(g, u, W, H);
             return;
@@ -305,12 +311,6 @@ const Touch = {
             g.fillText(b.label, b.x, b.y);
         }
 
-        if (H > W) {
-            g.globalAlpha = 0.6;
-            g.fillStyle = '#8899bb';
-            g.font = Math.round(0.4 * u) + "px 'Share Tech Mono', monospace";
-            g.fillText('ROTATE FOR A BIGGER VIEW', W / 2, 1.0 * u);
-        }
         g.globalAlpha = 1;
     },
 

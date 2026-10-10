@@ -28,6 +28,7 @@ const UI = {
         const c = document.createElement('canvas');
         c.width = Math.round(SCREEN_W * k); c.height = Math.round(SCREEN_H * k);
         c._scale = k;
+        c._layout = Layout.version;
         const g = c.getContext('2d');
         g.scale(k, k);
         const horizon = SCREEN_H * 0.62;
@@ -94,7 +95,7 @@ const UI = {
     // grid scrolling toward the viewer. opts.dim darkens it for busy screens.
     background(ctx, opts) {
         const o = opts || {};
-        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale) this._bgCache = this._bakeBackground();
+        if (!this._bgCache || this._bgCache._scale !== Renderer.uiScale || this._bgCache._layout !== Layout.version) this._bgCache = this._bakeBackground();
         ctx.drawImage(this._bgCache, 0, 0, SCREEN_W, SCREEN_H);
         const horizon = SCREEN_H * 0.62;
         const cx = SCREEN_W / 2;
@@ -146,7 +147,39 @@ const UI = {
     },
 
     hint(ctx, text, y) {
-        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || SCREEN_H - 40, this.DIM, 15, { weight: '', halo: 0 });
+        Neon.text(ctx, this.keys(text), SCREEN_W / 2, y || Layout.menuBottom() - 40, this.DIM, 15, { weight: '', halo: 0 });
+    },
+
+    // --- Portrait (phone) layout ---
+
+    // Smallest text size on the portrait overlay: 22 logical px (~12 CSS px on a
+    // typical phone), more where the overlay is scaled down further (short phones)
+    get TEXT_MIN() { return Math.max(22, Math.round(11 / Layout.scale)); },
+    // Text size as drawn: in portrait nothing goes below TEXT_MIN (idempotent)
+    fs(size) { return Layout.portrait ? Math.max(size, this.TEXT_MIN) : size; },
+    // Width for a centred block: `w` in landscape, capped to the screen in portrait
+    w(w) { return Layout.portrait ? Math.min(w, SCREEN_W - 32) : w; },
+
+    // Split text into lines no wider than maxW at this size (as Neon.text draws it)
+    wrap(ctx, text, maxW, size, weight) {
+        ctx.font = (weight === undefined ? 'bold ' : weight + ' ') + this.fs(size) + 'px ' + Neon.FONT;
+        const lines = [];
+        let line = '';
+        for (const word of String(text).split(' ')) {
+            const next = line ? line + ' ' + word : word;
+            if (line && ctx.measureText(next).width > maxW) { lines.push(line); line = word; } else line = next;
+        }
+        if (line) lines.push(line);
+        return lines;
+    },
+
+    // Wrapped paragraph; returns the y below it
+    para(ctx, text, x, y, maxW, color, size, lineH, align) {
+        for (const line of this.wrap(ctx, text, maxW, size, '')) {
+            Neon.text(ctx, line, x, y, color, size, { weight: '', halo: 0, align: align || 'center' });
+            y += lineH;
+        }
+        return y;
     },
 
     // Prompt text for the device in use: with a gamepad, key names become its
@@ -201,7 +234,7 @@ const UI = {
         const o = opts || {};
         const w = o.w || 420;
         const color = o.color || this.CYAN;
-        const size = o.size || 24;
+        const size = this.fs(o.size || 24);
         if (selected) {
             const pulse = Renderer.calm() ? 0.25 : 0.2 + Math.sin(this.time() * 4) * 0.06;
             const g = ctx.createLinearGradient(cx - w / 2, 0, cx + w / 2, 0);
@@ -231,13 +264,15 @@ const UI = {
         });
         ctx.globalAlpha = 1;
         if (o.desc) {
-            Neon.text(ctx, o.desc, cx, y + size * 0.95, selected ? this.TEXT : this.DIM, 14, { weight: '', halo: 0 });
+            // Portrait: a description too wide for the entry wraps onto a second line
+            const lines = Layout.portrait ? this.wrap(ctx, o.desc, w - 24, 14, '') : [o.desc];
+            lines.forEach((line, i) => Neon.text(ctx, line, cx, y + size * 0.95 + i * this.fs(14) * 1.2, selected ? this.TEXT : this.DIM, 14, { weight: '', halo: 0 }));
         }
     },
 
-    // Horizontal row of tabs; returns nothing. colors[] optional per tab.
-    tabs(ctx, labels, selectedIndex, cx, y, colors) {
-        const tw = 170;
+    // Horizontal row of tabs; returns nothing. colors[] optional per tab, tabW their width.
+    tabs(ctx, labels, selectedIndex, cx, y, colors, tabW) {
+        const tw = tabW || 170;
         const x0 = cx - (labels.length * tw) / 2;
         for (let i = 0; i < labels.length; i++) {
             const x = x0 + i * tw + tw / 2;

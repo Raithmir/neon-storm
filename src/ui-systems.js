@@ -103,9 +103,9 @@ const CustomDifficulty = {
         UI.background(ctx, { dim: 0.6 });
         UI.title(ctx, 'CUSTOM DIFFICULTY', 90, '#cc44ff');
         UI.label(ctx, 'Scores will not be recorded to leaderboards', SCREEN_W / 2, 140, UI.DIM, 15);
-        const cx = SCREEN_W / 2;
-        const top = 200, lineH = 44;
-        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * lineH + 30, '#cc44ff');
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        const top = 200, lineH = P ? 48 : 44, pw = UI.w(840), lx = P ? cx - 16 : cx - 30, vx = P ? cx + 10 : cx + 20;
+        UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * lineH + 30, '#cc44ff');
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
             const y = top + i * lineH;
@@ -117,18 +117,18 @@ const CustomDifficulty = {
             if (selected) {
                 ctx.fillStyle = '#cc44ff';
                 ctx.globalAlpha = 0.14;
-                ctx.fillRect(cx - 400, y - 24, 800, 36);
+                ctx.fillRect(cx - pw / 2 + 20, y - 24, pw - 40, 36);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 400, y - 24, 3, 36);
+                ctx.fillRect(cx - pw / 2 + 20, y - 24, 3, 36);
             }
-            Neon.text(ctx, item.label, cx - 30, y, selected ? '#ffffff' : UI.DIM, selected ? 18 : 17, { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
+            Neon.text(ctx, item.label, lx, y, selected ? '#ffffff' : UI.DIM, selected ? 18 : 17, { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
             const val = item.key === 'startLevel' ? this.startLevel : this._getVal(item);
             if (item.type === 'toggle') {
-                Neon.text(ctx, val ? 'ON' : 'OFF', cx + 20, y, val ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: selected ? 0.3 : 0 });
+                Neon.text(ctx, val ? 'ON' : 'OFF', vx, y, val ? '#00ff88' : '#ff3355', 17, { align: 'left', halo: selected ? 0.3 : 0 });
             } else if (item.type === 'cycle') {
                 const idx = item.options.indexOf(val);
                 const display = (item.labels ? item.labels[idx] : String(val) + (item.suffix || '')).toUpperCase();
-                Neon.text(ctx, selected ? '◂  ' + display + '  ▸' : display, cx + 20, y, selected ? UI.CYAN : UI.TEXT, 17, { align: 'left', halo: selected ? 0.3 : 0 });
+                Neon.text(ctx, selected ? '◂  ' + display + '  ▸' : display, vx, y, selected ? UI.CYAN : UI.TEXT, 17, { align: 'left', halo: selected ? 0.3 : 0 });
             }
         }
         UI.hint(ctx, '↑↓ SELECT   ←→ ADJUST   ENTER CONFIRM   ESC BACK');
@@ -240,8 +240,10 @@ const Hangar = {
         UI.title(ctx, 'HANGAR', 100);
         Neon.text(ctx, 'NEON CREDITS  ' + NeonCredits.balance, SCREEN_W / 2, 158, '#ffaa00', 20, { halo: 0.3 });
 
-        const cx = SCREEN_W / 2;
-        const lx = cx - 600, lw = 540, top = 210, ph = 640;
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        // Portrait: the list above, the preview under it
+        const lw = UI.w(540), lx = P ? cx - lw / 2 : cx - 600, top = P ? 196 : 210, ph = P ? 560 : 640;
+        const catStep = P ? 92 : 100, itemStep = P ? 82 : 108;
         const inItems = this.mode !== 'categories';
         UI.panel(ctx, lx, top, lw, ph, UI.CYAN, { title: inItems ? this.categories[this.categoryIndex] : 'CATEGORIES' });
 
@@ -250,7 +252,7 @@ const Hangar = {
             const keys = ['skins', 'trails', 'bullets', 'explosions'];
             const equipKeys = ['skin', 'trail', 'bullet', 'explosion'];
             for (let i = 0; i < this.categories.length; i++) {
-                const y = top + 90 + i * 100;
+                const y = top + (P ? 72 : 90) + i * catStep;
                 const selected = i === this.categoryIndex;
                 UI.item(ctx, this.categories[i], lx + lw / 2, y, selected, { w: lw - 60, size: 26 });
                 if (i < 4) {
@@ -268,16 +270,16 @@ const Hangar = {
             const equipKey = this._getEquipKey();
             for (let i = 0; i < items.length; i++) {
                 const item = items[i];
-                const y = top + 80 + i * 108;
+                const y = top + (P ? 64 : 80) + i * itemStep;
                 const selected = i === this.itemIndex;
                 const owned = this.unlocked[unlockKey].includes(item.id);
                 const isEquipped = this.equipped[equipKey] === item.id;
                 if (selected) {
                     ctx.fillStyle = item.color;
                     ctx.globalAlpha = 0.12;
-                    ctx.fillRect(lx + 20, y - 36, lw - 40, 84);
+                    ctx.fillRect(lx + 20, y - 36, lw - 40, itemStep - 16);
                     ctx.globalAlpha = 1;
-                    ctx.fillRect(lx + 20, y - 36, 3, 84);
+                    ctx.fillRect(lx + 20, y - 36, 3, itemStep - 16);
                 }
                 // Swatch
                 ctx.save();
@@ -308,14 +310,15 @@ const Hangar = {
         }
 
         // Preview
-        const px = cx + 60, pw = 540;
-        UI.panel(ctx, px, top, pw, ph, previewItem ? previewItem.color : UI.DIM, { title: 'PREVIEW', fill: 'rgba(3, 1, 12, 0.85)' });
+        const pw = lw, px = P ? lx : cx + 60;
+        const pTop = P ? top + ph + 16 : top, pH = P ? Layout.menuBottom() - 70 - pTop : ph;
+        UI.panel(ctx, px, pTop, pw, pH, previewItem ? previewItem.color : UI.DIM, { title: 'PREVIEW', fill: 'rgba(3, 1, 12, 0.85)' });
         if (previewItem) {
             ctx.save();
-            ctx.beginPath(); ctx.rect(px + 2, top + 28, pw - 4, ph - 30); ctx.clip();
-            this._drawPreview(ctx, previewCat, previewItem, px + pw / 2, top + 30 + (ph - 30) / 2, pw, ph - 30);
+            ctx.beginPath(); ctx.rect(px + 2, pTop + 28, pw - 4, pH - 30); ctx.clip();
+            this._drawPreview(ctx, previewCat, previewItem, px + pw / 2, pTop + 30 + (pH - 30) / 2, pw, pH - 30);
             ctx.restore();
-            UI.label(ctx, previewItem.name.toUpperCase(), px + pw / 2, top + ph - 24, previewItem.color, 18);
+            UI.label(ctx, previewItem.name.toUpperCase(), px + pw / 2, pTop + pH - 24, previewItem.color, 18);
         }
         UI.hint(ctx, '↑↓ SELECT   ENTER CONFIRM   ESC BACK');
     },
@@ -479,17 +482,22 @@ const Tutorial = {
         UI.background(ctx, { dim: 0.6 });
         UI.title(ctx, 'HOW TO PLAY', 100);
         const page = this.pages[this.pageIndex];
-        const cx = SCREEN_W / 2;
-        UI.panel(ctx, cx - 420, 170, 840, 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
+        const cx = SCREEN_W / 2, P = Layout.portrait, pw = UI.w(840);
+        UI.panel(ctx, cx - pw / 2, 170, pw, P ? Layout.menuBottom() - 300 : 690, UI.MAGENTA, { title: 'PAGE ' + (this.pageIndex + 1) + ' / ' + this.pages.length });
         Neon.text(ctx, page.title, cx, 250, UI.MAGENTA, 38, { core: 0.4 });
         let y = 320;
+        const x0 = cx - pw / 2 + (P ? 36 : 80);
         for (const line of page.lines) {
             const indent = line.startsWith('  ');
-            Neon.text(ctx, line.trim(), cx - 340 + (indent ? 40 : 0), y, indent ? UI.CYAN : UI.TEXT, 20, { align: 'left', halo: 0, weight: indent ? 'bold' : '' });
-            y += 36;
+            const x = x0 + (indent ? 40 : 0);
+            // Portrait: a line too long for the panel wraps
+            for (const part of P && line.trim() ? UI.wrap(ctx, line.trim(), cx + pw / 2 - 30 - x, 20, indent ? 'bold' : '') : [line.trim()]) {
+                Neon.text(ctx, part, x, y, indent ? UI.CYAN : UI.TEXT, 20, { align: 'left', halo: 0, weight: indent ? 'bold' : '' });
+                y += 36;
+            }
         }
         for (let i = 0; i < this.pages.length; i++) {
-            UI.pip(ctx, cx + (i - (this.pages.length - 1) / 2) * 30, SCREEN_H - 110, 6, UI.CYAN, i === this.pageIndex);
+            UI.pip(ctx, cx + (i - (this.pages.length - 1) / 2) * 30, Layout.menuBottom() - 110, 6, UI.CYAN, i === this.pageIndex);
         }
         const nav = [];
         if (this.pageIndex > 0) nav.push('← PREV');

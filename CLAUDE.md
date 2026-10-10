@@ -21,6 +21,7 @@ There are no unit tests, no lint, and no transpilation — vanilla JS only.
 npm run sim:checks     # regression checks for known gameplay bugs (tools/sim/checks.js)
 npm run sim:render     # render smoke test: every screen + every level drawn, fails on any error
 npm run sim:audio      # audio check: every music track + SFX rendered offline; --wav writes previews
+node tools/sim/screens.js portrait   # screenshot every screen (portrait phone, or landscape / WxH) to tools/sim/out/screens/
 ```
 
 CI (`.github/workflows/ci.yml`) runs on every PR and on pushes to main/delta: it builds, fails if the committed `dist/` doesn't match `src/` (so always run `node build.js` and commit `dist/`), then runs `sim:checks` in one job and `sim:render` + `sim:audio` in a parallel one (Playwright's Chromium is cached). Pushes to main deploy the built game to GitHub Pages (`.github/workflows/pages.yml`).
@@ -58,6 +59,7 @@ Menus / HUD / transitions → Overlay Canvas 2D (1920×1080) directly
 - The shader backdrop is a GPU fragment shader in `backdrops.js` (`BACKDROP_SHADERS[bgType]`), drawn by `Renderer.setBackdrop()` under everything else. Its uniforms (`Renderer._updateBackdrop`) react to bombs/flashes (`bgPulse`), bosses, Surge and bullet density (it dims under dense patterns). When it is active, `Background.draw()` skips the painted Canvas 2D background, which remains the no-WebGL fallback
 - Bullets and particles are native Pixi particles using shapes from one FX texture sheet (`Renderer.fx`: glow, orb, core, shadow, streak, needle, missile, spark). Enemy bullets get a dark shadow (normal blend) under an additive orb/needle and core; player shots are streaks/missiles pointing along their velocity. `Particles.flash/impact/spawnExplosion/shatter` build effects; `shatter` breaks an entity's neon outline (`Enemies.outline`, `MidBoss.outline`, `Boss.outlines`) into spinning line segments
 - Resolution: both the overlay and the play area render at the display's pixel density (CSS scale × `devicePixelRatio`), capped by the GRAPHICS QUALITY setting (`Renderer.QUALITY`: high 2×, medium 1.5×, low 1×; `auto` starts high and steps down after ~3 s of slow frames in play). Draw code keeps using logical coordinates; `Renderer.applyResolution()` sets the canvas transforms (`Renderer.uiScale`, `Renderer.playScale`). Pixi filters use `resolution: 'inherit'`. Caches drawn onto the overlay must be baked at `Renderer.uiScale` (see `UI._bakeBackground`)
+- Layout (`Layout` in constants.js): a landscape window gets the 1920×1080 overlay with HUD panels either side of the play area. A portrait window (taller than 1.1× its width, e.g. a phone held upright) gets an overlay as wide as the play area (wider if the window is short) and as tall as the window's shape: a HUD strip (`Layout.HUD_TOP`) above the play area and `Layout.controlsH()` free under it for the touch controls. `SCREEN_W`/`SCREEN_H`/`PLAY_X`/`PLAY_Y`/`HUD_*` are `let`s recomputed on resize; `PLAY_W`/`PLAY_H` never change. Caches drawn at the overlay's size must also rebake when `Layout.version` changes
 - Screen effects (bomb shockwave, boss god-rays, phase-change glitch) use pixi-filters v6 (the PixiJS v8 line, `PIXI.filters`), bundled by `build.js`; `Renderer._filtersLib()` guards them, and their centres are in play-area pixels
 - When PixiJS is unavailable, `getEntityCtx()` is the offscreen canvas and `Game.draw()` blits it to the overlay — all draw code works identically in both paths
 
@@ -123,6 +125,8 @@ Each module keeps its art next to its logic: `Enemies._neon` / `_bake`, `MidBoss
 ### UI
 
 Menus, briefing, results screens and the HUD are drawn on the overlay canvas with the `UI` kit (`ui-kit.js`): `UI.background` (animated neon horizon), `UI.panel`, `UI.title`, `UI.item` (menu entries), `UI.hint`, plus `Neon.text` / `Neon.bar` / `Neon.topBar`. Screen code sets `Menu.items` while drawing, and `Game.update()` reads it for navigation, so keep the item lists in step with the handlers. The briefing renders the upcoming level's backdrop in the play area.
+
+Every screen has a portrait layout too (check with `node tools/sim/screens.js portrait`; `sim:render` draws every screen in both). In portrait, lay out in one column inside `Layout.menuBottom()` (below it are the touch controls), cap widths with `UI.w()`, and wrap long text with `UI.wrap` / `UI.para`. Text on the portrait overlay is never drawn below `UI.TEXT_MIN` (`UI.fs`), and `Neon.text` shrinks a line that would run off the screen, so leave room for small text at that size. The portrait HUD is `HUD._drawPortrait`.
 
 Flash Reduction (`Settings.values.flashReduction`) is honoured through `Renderer.calm()`: every flash, glitch, chromatic split and backdrop pulse must check it.
 

@@ -27,6 +27,7 @@ const OUT_DIR = path.join(__dirname, 'out');
 
 // opts.draw: keep rendering on (for render tests); the default stubs it out for speed
 // opts.args: extra Chromium flags
+// opts.dpr: device pixel ratio (screenshots)
 async function launch(opts = {}) {
     if (!fs.existsSync(GAME_HTML)) {
         throw new Error('Game build not found: ' + GAME_HTML + ' (run `node build.js` first)');
@@ -36,7 +37,7 @@ async function launch(opts = {}) {
         // Software WebGL so the PixiJS renderer can initialise without a GPU
         args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', ...(opts.args || [])],
     });
-    const page = await browser.newPage();
+    const page = await browser.newPage({ deviceScaleFactor: opts.dpr || 1 });
     const errors = [];
     page.on('pageerror', e => { errors.push(e.message); console.log('PAGE ERROR:', e.message); });
     page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });

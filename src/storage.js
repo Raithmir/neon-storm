@@ -371,9 +371,10 @@ const Settings = {
     draw(ctx) {
         UI.background(ctx, { dim: 0.55 });
         UI.title(ctx, 'SETTINGS', 110);
-        const cx = SCREEN_W / 2;
-        const rowH = 58, top = 200;
-        UI.panel(ctx, cx - 420, top - 40, 840, this.items.length * rowH + 30, UI.CYAN);
+        const cx = SCREEN_W / 2, P = Layout.portrait;
+        // Portrait: rows tighter, labels and values closer to the centre
+        const rowH = P ? 54 : 58, top = P ? 190 : 200, pw = UI.w(840), lx = P ? cx - 16 : cx - 30;
+        UI.panel(ctx, cx - pw / 2, top - 40, pw, this.items.length * rowH + 30, UI.CYAN);
 
         for (let i = 0; i < this.items.length; i++) {
             const item = this.items[i];
@@ -388,21 +389,21 @@ const Settings = {
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;
-                ctx.fillRect(cx - 400, y - 26, 800, 42);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, pw - 40, 42);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 400, y - 26, 3, 42);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, 3, 42);
             }
-            Neon.text(ctx, item.label, cx - 30, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
+            Neon.text(ctx, item.label, lx, y + 2, selected ? '#ffffff' : UI.DIM, selected ? 20 : 18,
                 { align: 'right', halo: 0, weight: selected ? 'bold' : '' });
 
-            const vx = cx + 20;
+            const vx = P ? cx + 6 : cx + 20, barW = P ? 170 : 220;
             if (item.type === 'slider') {
                 const val = this.values[item.key];
-                Neon.bar(ctx, vx + 24, y - 10, 220, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
-                Neon.text(ctx, val + '%', vx + 270, y + 2, valColor, 18, { align: 'left', halo: 0 });
+                Neon.bar(ctx, vx + 24, y - 10, barW, 12, val / item.max, selected ? UI.CYAN : '#5a6a88', 10);
+                Neon.text(ctx, val + '%', vx + barW + 50, y + 2, valColor, 18, { align: 'left', halo: 0 });
                 if (selected) {
                     Neon.text(ctx, '◂', vx + 8, y + 2, UI.CYAN, 18, { halo: 0 });
-                    Neon.text(ctx, '▸', vx + 340, y + 2, UI.CYAN, 18, { halo: 0 });
+                    Neon.text(ctx, '▸', vx + barW + 120, y + 2, UI.CYAN, 18, { halo: 0 });
                 }
             } else if (item.type === 'cycle') {
                 const val = this.values[item.key].toString().toUpperCase();
@@ -523,11 +524,14 @@ const ControlsScreen = {
         UI.title(ctx, 'CONTROLS', 100);
         const cx = SCREEN_W / 2;
         const items = this.getItems();
-        const top = 220, lineH = 50;
-        UI.panel(ctx, cx - 440, top - 70, 880, items.length * lineH + 60, UI.CYAN);
-        UI.label(ctx, 'ACTION', cx - 260, top - 30, UI.DIM, 14);
-        UI.label(ctx, 'KEYBOARD', cx, top - 30, UI.DIM, 14);
-        UI.label(ctx, 'GAMEPAD', cx + 260, top - 30, UI.DIM, 14);
+        const P = Layout.portrait;
+        // Portrait: the three columns pulled in to fit the panel
+        const top = 220, lineH = 50, pw = UI.w(880);
+        const ax = P ? cx - 252 : cx - 260, kx = P ? cx - 10 : cx, gx = P ? cx + 248 : cx + 260;
+        UI.panel(ctx, cx - pw / 2, top - 70, pw, items.length * lineH + 60, UI.CYAN);
+        UI.label(ctx, 'ACTION', ax, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'KEYBOARD', kx, top - 30, UI.DIM, 14);
+        UI.label(ctx, 'GAMEPAD', gx, top - 30, UI.DIM, 14);
 
         for (let i = 0; i < items.length; i++) {
             const item = items[i];
@@ -540,29 +544,30 @@ const ControlsScreen = {
             if (selected) {
                 ctx.fillStyle = UI.CYAN;
                 ctx.globalAlpha = 0.12;
-                ctx.fillRect(cx - 420, y - 26, 840, 40);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, pw - 40, 40);
                 ctx.globalAlpha = 1;
-                ctx.fillRect(cx - 420, y - 26, 3, 40);
+                ctx.fillRect(cx - pw / 2 + 20, y - 26, 3, 40);
             }
-            Neon.text(ctx, item.label, cx - 260, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
+            Neon.text(ctx, item.label, ax, y, selected ? '#ffffff' : UI.TEXT, 18, { halo: 0, weight: selected ? 'bold' : '' });
             const listenKey = this.mode === 'rebind_key' && selected;
             const listenBtn = this.mode === 'rebind_button' && selected;
-            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), cx, y,
+            Neon.text(ctx, listenKey ? '[ PRESS A KEY ]' : Input.getKeyBindDisplay(item.action), kx, y,
                 listenKey ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenKey ? 0.4 : 0, weight: '' });
-            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), cx + 260, y,
+            Neon.text(ctx, listenBtn ? '[ PRESS BUTTON ]' : Input.getGpBindDisplay(item.action), gx, y,
                 listenBtn ? '#ffee33' : (selected ? UI.CYAN : UI.DIM), 17, { halo: listenBtn ? 0.4 : 0, weight: '' });
         }
 
+        const bottom = Layout.menuBottom(), fy = bottom - (P ? 120 : 90), tw = UI.w(1200);
         if (this.mode === 'rebind_key') {
-            UI.label(ctx, 'Press any key to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
+            UI.para(ctx, 'Press any key to bind, or ESC to cancel', cx, fy, tw, '#ffee33', 16, 26);
         } else if (this.mode === 'rebind_button') {
-            UI.label(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, SCREEN_H - 90, '#ffee33', 16);
+            UI.para(ctx, 'Press any gamepad button to bind, or ESC to cancel', cx, fy, tw, '#ffee33', 16, 26);
         } else {
-            UI.label(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, SCREEN_H - 90, UI.DIM, 15);
+            UI.para(ctx, 'ENTER/→ REBIND KEYBOARD    ← REBIND GAMEPAD (IF CONNECTED)', cx, fy, tw, UI.DIM, 15, 26);
         }
-        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, SCREEN_H - 62,
+        UI.label(ctx, Input.gamepadState ? 'GAMEPAD CONNECTED' : 'NO GAMEPAD DETECTED', cx, bottom - 62,
             Input.gamepadState ? '#00ff88' : UI.DIM, 14);
-        UI.hint(ctx, 'ESC BACK', SCREEN_H - 34);
+        UI.hint(ctx, 'ESC BACK', bottom - 34);
     }
 };
 
