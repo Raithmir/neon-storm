@@ -181,12 +181,15 @@ const Audio = {
     // --- Player ---
 
     // Base shot: fires constantly, so it is short and soft (a triangle "pew" + a click)
+    // Base shot, ~8 a second while firing: a low muffled pop over a short kick
+    // (the old bright 1.5 kHz chirp grated at that rate)
     playShot() {
         if (!this._ok() || this._throttle('shot', 0.03)) return;
-        const t = this.ctx.currentTime, p = this._rPitch(0.12);
-        const out = this._createGain(0.32);
-        this._tone(t, out, { type: 'triangle', f: 1500 * p, f2: 650 * p, dur: 0.06, gain: 0.8 });
-        this._noise(t, out, { filter: 'highpass', f: 5000, dur: 0.015, gain: 0.25 });
+        const t = this.ctx.currentTime, p = this._rPitch(0.08);
+        const out = this._createGain(0.26);   // a little under the old chirp's level
+        this._tone(t, out, { type: 'triangle', f: 340 * p, f2: 160 * p, dur: 0.035, gain: 0.7, lp: 900 });    // pop
+        this._noise(t, out, { filter: 'bandpass', f: 700 * p, q: 1, dur: 0.02, gain: 0.4 });                  // its attack
+        this._tone(t, out, { type: 'sine', f: 140 * p, f2: 70 * p, dur: 0.045, gain: 0.6 });                  // kick
     },
 
     // Homing weapon: a missile whoosh
