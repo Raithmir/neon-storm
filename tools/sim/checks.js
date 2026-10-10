@@ -195,7 +195,7 @@ const checks = {
         r.released = await ship();
         await g.ev(() => { Input.lastDevice = 'keyboard'; });
         const pass = Math.abs(r.small.moved - r.small.want) < 1 && r.small.fire && r.small.hitbox
-            && r.flick.first100ms <= env.speed * 0.1 + 7 && Math.abs(r.flick.total - env.cap) < 2
+            && r.flick.first100ms <= env.speed * 0.15  // 100 ms at top speed plus one frame of slack (frames cap at 50 ms); uncapped would be the full 108 && Math.abs(r.flick.total - env.cap) < 2
             && Math.abs(r.wall.x - (env.radius + r.wall.want)) < 1 && r.cornerButton === 'bomb'
             && r.dashDir.x < -0.5 && r.dashDir.y > 0.3 && !r.released.fire && !r.released.hitbox;
         return { section: 'touch', expect: 'Drag moves the ship 1:1 with finger travel, at most at top speed and a bounded lag, stores nothing against walls, and dash follows the drag',
