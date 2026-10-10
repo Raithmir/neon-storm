@@ -85,7 +85,7 @@ Other states: settings, high_scores, hangar, tutorial
 | `Renderer` | renderer.js | PixiJS pipeline manager |
 | `GameConfig` | config.js | Live difficulty settings (mutated at level start) |
 | `Input` | input.js | Keyboard/gamepad polling |
-| `Touch` | touch.js | On-screen stick and buttons for touch screens; feeds `Input` |
+| `Touch` | touch.js | Touch controls: drag or stick movement plus on-screen buttons; feeds `Input` and `Player` |
 | `Audio` | audio.js | Procedural SFX via Web Audio API; the mix buses (SFX, music, compressor) |
 | `Music` | music.js | Procedural synthwave soundtrack, driven by game state each frame |
 | `Player` | player.js | Player ship state |

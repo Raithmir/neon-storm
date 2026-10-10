@@ -124,6 +124,7 @@ const checks = {
         await startQuiet(g);
         const r = await g.ev(() => {
             Settings.values.touchControls = 'auto';
+            Settings.values.touchMove = 'stick';
             const ev = (type, id, x, y) => window.dispatchEvent(new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y, bubbles: true }));
             const R = Touch._radius(), y = window.innerHeight * 0.7;
             const out = { R };
@@ -148,6 +149,56 @@ const checks = {
         const pass = r.farRight.mx > 0.95 && r.farRight.owned && r.farRight.fire && r.reversed < -0.3
             && r.cornerTap.length === 1 && r.stickKept && !r.released.stick && r.released.mx === 0 && !r.released.fire && r.device === 'touch';
         return { section: 'touch', expect: 'The stick keeps its finger anywhere on screen, follows it past the rim (instant reversal), and missed button taps snap to the nearest',
+            pass, evidence: r };
+    },
+
+    async touchDragMoves(g) {
+        await startQuiet(g);
+        // Fingers are driven from Node between frames: pointer events land between game updates, as on a device
+        const touch = (type, id, x, y) => g.ev(([type, id, x, y]) => window.dispatchEvent(
+            new PointerEvent(type, { pointerId: id, pointerType: 'touch', clientX: x, clientY: y, bubbles: true })), [type, id, x, y]);
+        const env = await g.ev(() => {
+            Settings.values.touchControls = 'auto';
+            Settings.values.touchMove = 'drag';
+            Player.x = 360; Player.y = 700;
+            return { k: SCREEN_W / canvas.clientWidth, W: window.innerWidth, H: window.innerHeight, radius: Player.radius, speed: Player.speed, cap: Player.speed * Touch.DRAG_LAG };
+        });
+        const ship = () => g.ev(() => ({ x: +Player.x.toFixed(1), y: +Player.y.toFixed(1), fire: Input.isHeld('fire'), hitbox: Touch.dragging() }));
+        const r = { env };
+        let fx = env.W * 0.3, fy = env.H * 0.6;
+        await touch('pointerdown', 1, fx, fy);
+        await touch('pointermove', 1, fx += 20, fy);           // small drag: followed 1:1
+        await g.run(300);
+        const a = await ship();
+        r.small = { moved: +(a.x - 360).toFixed(1), want: +(20 * env.k).toFixed(1), fire: a.fire, hitbox: a.hitbox };
+        await touch('pointermove', 1, fx += 400, fy);          // flick: capped speed, bounded lag
+        await g.run(100);
+        const b = await ship();
+        await g.run(1500);
+        const c = await ship();
+        r.flick = { first100ms: +(b.x - a.x).toFixed(1), total: +(c.x - a.x).toFixed(1) };
+        await g.ev(() => { Player.x = 30; });                  // pushing into the left wall stores nothing
+        await touch('pointermove', 1, fx -= 300, fy);
+        await g.run(500);
+        await touch('pointermove', 1, fx += 10, fy);
+        await g.run(200);
+        r.wall = { x: (await ship()).x, want: +(env.k * 10).toFixed(1) };
+        await touch('pointerdown', 2, env.W - 4, env.H - 4);  // corner: misses every button, snaps to one
+        r.cornerButton = await g.ev(() => Touch.owners[2]);
+        await touch('pointerup', 2, 0, 0);
+        await touch('pointermove', 1, fx -= 15, fy += 10);     // dash follows the drag's direction (default: up)
+        await g.ev(() => { Player.dashCooldown = 0; Touch.pressed.dash = true; });
+        await g.run(17);
+        r.dashDir = await g.ev(() => Player.dashDir);
+        await touch('pointerup', 1, 0, 0);
+        await g.run(17);
+        r.released = await ship();
+        await g.ev(() => { Input.lastDevice = 'keyboard'; });
+        const pass = Math.abs(r.small.moved - r.small.want) < 1 && r.small.fire && r.small.hitbox
+            && r.flick.first100ms <= env.speed * 0.1 + 7 && Math.abs(r.flick.total - env.cap) < 2
+            && Math.abs(r.wall.x - (env.radius + r.wall.want)) < 1 && r.cornerButton === 'bomb'
+            && r.dashDir.x < -0.5 && r.dashDir.y > 0.3 && !r.released.fire && !r.released.hitbox;
+        return { section: 'touch', expect: 'Drag moves the ship 1:1 with finger travel, at most at top speed and a bounded lag, stores nothing against walls, and dash follows the drag',
             pass, evidence: r };
     },
 

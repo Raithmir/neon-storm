@@ -174,6 +174,11 @@ const Player = {
             const spd = this.speed * (this.isFocusing() ? GameConfig.focus.speedMultiplier : 1);
             this.x += move.x * spd * dt;
             this.y += move.y * spd * dt;
+            // Touch drag: follow the finger's travel, no faster than top speed
+            const r = this.radius;
+            const step = Touch.takeDrag(this.speed * dt, this.speed,
+                { left: r - this.x, right: PLAY_W - r - this.x, top: r - this.y, bottom: PLAY_H - r - this.y });
+            if (step) { this.x += step.x; this.y += step.y; }
         }
 
         // Clamp to play area
@@ -521,7 +526,8 @@ const Player = {
     },
 
     _startDash() {
-        const move = Input.getMovement();
+        let move = Input.getMovement();
+        if (move.x === 0 && move.y === 0 && Touch.heading) move = Touch.heading; // dragging
         if (move.x === 0 && move.y === 0) {
             this.dashDir = { x: 0, y: -1 }; // Default: dash up
         } else {
@@ -851,7 +857,8 @@ const Player = {
         // Blink when invincible
         if (this.invincible && !this.dashing && Math.floor(this.invincibleTimer * 10) % 2 === 0) return;
 
-        const focusing = GameConfig.focus.enabled && Input.isHeld('focus');
+        // Dragging on a touch screen is precise movement too: show the hitbox
+        const focusing = (GameConfig.focus.enabled && Input.isHeld('focus')) || Touch.dragging();
 
         // Engine trail streams down behind the ship (the world scrolls past)
         // and bends as it moves; its look comes from the equipped trail

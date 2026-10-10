@@ -263,6 +263,7 @@ const Settings = {
         graphicsQuality: 'auto',  // 'auto', 'high', 'medium', 'low'
         backdrop3d: true,         // three.js level backdrops (backdrop3d.js); off = shader backdrops
         touchControls: 'auto',    // 'auto' (shown once the screen is touched), 'on', 'off' — touch.js
+        touchMove: 'drag',        // 'drag' (ship follows finger travel) or 'stick'
     },
     menuOpen: false,
     selectedIndex: 0,
@@ -279,6 +280,7 @@ const Settings = {
         { key: 'colorblind', label: 'COLORBLIND MODE', type: 'toggle' },
         { key: 'fireMode', label: 'FIRE MODE', type: 'cycle', options: ['manual', 'auto'] },
         { key: 'touchControls', label: 'TOUCH CONTROLS', type: 'cycle', options: ['auto', 'on', 'off'] },
+        { key: 'touchMove', label: 'TOUCH MOVE', type: 'cycle', options: ['drag', 'stick'] },
         { key: 'controls', label: 'CONTROLS', type: 'action' },
         { key: 'back', label: 'BACK', type: 'action' }
     ],
